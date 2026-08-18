@@ -40,7 +40,7 @@ export const SecurityDemo: React.FC = () => {
     const code = `// 客户端业务代码：零负担，直接像普通 axios 一样调用
 import { pdkClient } from '@pdk/client-sdk';
 
-const response = await pdkClient.post('/api/v1/pdd/dispatch', {
+const response = await pdkClient.post('/api/v1/dispatch/acquire-token', {
   action: 'PDD_GOODS_SEARCH',
   keyword: '品牌女装夏季连衣裙',
   page: 1
@@ -96,7 +96,7 @@ const pdkClient = createPdkClient({
 });
 
 // 2. 业务发起调用 (底层拦截器自动完成 AES+字节混淆)
-const res = await pdkClient.post('/api/pdd/dispatch', {
+const res = await pdkClient.post('/api/v1/dispatch/acquire-token', {
   action: 'QUERY_ORDER',
   orderSn: '260815-998120391203'
 });
@@ -125,12 +125,12 @@ console.log(res.data.status); // "SUCCESS"`}</pre>
             </div>
 
             <div className="bg-slate-950 p-3 rounded-lg border border-slate-800 text-slate-300 space-y-1.5 text-[11px]">
-              <div className="text-indigo-400">POST /api/v1/sec/payload HTTP/1.1</div>
+              <div className="text-indigo-400">POST /api/v1/dispatch/acquire-token HTTP/1.1</div>
               <div className="text-slate-500">Host: api.pdk-server.com</div>
               <div className="text-slate-500">Content-Type: application/octet-stream</div>
-              <div className="text-amber-400">X-PDK-Sign: 9f8a20bc129e810a9cf1823...</div>
-              <div className="text-slate-500">X-PDK-Nonce: {nonce}</div>
-              <div className="text-slate-500">X-PDK-Timestamp: {Date.now()}</div>
+              <div className="text-amber-400">X-PDK-Phone: 13800138000</div>
+              <div className="text-slate-500">X-PDK-Device-ID: MAC-00-1B-44-11-3A-B7</div>
+              <div className="text-slate-500">tokenName: &lt;tokenValue&gt;</div>
               <div className="border-t border-slate-800 pt-2 text-rose-300 break-all leading-4">
                 50 44 24 31 21 9F E3 12 6B 38 23 38 66 5F 61 39 31 30 78 30 61 39 66 38 32 31 37 33 39 00 FF A1 B2 C3 D4 E5 F6 07 18 29 3A 4B 5C 6D 7E 8F 90 A1 B2 C3 D4 E5 F6
               </div>
@@ -142,7 +142,7 @@ console.log(res.data.status); // "SUCCESS"`}</pre>
                 <span>防抓包三大核心防护屏障：</span>
               </div>
               <ol className="list-decimal pl-4 space-y-0.5 text-slate-400">
-                <li><strong>动态时间窗口派生密钥：</strong> 密钥每 30 秒动态轮转，杜绝硬编码静态 Key；</li>
+                <li><strong>动态时间窗口派生密钥：</strong> 密钥每 10 分钟（600 秒）动态轮转，杜绝硬编码静态 Key；</li>
                 <li><strong>字节翻转与魔数异或 (Byte-Flip)：</strong> 打上 <code>PD$1!</code> 私有魔数，抓包软件识别为损坏协议；</li>
                 <li><strong>防重放 HMAC 校验：</strong> 每次携带毫秒时间戳与一次性 Nonce，任何重放攻击直接 403 丢弃。</li>
               </ol>

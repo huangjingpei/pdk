@@ -525,7 +525,7 @@ public class CardKeyActivationServiceImpl implements CardKeyActivationService {
               </p>
               <div className="bg-slate-900 p-2.5 rounded font-mono text-[11px] text-emerald-400">
                 {`// 客户端业务代码完全透明
-const res = await pdkClient.post('/api/pdd/dispatch', { 
+const res = await pdkClient.post('/api/v1/dispatch/acquire-token', { 
     action: 'QUERY_ORDER', 
     orderId: '10086' 
 });

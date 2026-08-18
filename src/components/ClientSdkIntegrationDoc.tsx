@@ -99,7 +99,7 @@ export const ClientSdkIntegrationDoc: React.FC = () => {
      │
      ├── 1. 检查本地是否有 Token? 
      │       ├── 无: 提示用户输入手机号 + 短信验证码 -> 注册并获赠 1天试用(20次)
-     │       └── 有: 携带 Device-UUID + PDK-Token 请求 [/api/v1/device/heartbeat]
+     │       └── 有: 携带 X-PDK-Phone + X-PDK-Device-ID + 会话Token 请求 [GET /api/v1/client/account/profile]
      │
      ├── 2. 鉴权判定:
      │       ├── 401/403 (过期或被顶号下线): 立即弹出提示并锁定业务界面，引导输入新卡密 [/api/v1/card/activate]
@@ -120,12 +120,12 @@ export const ClientSdkIntegrationDoc: React.FC = () => {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
             <div className="p-4 rounded-lg bg-blue-50/50 border border-blue-200">
               <span className="font-bold text-blue-950 block mb-1">统一请求头 (Headers)</span>
-              <p className="text-slate-600 mb-2">每次 HTTP 请求必须携带：</p>
+              <p className="text-slate-600 mb-2">受保护请求（<code>/api/v1/client/**</code>、<code>/api/v1/dispatch/**</code>）必须携带：</p>
               <ul className="space-y-1 font-mono text-[11px] text-blue-900">
-                <li>• <code>Authorization: Bearer &lt;UserToken&gt;</code></li>
-                <li>• <code>X-PDK-Device-ID: &lt;MacOrUUID&gt;</code></li>
-                <li>• <code>X-PDK-Timestamp: &lt;13位Unix毫秒&gt;</code></li>
-                <li>• <code>X-PDK-Client-Ver: 1.0.0</code></li>
+                <li>• <code>X-PDK-Phone: &lt;手机号码&gt;</code> <span className="font-sans text-blue-700">（拦截器强制校验）</span></li>
+                <li>• <code>X-PDK-Device-ID: &lt;MacOrUUID&gt;</code> <span className="font-sans text-blue-700">（拦截器强制校验）</span></li>
+                <li>• <code>tokenName: &lt;tokenValue&gt;</code> <span className="font-sans text-blue-700">（Sa-Token 会话令牌，登录/注册响应返回；默认同名 Header 或 Cookie 携带）</span></li>
+                <li>• <code>X-PDK-Client-Ver: 1.0.0</code> <span className="font-sans text-blue-700">（可选，客户端版本号）</span></li>
               </ul>
             </div>
 
@@ -171,11 +171,11 @@ export const ClientSdkIntegrationDoc: React.FC = () => {
             <div className="bg-slate-900 text-white p-3.5 flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <span className="px-2 py-0.5 rounded bg-emerald-500 text-white font-bold font-mono text-[11px]">POST</span>
-                <span className="font-mono text-slate-200 font-bold">/api/v1/auth/register-trial</span>
-                <span className="text-slate-400 text-xs">新用户手机短信注册并自动派发 1天试用(20次)</span>
+                <span className="font-mono text-slate-200 font-bold">/api/v1/client/auth/register</span>
+                <span className="text-slate-400 text-xs">新用户手机短信注册并自动派发 1天试用(20次) · 前置需先调 POST /api/v1/client/auth/sms/send 获取 smsCode</span>
               </div>
               <button 
-                onClick={() => handleCopy('/api/v1/auth/register-trial', 'api-1')}
+                onClick={() => handleCopy('/api/v1/client/auth/register', 'api-1')}
                 className="text-slate-400 hover:text-white flex items-center gap-1"
               >
                 {copiedId === 'api-1' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
@@ -197,7 +197,8 @@ export const ClientSdkIntegrationDoc: React.FC = () => {
   "code": 200,
   "message": "注册成功，已获赠1天体验配额",
   "data": {
-    "userToken": "pdk_usr_eyJhbGciOiJIUzI1...",
+    "tokenName": "satoken",
+    "tokenValue": "pdk_usr_8f4c2b1a6d3e4f5a9b7c2e1d",
     "status": "TRIAL",
     "expireTime": "2026-08-16 14:30:00",
     "quota": {

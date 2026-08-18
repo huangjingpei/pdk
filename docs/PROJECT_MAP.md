@@ -93,6 +93,8 @@ python -m venv .venv
 
 所有路径前缀 `/api/v1`。两套登录：`admin` 与 `client` 双 Sa-Token 实例。
 
+> **鉴权澄清（2026-08-18 清理）**：本项目**从不使用 JWT**，鉴权完全由 Sa-Token 负责——`adminStpLogic` 与 `clientStpLogic` 两个实例，令牌名 `satoken`，登录成功后返回 `tokenName` + `tokenValue`。仓库内曾出现的 `jwt`/`eyJ` 字符串，全部来自第三方依赖（主要是 `google-auth-library`，已随死亡依赖 `@google/genai` 一并从 `package.json` 与 `node_modules` 移除），与本项目自身鉴权无关。后续请勿再引入 JWT。
+
 **客户端 / 调度类**
 - `ClientAuthController` (`/api/v1/client/auth`)：`POST /sms/send`、`/register`、`/login`、`/change-password`、`/logout`、`/unbind-device`
 - `CardKeyActivationController` (`/api/v1/card`)：`POST /activate`

@@ -68,15 +68,17 @@
 服务端基础路径：`http://api.yourdomain.com` (本地调试: `http://localhost:8080`)
 
 ### 3.1 新人 1 天体验试用注册
-- **接口路径**: `POST /api/v1/card/register-trial`
+- **接口路径**: `POST /api/v1/client/auth/register`
 - **说明**: 手机号新用户领取 1 天体验版（系统规格：1 个买家账号，20 次/天）。
+- **前置条件**: 注册前需先调用 `POST /api/v1/client/auth/sms/send`（body: `{"phone":"13800138000","purpose":"REGISTER"}`）获取短信验证码 `smsCode`。
 
 **请求报文 (Request Body):**
 ```json
 {
   "phone": "13800138000",
-  "deviceId": "MAC-00-1B-44-11-3A-B7",
-  "smsCode": "882103"
+  "password": "您的登录密码",
+  "smsCode": "882103",
+  "deviceId": "MAC-00-1B-44-11-3A-B7"
 }
 ```
 

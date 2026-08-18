@@ -17,11 +17,13 @@
   - 但文档的「统一请求头」写 `Authorization: Bearer` + `X-PDK-Device-ID` + `X-PDK-Timestamp`，而 `ClientSdkIntegrationDoc.tsx` 时序图里又用了 `/api/v1/device/heartbeat`、`/api/v1/card/activate` —— 多处口径混用。
 - 影响：照这份文档写客户端会调不通。
 - 修复方向：以 `backend-springboot` 的真实 Controller 为唯一事实源，统一原型文档里的路径与请求头。
+- **状态**：✅ 已修复（2026-08-18）—— 原型 SDK 文档 / `SecurityDemo` 的接口路径与「统一请求头」已统一到真实后端：注册走 `POST /api/v1/client/auth/register`（前置 `sms/send`），调度走 `POST /api/v1/dispatch/acquire-token`；请求头改为 `X-PDK-Phone`/`X-PDK-Device-ID` + Sa-Token 会话令牌（不再用 `Authorization: Bearer`/`X-PDK-Timestamp`）。
 
 ### 2. `SecurityDemo.tsx` 里的接口路径是编的
 - 位置：`src/components/SecurityDemo.tsx`（第 128 行附近）
 - 问题：`POST /api/v1/sec/payload`、`/api/pdd/dispatch`、`/api/pdd/dispatch` —— 后端**没有任何 `/sec/payload` 或 `/api/pdd/dispatch`** 端点。真实加密下发走 `POST /api/v1/dispatch/acquire-token`。
 - 修复方向：把演示里的报文路径改成真实端点，或明确标注为「示意」。
+- **状态**：✅ 已修复（2026-08-18）—— `SecurityDemo.tsx` 中的 `/api/v1/sec/payload`、`/api/pdd/dispatch` 已改为真实端点 `POST /api/v1/dispatch/acquire-token`。
 
 ### 3. 文档里的数据库表名与后端真实表名不符
 - 位置：`src/components/DocumentViewer.tsx`（DDL 章节）、`CLIENT_INTEGRATION_GUIDE.md`、`IMPLEMENTATION_ANALYSIS.md`
@@ -36,6 +38,7 @@
 - `CLIENT_INTEGRATION_GUIDE.md`：用 `/api/v1/card/activate`、`/api/v1/dispatch/acquire-token`（带 X-PDK-Phone/Device-ID 头）
 - `src/components/ClientSdkIntegrationDoc.tsx`：用 `/api/v1/auth/register-trial`、`/api/v1/dispatch/...`
 - 事实：后端**两套都有**（`/api/v1/client/**` 与 `/api/v1/dispatch/**` 并存），但 `register-trial` 不存在。需要收敛成一份权威接口表。
+- **状态**：✅ 已修复（2026-08-18）—— 三处文档/原型的客户端接口口径已统一：`IMPLEMENTATION_ANALYSIS.md`、`CLIENT_INTEGRATION_GUIDE.md`、`ClientSdkIntegrationDoc.tsx` 现在一致使用 `POST /api/v1/client/auth/register`（前置 `sms/send`）+ `POST /api/v1/dispatch/acquire-token` / `report-result`。`PROJECT_MAP.md` 的接口总表为权威来源。
 
 ---
 
@@ -46,6 +49,7 @@
 - `SecurityDemo.tsx`（第 145 行）：写「密钥每 **30 秒**动态轮转」。
 - 后端真实：10 分钟窗口（容错 ±1 窗口）。
 - 修复方向：统一成 10 分钟，并以代码为准。
+- **状态**：✅ 已修复（2026-08-18）—— `SecurityDemo.tsx` 的「30 秒」已改为「10 分钟（600 秒）」，与 `CLIENT_INTEGRATION_GUIDE.md` 及 SDK 解密代码一致。
 
 ### 6. `DocumentViewer.tsx` 加密算法名写错
 - 第 542 行写「动态混淆 **AES-128-CBC**」，但全文其它处和后端都是 **AES-128-GCM**。
@@ -78,6 +82,8 @@
 - 处理方向：
   - 如果想让原型有 AI 能力（比如文档问答、接口生成），再接；
   - 否则从 `package.json` 移除，避免误导和打包体积。
+- **状态**：✅ 已处理（2026-08-18）—— 已从根 `package.json` 移除 `@google/genai`，并 `npm install` 剪掉其传递依赖 `google-auth-library` 及 `jws`/`jwa`/`ecdsa-sig-formatter` 整棵 JWT 子树（node_modules 与 package-lock.json 均已 0 提及）。同时把 `ClientSdkIntegrationDoc.tsx` 里那个看着像 JWT 的 mock token 值 `pdk_usr_eyJhbGciOiJIUzI1...` 改为 Sa-Token 风格的 `pdk_usr_8f4c2b1a6d3e4f5a9b7c2e1d`。详见 PROJECT_MAP.md「鉴权澄清」。
+- **补充（JWT 澄清）**：本项目**从不使用 JWT**，鉴权 100% 由 Sa-Token 负责。仓库内残留的 `jwt`/`eyJ` 字样现已清零（除第三方库 `mime-db` 的 `application/jwt` MIME 类型定义、vueuse 元数据里的 `jwt-decode` 集成登记——这两者非鉴权代码，属正常存在，无需处理）。
 
 ### 11. 管理后台没有集中 API service 层
 - 所有端点字符串散落在各 `.vue` 里（仅 `src/api.ts` 提供 axios 实例）。
