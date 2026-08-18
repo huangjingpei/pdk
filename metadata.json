@@ -1,0 +1,6 @@
+{
+  "name": "PDK (拼多客) 架构与产品设计文档",
+  "description": "拼多客(PDK)高并发服务端、Token资产池动态调度、卡密鉴权与管理后台完整产品与技术规范",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
