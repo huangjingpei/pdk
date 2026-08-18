@@ -52,9 +52,11 @@ export interface TokenPoolItem {
   dailyCallsCount: number;
   dailyMaxCapacity: number;
   riskScore: number;
-  leaseClientPhone?: string;
-  leasedAt?: string;
-  lastFaultTime?: string;
+    leaseClientPhone?: string;
+    leasedAt?: string;
+    lastFaultTime?: string;
+    uuid: string;
+    isDiscarded: number;
 }
 
 export interface FinanceSummary {

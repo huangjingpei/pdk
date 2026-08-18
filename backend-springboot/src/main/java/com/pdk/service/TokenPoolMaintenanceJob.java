@@ -24,6 +24,7 @@ public class TokenPoolMaintenanceJob {
     public void recoverExpiredLeases() {
         int recovered = tokenPoolMapper.update(null, new LambdaUpdateWrapper<TokenPool>()
                 .eq(TokenPool::getHealthStatus, "BUSY")
+                .eq(TokenPool::getIsDiscarded, 0)
                 .lt(TokenPool::getLeasedAt, LocalDateTime.now().minusSeconds(leaseSeconds))
                 .set(TokenPool::getHealthStatus, "HEALTHY")
                 .set(TokenPool::getLeaseClientPhone, null)
@@ -36,6 +37,7 @@ public class TokenPoolMaintenanceJob {
     @Scheduled(cron = "${pdk.security.daily-counter-reset-cron:0 0 0 * * *}", zone = "${pdk.security.scheduler-zone:Asia/Shanghai}")
     public void resetDailyResourceCounters() {
         int reset = tokenPoolMapper.update(null, new LambdaUpdateWrapper<TokenPool>()
+                .eq(TokenPool::getIsDiscarded, 0)
                 .notIn(TokenPool::getHealthStatus, "FAULT_BLACK", "EXPIRED")
                 .set(TokenPool::getDailyCallsCount, 0));
         log.info("已重置 {} 个小号资源的每日调用计数", reset);

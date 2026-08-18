@@ -35,8 +35,11 @@ CREATE TABLE IF NOT EXISTS `pdk_card_key` (
     `activated_by_phone` VARCHAR(20) DEFAULT NULL COMMENT '激活绑定的用户手机号',
     `activated_at` DATETIME DEFAULT NULL COMMENT '激活核销时间',
     `activated_device_id` VARCHAR(128) DEFAULT NULL COMMENT '核销时绑定的设备UUID',
+    `token_pool_uuid` VARCHAR(36) DEFAULT NULL COMMENT '关联 pdk_token_pool.uuid，记录本卡密绑定的底层小号',
     `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '制卡时间'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='卡密凭证表';
+
+-- 若 pdk_card_key 表已存在，请执行：ALTER TABLE `pdk_card_key` ADD COLUMN IF NOT EXISTS `token_pool_uuid` VARCHAR(36) DEFAULT NULL COMMENT '关联 pdk_token_pool.uuid';
 
 -- 3. 财务独立实收流水表 (与卡密物理拆分)
 CREATE TABLE IF NOT EXISTS `pdk_financial_income` (
@@ -87,8 +90,18 @@ CREATE TABLE IF NOT EXISTS `pdk_token_pool` (
     `lease_client_phone` VARCHAR(20) DEFAULT NULL COMMENT '当前租借客户端手机号',
     `leased_at` DATETIME DEFAULT NULL COMMENT '租借时间',
     `last_fault_time` DATETIME DEFAULT NULL COMMENT '最近一次报错故障时间',
-    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '录入时间'
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '录入时间',
+    `uuid` VARCHAR(36) DEFAULT NULL COMMENT '全局唯一标识，用于与卡密(pdk_card_key.token_pool_uuid)关联',
+    `is_discarded` TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否逻辑废弃(0否1是)；废弃后不参与调度，记录保留供管理员查看',
+    UNIQUE KEY `uk_token_pool_uuid` (`uuid`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='拼多多官方 Token 公共调度池';
+
+-- 若 pdk_token_pool 表已存在(库非全新)，请执行以下迁移(MySQL 8.0.29+ 支持 IF NOT EXISTS；低版本去掉 IF NOT EXISTS 手动执行一次)：
+-- ALTER TABLE `pdk_token_pool`
+--   ADD COLUMN IF NOT EXISTS `uuid` VARCHAR(36) DEFAULT NULL COMMENT '全局唯一标识',
+--   ADD COLUMN IF NOT EXISTS `is_discarded` TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否逻辑废弃';
+-- UPDATE `pdk_token_pool` SET `uuid` = UUID() WHERE `uuid` IS NULL;
+-- CREATE UNIQUE INDEX IF NOT EXISTS `uk_token_pool_uuid` ON `pdk_token_pool` (`uuid`);
 
 -- 6. 套餐模版表
 CREATE TABLE IF NOT EXISTS `pdk_package_template` (

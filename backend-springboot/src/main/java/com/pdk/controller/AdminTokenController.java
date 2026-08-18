@@ -16,6 +16,18 @@ import com.pdk.security.AdminPrincipal;
 import com.pdk.service.AdminAuditService;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.transaction.annotation.Transactional;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
+import org.springframework.web.multipart.MultipartFile;
+import java.util.List;
+import java.util.Map;
+import java.util.HashMap;
+import java.util.UUID;
+import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
 
 @RestController
 @RequestMapping("/api/v1/admin/token")
@@ -28,10 +40,19 @@ public class AdminTokenController {
     @RequirePermission(RolePermissions.TOKEN_VIEW)
     public CommonResult<Page<TokenPool>> list(@RequestParam(defaultValue = "1") int page,
                                                @RequestParam(defaultValue = "20") int size,
-                                               @RequestParam(required = false) String status) {
+                                               @RequestParam(required = false) String status,
+                                               @RequestParam(required = false) String keyword,
+                                               @RequestParam(required = false) Integer discarded) {
         LambdaQueryWrapper<TokenPool> query = new LambdaQueryWrapper<>();
         if (status != null && !status.isBlank()) {
             query.eq(TokenPool::getHealthStatus, status);
+        }
+        if (discarded != null) {
+            query.eq(TokenPool::getIsDiscarded, discarded);
+        }
+        if (keyword != null && !keyword.isBlank()) {
+            String kw = keyword.trim();
+            query.and(w -> w.like(TokenPool::getAccountAlias, kw).or().like(TokenPool::getUuid, kw));
         }
         query.orderByDesc(TokenPool::getCreatedAt);
         Page<TokenPool> result = tokenPoolMapper.selectPage(new Page<>(page, Math.min(size, 100)), query);
@@ -83,6 +104,98 @@ public class AdminTokenController {
                 "{\"status\":\"" + beforeStatus + "\"}", "{\"status\":\"" + status + "\"}",
                 "调整小号资源状态", request);
         return CommonResult.success("资源状态已更新");
+    }
+
+    @PostMapping("/import")
+    @RequirePermission(RolePermissions.TOKEN_EDIT)
+    @Transactional(rollbackFor = Exception.class)
+    public CommonResult<Map<String, Object>> importTokens(@RequestParam("file") MultipartFile file,
+                                                          @RequestParam(defaultValue = "500") int dailyMaxCapacity,
+                                                          HttpServletRequest request) throws IOException {
+        if (file.isEmpty()) {
+            throw new BusinessException(40032, "上传文件为空");
+        }
+        byte[] bytes = file.getBytes();
+        String preview = new String(bytes, StandardCharsets.UTF_8);
+        Charset cs = preview.contains("\uFFFD") ? Charset.forName("GBK") : StandardCharsets.UTF_8;
+        List<TokenPool> list = new java.util.ArrayList<>();
+        int skipped = 0;
+        try (BufferedReader br = new BufferedReader(new InputStreamReader(new ByteArrayInputStream(bytes), cs))) {
+            String line;
+            while ((line = br.readLine()) != null) {
+                line = line.trim();
+                if (line.isEmpty()) continue;
+                String[] parts = line.split("[-—━]{2,}", 2);
+                if (parts.length < 2) { skipped++; continue; }
+                String alias = parts[0].trim();
+                String token = parts[1].trim();
+                if (alias.isEmpty() || token.isEmpty() || alias.length() > 64 || token.length() > 512) {
+                    skipped++; continue;
+                }
+                TokenPool t = new TokenPool();
+                t.setAccountAlias(alias);
+                t.setTokenVal(token);
+                t.setHealthStatus("HEALTHY");
+                t.setDailyCallsCount(0);
+                t.setDailyMaxCapacity(dailyMaxCapacity);
+                t.setRiskScore(0);
+                t.setUuid(UUID.randomUUID().toString());
+                t.setIsDiscarded(0);
+                list.add(t);
+            }
+        }
+        if (list.isEmpty()) {
+            throw new BusinessException(40033, "未解析到任何有效记录，请检查文件格式是否为「别名------token」");
+        }
+        tokenPoolMapper.batchInsert(list);
+        AdminPrincipal admin = (AdminPrincipal) request.getAttribute("pdkAdminPrincipal");
+        adminAuditService.record(admin, "IMPORT_TOKEN_RESOURCE", "ACCOUNT", "batch",
+                null, "{\"imported\":" + list.size() + ",\"skipped\":" + skipped + "}", "批量导入底层小号", request);
+        Map<String, Object> result = new HashMap<>();
+        result.put("imported", list.size());
+        result.put("skipped", skipped);
+        return CommonResult.success(result, "成功导入 " + list.size() + " 条，跳过 " + skipped + " 条格式错误行");
+    }
+
+    @PostMapping("/batch-discard")
+    @RequirePermission(RolePermissions.TOKEN_EDIT)
+    @Transactional(rollbackFor = Exception.class)
+    public CommonResult<String> batchDiscard(@RequestBody List<Long> ids, HttpServletRequest request) {
+        if (ids == null || ids.isEmpty()) {
+            throw new BusinessException(40031, "未选择任何记录");
+        }
+        int updated = tokenPoolMapper.update(null, new LambdaUpdateWrapper<TokenPool>()
+                .in(TokenPool::getId, ids).set(TokenPool::getIsDiscarded, 1));
+        AdminPrincipal admin = (AdminPrincipal) request.getAttribute("pdkAdminPrincipal");
+        adminAuditService.record(admin, "DISCARD_TOKEN_RESOURCE", "ACCOUNT", ids.toString(),
+                null, "{\"discarded\":1}", "批量逻辑废弃小号 " + ids.size() + " 条（记录保留）", request);
+        return CommonResult.success("已逻辑废弃 " + updated + " 条（记录保留，不再参与调度）");
+    }
+
+    @PutMapping("/{id}/discard")
+    @RequirePermission(RolePermissions.TOKEN_EDIT)
+    public CommonResult<String> discard(@PathVariable Long id, HttpServletRequest request) {
+        TokenPool token = tokenPoolMapper.selectById(id);
+        if (token == null) throw new BusinessException(40401, "资源不存在");
+        token.setIsDiscarded(1);
+        tokenPoolMapper.updateById(token);
+        AdminPrincipal admin = (AdminPrincipal) request.getAttribute("pdkAdminPrincipal");
+        adminAuditService.record(admin, "DISCARD_TOKEN_RESOURCE", "ACCOUNT", id.toString(),
+                null, "{\"discarded\":1}", "逻辑废弃小号", request);
+        return CommonResult.success("已逻辑废弃该小号（记录保留，不再参与调度）");
+    }
+
+    @PutMapping("/{id}/restore")
+    @RequirePermission(RolePermissions.TOKEN_EDIT)
+    public CommonResult<String> restore(@PathVariable Long id, HttpServletRequest request) {
+        TokenPool token = tokenPoolMapper.selectById(id);
+        if (token == null) throw new BusinessException(40401, "资源不存在");
+        token.setIsDiscarded(0);
+        tokenPoolMapper.updateById(token);
+        AdminPrincipal admin = (AdminPrincipal) request.getAttribute("pdkAdminPrincipal");
+        adminAuditService.record(admin, "RESTORE_TOKEN_RESOURCE", "ACCOUNT", id.toString(),
+                null, "{\"discarded\":0}", "恢复废弃小号", request);
+        return CommonResult.success("已恢复该小号为可用状态");
     }
 
     private void maskSecret(TokenPool token) {

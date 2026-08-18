@@ -19,6 +19,8 @@ public class TokenPool implements Serializable {
     private String leaseClientPhone;
     private LocalDateTime leasedAt;
     private LocalDateTime lastFaultTime;
+    private String uuid;
+    private Integer isDiscarded;
 
     @TableField(fill = FieldFill.INSERT)
     private LocalDateTime createdAt;
