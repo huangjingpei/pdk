@@ -70,6 +70,11 @@
           <el-icon><Aim /></el-icon>
           <span>人工测试全链路工作台</span>
         </el-menu-item>
+
+        <el-menu-item v-if="hasPermission('system:config')" index="/settings">
+          <el-icon><Setting /></el-icon>
+          <span>系统设置</span>
+        </el-menu-item>
       </el-menu>
     </el-aside>
 

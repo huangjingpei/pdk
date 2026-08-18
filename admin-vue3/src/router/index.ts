@@ -7,6 +7,7 @@ import TokenPoolManager from '../views/token/TokenPoolManager.vue';
 import TestingWorkbench from '../views/testing/TestingWorkbench.vue';
 import Login from '../views/auth/Login.vue';
 import UserManager from '../views/user/UserManager.vue';
+import SystemConfig from '../views/settings/SystemConfig.vue';
 import PackageManager from '../views/package/PackageManager.vue';
 import { hasPermission, isLoggedIn } from '../auth';
 
@@ -76,6 +77,12 @@ const router = createRouter({
       name: 'UserManager',
       component: UserManager,
       meta: { title: '客户端用户与电脑绑定', permission: 'user:view' },
+    },
+    {
+      path: '/settings',
+      name: 'SystemConfig',
+      component: SystemConfig,
+      meta: { title: '系统设置', permission: 'system:config' },
     },
   ],
 });

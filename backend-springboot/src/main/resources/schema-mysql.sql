@@ -288,3 +288,29 @@ ON DUPLICATE KEY UPDATE `display_name` = VALUES(`display_name`), `role_code` = '
 
 UPDATE `pdk_admin_user` SET `status` = 'DISABLED'
 WHERE `username` IN ('super_admin', 'operations', 'finance', 'agent_demo', 'support');
+
+-- 16. 平台系统配置（通用 KV，由超级管理员在「系统设置」页维护）
+CREATE TABLE IF NOT EXISTS `pdk_system_config` (
+    `id` BIGINT AUTO_INCREMENT PRIMARY KEY,
+    `config_key` VARCHAR(64) NOT NULL UNIQUE COMMENT '配置键',
+    `config_value` VARCHAR(512) NOT NULL DEFAULT '' COMMENT '当前值',
+    `config_type` VARCHAR(16) NOT NULL DEFAULT 'TEXT' COMMENT 'SWITCH/SELECT/NUMBER/TEXT',
+    `config_group` VARCHAR(32) NOT NULL DEFAULT 'GENERAL' COMMENT 'ACCOUNT/SMS/SECURITY/GENERAL',
+    `config_label` VARCHAR(64) NOT NULL DEFAULT '' COMMENT '中文显示名',
+    `config_options` VARCHAR(256) NOT NULL DEFAULT '' COMMENT 'SELECT 选项: VALUE:显示名,...',
+    `default_value` VARCHAR(512) NOT NULL DEFAULT '' COMMENT '默认值',
+    `description` VARCHAR(256) NOT NULL DEFAULT '' COMMENT '说明',
+    `editable_by` VARCHAR(32) NOT NULL DEFAULT 'SUPER_ADMIN' COMMENT '可编辑角色',
+    `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX `idx_config_group` (`config_group`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='平台系统配置';
+
+-- 平台配置种子数据（超级管理员可在后台「系统设置」修改；重复执行只更新元数据，不覆盖已修改的配置值）
+INSERT INTO `pdk_system_config` (`config_key`, `config_value`, `config_type`, `config_group`, `config_label`, `config_options`, `default_value`, `description`, `editable_by`) VALUES
+('token.allocation.mode', 'FIXED', 'SELECT', 'ACCOUNT', '账号小号 Token 使用方式', 'FIXED:固定分配,POLLING:轮询', 'FIXED', '固定分配=账号绑定固定 Token 槽位；轮询=每次请求轮流选取 Token', 'SUPER_ADMIN'),
+('sms.register.enabled', 'false', 'SWITCH', 'SMS', '注册短信验证码', '', 'false', '开启后客户端注册必须校验短信验证码', 'SUPER_ADMIN'),
+('security.encryption.enabled', 'true', 'SWITCH', 'SECURITY', '协议安全加密', '', 'true', '开启后服务端下发拼多多 Token 走 AES-GCM 加密；关闭可灰度降级', 'SUPER_ADMIN'),
+('trial.days', '1', 'NUMBER', 'ACCOUNT', '新用户试用天数', '', '1', '注册赠送的体验版天数（预留，待启用）', 'SUPER_ADMIN'),
+('device.kickout.enabled', 'true', 'SWITCH', 'SECURITY', '单设备互踢', '', 'true', '开启后同账号仅允许一台设备在线（预留，待启用）', 'SUPER_ADMIN'),
+('heartbeat.interval.seconds', '45', 'NUMBER', 'SECURITY', '心跳间隔(秒)', '', '45', '客户端建议心跳上报间隔（预留，待启用）', 'SUPER_ADMIN')
+ON DUPLICATE KEY UPDATE `config_label` = VALUES(`config_label`), `config_options` = VALUES(`config_options`), `default_value` = VALUES(`default_value`), `description` = VALUES(`description`);
