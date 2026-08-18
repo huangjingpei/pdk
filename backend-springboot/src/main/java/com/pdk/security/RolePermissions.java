@@ -13,6 +13,7 @@ public final class RolePermissions {
     public static final String TOKEN_VIEW = "token:view";
     public static final String TOKEN_EDIT = "token:edit";
     public static final String USER_VIEW = "user:view";
+    public static final String USER_EDIT = "user:edit";
     public static final String USER_UNBIND = "user:unbind";
     public static final String DISPATCH_VIEW = "dispatch:view";
     public static final String ADMIN_MANAGE = "admin:manage";
@@ -27,7 +28,7 @@ public final class RolePermissions {
 
     private static final Set<String> ALL = Set.of(
             DASHBOARD_VIEW, FINANCE_VIEW, FINANCE_EDIT, CARD_VIEW, CARD_CREATE,
-            TOKEN_VIEW, TOKEN_EDIT, USER_VIEW, USER_UNBIND, DISPATCH_VIEW, ADMIN_MANAGE,
+            TOKEN_VIEW, TOKEN_EDIT, USER_VIEW, USER_EDIT, USER_UNBIND, DISPATCH_VIEW, ADMIN_MANAGE,
             PARTNER_MANAGE, PACKAGE_VIEW, PACKAGE_CREATE, PACKAGE_DISABLE, CARD_RENEW, CARD_VOID, SALES_VIEW,
             SYSTEM_CONFIG
     );

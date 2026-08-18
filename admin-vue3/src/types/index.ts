@@ -70,3 +70,33 @@ export interface FinanceSummary {
   totalCardsActivated: number;
   activeTokenCount: number;
 }
+
+export interface ClientUser {
+  id: number;
+  phone: string;
+  status: 'ACTIVE' | 'TRIAL' | 'FROZEN';
+  roleCode: string;
+  invitationCode?: string;
+  invitedByPhone?: string;
+  currentPackageId?: number;
+  currentPackageName?: string;
+  remainingCalls: number;
+  dailyCallsLimit?: number;
+  maxAccounts?: number;
+  deviceId?: string;
+  expireTime?: string;
+  createdAt?: string;
+}
+
+export interface PackagePlanLite {
+  id: number;
+  name: string;
+  status: 'ACTIVE' | 'INACTIVE';
+  durationHours: number;
+  accountCount: number;
+  callsPerAccount: number;
+  listPrice: number;
+  salePrice: number;
+  description?: string;
+}
+

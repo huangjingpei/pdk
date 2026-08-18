@@ -5,45 +5,62 @@ import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.pdk.common.api.CommonResult;
 import com.pdk.common.exception.BusinessException;
+import com.pdk.domain.dto.AdminAdjustUserDTO;
+import com.pdk.domain.dto.AdminCreateUserDTO;
+import com.pdk.domain.entity.InvitationCode;
+import com.pdk.domain.entity.PackagePlan;
 import com.pdk.domain.entity.User;
-import com.pdk.mapper.UserMapper;
-import com.pdk.mapper.UserCredentialMapper;
 import com.pdk.domain.entity.UserCredential;
+import com.pdk.domain.entity.UserReferral;
+import com.pdk.mapper.InvitationCodeMapper;
+import com.pdk.mapper.PackagePlanMapper;
+import com.pdk.mapper.UserCredentialMapper;
+import com.pdk.mapper.UserMapper;
+import com.pdk.mapper.UserReferralMapper;
+import com.pdk.security.AdminPrincipal;
 import com.pdk.security.RequirePermission;
 import com.pdk.security.RolePermissions;
-import com.pdk.service.DeviceBindingService;
-import lombok.RequiredArgsConstructor;
-import org.springframework.web.bind.annotation.*;
-import com.pdk.security.AdminPrincipal;
 import com.pdk.service.AdminAuditService;
+import com.pdk.service.DeviceBindingService;
 import com.pdk.service.InvitationService;
-import com.pdk.mapper.InvitationCodeMapper;
-import com.pdk.mapper.UserReferralMapper;
-import com.pdk.domain.entity.InvitationCode;
-import com.pdk.domain.entity.UserReferral;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.validation.Valid;
+import lombok.RequiredArgsConstructor;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.bind.annotation.*;
+
+import java.time.LocalDateTime;
 
 @RestController
 @RequestMapping("/api/v1/admin/user")
 @RequiredArgsConstructor
 public class AdminUserController {
     private final UserMapper userMapper;
+    private final UserCredentialMapper credentialMapper;
+    private final PackagePlanMapper packagePlanMapper;
     private final DeviceBindingService deviceBindingService;
     private final AdminAuditService adminAuditService;
-    private final UserCredentialMapper credentialMapper;
+    private final InvitationService invitationService;
     private final InvitationCodeMapper invitationCodeMapper;
     private final UserReferralMapper referralMapper;
-    private final InvitationService invitationService;
+    private final PasswordEncoder passwordEncoder;
 
     @GetMapping("/list")
     @RequirePermission(RolePermissions.USER_VIEW)
     public CommonResult<Page<User>> list(@RequestParam(defaultValue = "1") int page,
-                                          @RequestParam(defaultValue = "20") int size,
-                                          @RequestParam(required = false) String phone) {
+                                         @RequestParam(defaultValue = "20") int size,
+                                         @RequestParam(required = false) String keyword,
+                                         @RequestParam(required = false) String status) {
         LambdaQueryWrapper<User> query = new LambdaQueryWrapper<>();
-        if (phone != null && !phone.isBlank()) {
-            query.like(User::getPhone, phone);
+        if (keyword != null && !keyword.isBlank()) {
+            String kw = keyword.trim();
+            query.and(w -> w.like(User::getPhone, kw)
+                    .or().like(User::getDeviceId, kw)
+                    .or().like(User::getCurrentPackageName, kw));
+        }
+        if (status != null && !status.isBlank()) {
+            query.eq(User::getStatus, status);
         }
         query.orderByDesc(User::getCreatedAt);
         Page<User> result = userMapper.selectPage(new Page<>(page, Math.min(size, 100)), query);
@@ -62,6 +79,87 @@ public class AdminUserController {
             }
         });
         return CommonResult.success(result);
+    }
+
+    @PostMapping
+    @RequirePermission(RolePermissions.USER_EDIT)
+    @Transactional(rollbackFor = Exception.class)
+    public CommonResult<User> create(@Valid @RequestBody AdminCreateUserDTO dto, HttpServletRequest request) {
+        if (userMapper.selectCount(new LambdaQueryWrapper<User>().eq(User::getPhone, dto.getPhone())) > 0) {
+            throw new BusinessException(40010, "该手机号已存在");
+        }
+        User user = new User();
+        user.setPhone(dto.getPhone());
+        user.setStatus("ACTIVE");
+        user.setDeviceId(dto.getDeviceId());
+        user.setCurrentPackageId(0);
+        user.setCurrentPackageName("未开通套餐");
+        user.setExpireTime(null);
+        user.setRemainingCalls(0);
+        user.setDailyCallsLimit(0);
+        user.setMaxAccounts(1);
+        user.setIsTrialClaimed(0);
+        userMapper.insert(user);
+
+        UserCredential credential = new UserCredential();
+        credential.setUserId(user.getId());
+        credential.setPasswordHash(passwordEncoder.encode(dto.getPassword()));
+        credential.setRoleCode("CUSTOMER");
+        credential.setStatus("ACTIVE");
+        credentialMapper.insert(credential);
+
+        AdminPrincipal admin = (AdminPrincipal) request.getAttribute("pdkAdminPrincipal");
+        adminAuditService.record(admin, "CREATE_USER", "USER", user.getPhone(), null,
+                "{\"phone\":\"" + user.getPhone() + "\"}", "管理员手工创建客户账号", request);
+        user.setRoleCode("CUSTOMER");
+        return CommonResult.success(user, "客户账号已创建");
+    }
+
+    @PutMapping("/{id}/adjust")
+    @RequirePermission(RolePermissions.USER_EDIT)
+    @Transactional(rollbackFor = Exception.class)
+    public CommonResult<User> adjust(@PathVariable Long id, @Valid @RequestBody AdminAdjustUserDTO dto,
+                                     HttpServletRequest request) {
+        User user = userMapper.selectById(id);
+        if (user == null) {
+            throw new BusinessException(40402, "客户端用户不存在");
+        }
+        String before = snapshot(user);
+
+        Integer pkgId = dto.getPackagePlanId();
+        if (pkgId != null) {
+            PackagePlan plan = packagePlanMapper.selectById(pkgId);
+            if (plan == null || !"ACTIVE".equals(plan.getStatus())) {
+                throw new BusinessException(40420, "套餐不存在或已停用");
+            }
+            user.setCurrentPackageId(plan.getId());
+            user.setCurrentPackageName(plan.getName());
+            int calls = plan.getAccountCount() * plan.getCallsPerAccount();
+            user.setRemainingCalls((user.getRemainingCalls() == null ? 0 : user.getRemainingCalls()) + calls);
+            user.setDailyCallsLimit(Math.max(user.getDailyCallsLimit() == null ? 0 : user.getDailyCallsLimit(), calls));
+            user.setMaxAccounts(Math.max(user.getMaxAccounts() == null ? 1 : user.getMaxAccounts(), plan.getAccountCount()));
+            LocalDateTime base = (user.getExpireTime() != null && user.getExpireTime().isAfter(LocalDateTime.now()))
+                    ? user.getExpireTime() : LocalDateTime.now();
+            user.setExpireTime(base.plusHours(plan.getDurationHours()));
+        }
+
+        int extra = dto.getExtraCalls() == null ? 0 : dto.getExtraCalls();
+        if (extra != 0) {
+            int newRemain = (user.getRemainingCalls() == null ? 0 : user.getRemainingCalls()) + extra;
+            user.setRemainingCalls(Math.max(0, newRemain));
+        }
+
+        int days = dto.getExtendDays() == null ? 0 : dto.getExtendDays();
+        if (days > 0) {
+            LocalDateTime base = (user.getExpireTime() != null) ? user.getExpireTime() : LocalDateTime.now();
+            user.setExpireTime(base.plusDays(days));
+        }
+
+        userMapper.updateById(user);
+        AdminPrincipal admin = (AdminPrincipal) request.getAttribute("pdkAdminPrincipal");
+        adminAuditService.record(admin, "MANUAL_ADJUST_USER", "USER", user.getPhone(), before,
+                snapshot(user), "管理员手动调整套餐/次数/期限", request);
+        return CommonResult.success(user, "用户权益已调整");
     }
 
     @PostMapping("/{id}/unbind-device")
@@ -107,7 +205,7 @@ public class AdminUserController {
     }
 
     @PutMapping("/{id}/status")
-    @RequirePermission(RolePermissions.PARTNER_MANAGE)
+    @RequirePermission(RolePermissions.USER_EDIT)
     @Transactional(rollbackFor = Exception.class)
     public CommonResult<String> changeStatus(@PathVariable Long id, @RequestParam String status,
                                               HttpServletRequest request) {
@@ -120,7 +218,15 @@ public class AdminUserController {
         AdminPrincipal admin = (AdminPrincipal) request.getAttribute("pdkAdminPrincipal");
         adminAuditService.record(admin, "CHANGE_USER_STATUS", "USER", user.getPhone(),
                 "{\"status\":\"" + before + "\"}", "{\"status\":\"" + status + "\"}",
-                "超级管理员调整用户状态", request);
-        return CommonResult.success("用户状态已更新");
+                "超级管理员调整用户状态（冻结/解冻）", request);
+        return CommonResult.success("用户状态已更新为 " + status);
+    }
+
+    private String snapshot(User u) {
+        return "{\"status\":\"" + (u.getStatus() == null ? "" : u.getStatus())
+                + "\",\"packageId\":" + (u.getCurrentPackageId() == null ? 0 : u.getCurrentPackageId())
+                + ",\"packageName\":\"" + (u.getCurrentPackageName() == null ? "" : u.getCurrentPackageName())
+                + "\",\"remainingCalls\":" + (u.getRemainingCalls() == null ? 0 : u.getRemainingCalls())
+                + ",\"expireTime\":\"" + (u.getExpireTime() == null ? "" : u.getExpireTime().toString()) + "\"}";
     }
 }
