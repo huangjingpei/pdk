@@ -1,97 +1,55 @@
 <template>
-  <div class="space-y-6">
-    <!-- 顶部标题 -->
-    <div class="flex justify-between items-center">
-      <div>
-        <h2 class="text-xl font-bold text-slate-800">商业化运营与财务大盘</h2>
-        <p class="text-xs text-slate-500 mt-1">
-          实时展示卡密核销收益、Token采购支出、毛利率及多账号并发承载
-        </p>
-      </div>
-      <el-button type="primary" :icon="Refresh" @click="fetchData">刷新数据</el-button>
+  <div>
+    <div class="heading">
+      <div><h2>运营任务总览</h2><p>按当前角色展示可访问的业务范围，数据来自 Spring Boot 实时接口。</p></div>
+      <el-button type="primary" :icon="Refresh" :loading="loading" @click="load">刷新数据</el-button>
     </div>
-
-    <!-- 4个核心指标卡片 -->
     <el-row :gutter="16">
-      <el-col :span="6">
-        <el-card shadow="hover" class="border-slate-200">
-          <div class="text-xs text-slate-500 font-medium">累计总实收流水 (已核销)</div>
-          <div class="text-2xl font-bold text-indigo-600 mt-2">¥{{ summary.totalIncome.toFixed(2) }}</div>
-          <div class="text-xs text-slate-400 mt-2 flex justify-between">
-            <span>正价售卖: ¥{{ summary.normalSaleIncome }}</span>
-            <span>折价让利: ¥{{ summary.discountSaleIncome }}</span>
-          </div>
-        </el-card>
-      </el-col>
-
-      <el-col :span="6">
-        <el-card shadow="hover" class="border-slate-200">
-          <div class="text-xs text-slate-500 font-medium">Token 采购对公支出</div>
-          <div class="text-2xl font-bold text-rose-600 mt-2">¥{{ summary.totalExpense.toFixed(2) }}</div>
-          <div class="text-xs text-slate-400 mt-2">
-            采购进货单价: 0.15 ~ 0.20 元/个
-          </div>
-        </el-card>
-      </el-col>
-
-      <el-col :span="6">
-        <el-card shadow="hover" class="border-slate-200">
-          <div class="text-xs text-slate-500 font-medium">平台净利润</div>
-          <div class="text-2xl font-bold text-emerald-600 mt-2">¥{{ summary.netProfit.toFixed(2) }}</div>
-          <div class="text-xs text-slate-400 mt-2">
-            综合毛利率: <span class="text-emerald-600 font-semibold">{{ summary.profitMarginRate }}%</span>
-          </div>
-        </el-card>
-      </el-col>
-
-      <el-col :span="6">
-        <el-card shadow="hover" class="border-slate-200">
-          <div class="text-xs text-slate-500 font-medium">拼多多 Token 健康可用池</div>
-          <div class="text-2xl font-bold text-blue-600 mt-2">{{ summary.activeTokenCount }} / 30</div>
-          <div class="text-xs text-slate-400 mt-2">
-            已激活核销卡密总数: {{ summary.totalCardsActivated }} 张
-          </div>
-        </el-card>
+      <el-col v-for="item in metrics" :key="item.label" :span="6">
+        <el-card shadow="hover"><div class="label">{{ item.label }}</div><div class="value">{{ item.value }}</div></el-card>
       </el-col>
     </el-row>
-
-    <!-- 架构要点提示 -->
-    <el-card shadow="never" class="bg-blue-50/50 border-blue-200">
-      <div class="flex items-start gap-3">
-        <el-icon class="text-blue-600 text-lg mt-0.5"><InfoFilled /></el-icon>
-        <div class="text-xs text-slate-600 space-y-1">
-          <div class="font-semibold text-slate-800">企业级生产架构与财务规范已落实：</div>
-          <div>1. <strong>财务物理解耦</strong>：卡密核销时，严格向独立财务实收流水表写入订单，彻底与卡密凭证表分离。</div>
-          <div>2. <strong>防重复与高并发保障</strong>：后端采用行级悲观锁与 CAS 乐观核销，杜绝同一卡密多端重复充值。</div>
-          <div>3. <strong>通信加密防盗刷</strong>：服务端下发拼多多 Token 使用 AES-128-GCM 配合 10 分钟动态时间窗口与字节反转。</div>
-        </div>
-      </div>
-    </el-card>
+    <el-row v-if="summary.finance" :gutter="16" class="finance-row">
+      <el-col :span="8"><el-card><div class="label">累计实收</div><div class="money income">¥{{ money(summary.finance.totalIncome) }}</div></el-card></el-col>
+      <el-col :span="8"><el-card><div class="label">累计支出</div><div class="money expense">¥{{ money(summary.finance.totalExpense) }}</div></el-card></el-col>
+      <el-col :span="8"><el-card><div class="label">净利润 / 毛利率</div><div class="money profit">¥{{ money(summary.finance.netProfit) }} · {{ summary.finance.profitMarginRate }}%</div></el-card></el-col>
+    </el-row>
+    <el-alert class="notice" type="info" :closable="false" title="权限由后端强制执行；前端动态菜单只用于改善操作体验，不能替代服务端鉴权。" />
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
-import { Refresh, InfoFilled } from '@element-plus/icons-vue';
-import { FinanceSummary } from '../../types';
+import { computed, onMounted, reactive, ref } from 'vue';
+import { ElMessage } from 'element-plus';
+import { Refresh } from '@element-plus/icons-vue';
+import { api, type ApiResult } from '../../api';
+import type { FinanceSummary } from '../../types';
 
-const summary = ref<FinanceSummary>({
-  totalIncome: 12560.00,
-  normalSaleIncome: 10200.00,
-  discountSaleIncome: 2360.00,
-  giftValue: 1200.00,
-  totalExpense: 2450.00,
-  netProfit: 10110.00,
-  profitMarginRate: 80.49,
-  totalCardsActivated: 68,
-  activeTokenCount: 26,
-});
+interface DashboardSummary { userCount: number; activeUserCount: number; unusedCardCount: number; healthyResourceCount: number; finance?: FinanceSummary }
+const loading = ref(false);
+const summary = reactive<DashboardSummary>({ userCount: 0, activeUserCount: 0, unusedCardCount: 0, healthyResourceCount: 0 });
+const metrics = computed(() => [
+  { label: '客户端用户', value: summary.userCount },
+  { label: '有效用户', value: summary.activeUserCount },
+  { label: '待售卡密', value: summary.unusedCardCount },
+  { label: '健康小号资源', value: summary.healthyResourceCount },
+]);
+const money = (value: number) => Number(value || 0).toFixed(2);
 
-const fetchData = () => {
-  // 模拟从后端接口获取最新聚合统计
-};
-
-onMounted(() => {
-  fetchData();
-});
+async function load(): Promise<void> {
+  loading.value = true;
+  try {
+    const response = await api.get<ApiResult<DashboardSummary>>('/api/v1/admin/dashboard/summary');
+    Object.assign(summary, response.data.data);
+  } catch (error) { ElMessage.error(error instanceof Error ? error.message : '加载失败'); }
+  finally { loading.value = false; }
+}
+onMounted(load);
 </script>
+
+<style scoped>
+.heading { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+h2 { margin: 0; color: #1e293b; } p { margin: 6px 0 0; color: #64748b; font-size: 13px; }
+.label { color: #64748b; font-size: 13px; }.value { margin-top: 12px; font-size: 30px; font-weight: 700; color: #2563eb; }
+.finance-row { margin-top: 18px; }.money { margin-top: 12px; font-size: 24px; font-weight: 700; }.income,.profit { color: #059669; }.expense { color: #e11d48; }.notice { margin-top: 18px; }
+</style>

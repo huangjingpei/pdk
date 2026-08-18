@@ -1,2 +1,10 @@
+E:\pdk\backend-springboot\src\test\java\com\pdk\interceptor\AdminAuthInterceptorTest.java
+E:\pdk\backend-springboot\src\test\java\com\pdk\interceptor\DeviceSecurityInterceptorTest.java
+E:\pdk\backend-springboot\src\test\java\com\pdk\security\RolePermissionsTest.java
+E:\pdk\backend-springboot\src\test\java\com\pdk\service\AdminAuditServiceTest.java
 E:\pdk\backend-springboot\src\test\java\com\pdk\service\CardKeyActivationServiceImplTest.java
+E:\pdk\backend-springboot\src\test\java\com\pdk\service\DeviceBindingServiceTest.java
+E:\pdk\backend-springboot\src\test\java\com\pdk\service\DispatchGatewayServiceImplTest.java
+E:\pdk\backend-springboot\src\test\java\com\pdk\service\FinancialServiceImplTest.java
+E:\pdk\backend-springboot\src\test\java\com\pdk\service\ResourceLeaseServiceTest.java
 E:\pdk\backend-springboot\src\test\java\com\pdk\utils\AesByteFlipUtilsTest.java

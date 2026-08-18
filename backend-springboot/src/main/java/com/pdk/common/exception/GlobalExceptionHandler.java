@@ -1,5 +1,6 @@
 package com.pdk.common.exception;
 
+import cn.dev33.satoken.exception.NotLoginException;
 import com.pdk.common.api.CommonResult;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
@@ -11,6 +12,11 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 @Slf4j
 @RestControllerAdvice
 public class GlobalExceptionHandler {
+
+    @ExceptionHandler(NotLoginException.class)
+    public CommonResult<Void> handleNotLogin(NotLoginException e) {
+        return CommonResult.failed(40100, "登录状态无效或已过期，请重新登录");
+    }
 
     @ExceptionHandler(BusinessException.class)
     public CommonResult<Void> handleBusinessException(BusinessException e, HttpServletRequest request) {
@@ -34,6 +40,6 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(Exception.class)
     public CommonResult<Void> handleGeneralException(Exception e, HttpServletRequest request) {
         log.error("系统未知未捕获异常 [{}]: ", request.getRequestURI(), e);
-        return CommonResult.failed(50000, "服务端处理异常: " + e.getMessage());
+        return CommonResult.failed(50000, "服务端处理异常，请联系管理员并提供请求时间");
     }
 }

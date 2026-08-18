@@ -1,6 +1,10 @@
 node_modules/
 build/
 dist/
+backend-springboot/target/
+__pycache__/
+client-pyqt/__pycache__
+*.pyc
 coverage/
 .DS_Store
 *.log

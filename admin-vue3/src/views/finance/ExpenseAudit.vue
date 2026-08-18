@@ -49,9 +49,7 @@
         <el-form-item label="供应商名称">
           <el-input v-model="form.supplierName" placeholder="例如: 拼客云联网络 / 极速商贸" />
         </el-form-item>
-        <el-form-item label="经办采购人">
-          <el-input v-model="form.purchaser" placeholder="当前管理员" />
-        </el-form-item>
+        <el-alert type="info" :closable="false" title="经办采购人将自动记录为当前登录管理员" />
       </el-form>
       <template #footer>
         <el-button @click="dialogVisible = false">取消</el-button>
@@ -62,10 +60,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive } from 'vue';
+import { ref, reactive, onMounted } from 'vue';
 import { Plus } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
-import { CompanyExpense } from '../../types';
+import type { CompanyExpense } from '../../types';
+import { api, type ApiResult, type PageResult } from '../../api';
 
 const dialogVisible = ref(false);
 
@@ -73,51 +72,26 @@ const form = reactive({
   tokenCount: 100,
   unitCost: 0.18,
   supplierName: '拼客云联供应链',
-  purchaser: 'super_admin',
 });
 
-const tableData = ref<CompanyExpense[]>([
-  {
-    id: 1,
-    expenseOrderNo: 'EXP-17711100223-9081',
-    category: 'TOKEN_PURCHASE',
-    tokenBatchId: 'BATCH-TK2026A',
-    tokenCount: 500,
-    supplierName: '拼客云联供应链',
-    unitCost: 0.18,
-    totalCost: 90.00,
-    purchaser: 'super_admin',
-    purchasedAt: '2026-08-14 10:00:00',
-  },
-  {
-    id: 2,
-    expenseOrderNo: 'EXP-17710988123-1102',
-    category: 'TOKEN_PURCHASE',
-    tokenBatchId: 'BATCH-TK2026B',
-    tokenCount: 1000,
-    supplierName: '极速数码电商服务',
-    unitCost: 0.16,
-    totalCost: 160.00,
-    purchaser: 'finance_manager',
-    purchasedAt: '2026-08-12 15:30:00',
-  },
-]);
+const tableData = ref<CompanyExpense[]>([]);
 
-const submitExpense = () => {
-  const total = form.tokenCount * form.unitCost;
-  tableData.value.unshift({
-    id: Date.now(),
-    expenseOrderNo: 'EXP-' + Date.now() + '-' + Math.floor(Math.random() * 9000 + 1000),
-    category: 'TOKEN_PURCHASE',
-    tokenBatchId: 'BATCH-' + Math.random().toString(36).substring(2, 8).toUpperCase(),
-    tokenCount: form.tokenCount,
-    supplierName: form.supplierName,
-    unitCost: form.unitCost,
-    totalCost: total,
-    purchaser: form.purchaser,
-    purchasedAt: new Date().toLocaleString(),
-  });
-  dialogVisible.value = false;
-  ElMessage.success('采购支出录入成功，对公账目已平衡');
-};
+async function load(): Promise<void> {
+  try {
+    const response = await api.get<ApiResult<PageResult<CompanyExpense>>>('/api/v1/admin/finance/expenses', { params: { size: 100 } });
+    tableData.value = response.data.data.records;
+  } catch (error) { ElMessage.error(error instanceof Error ? error.message : '采购支出加载失败'); }
+}
+
+async function submitExpense(): Promise<void> {
+  try {
+    await api.post('/api/v1/admin/finance/expenses/purchase-token', null, { params: {
+      tokenCount: form.tokenCount, unitCost: form.unitCost, supplier: form.supplierName,
+    } });
+    dialogVisible.value = false;
+    ElMessage.success('采购支出录入成功');
+    await load();
+  } catch (error) { ElMessage.error(error instanceof Error ? error.message : '录入失败'); }
+}
+onMounted(load);
 </script>

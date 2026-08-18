@@ -6,6 +6,7 @@ import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
+import java.util.List;
 
 @Mapper
 public interface TokenPoolMapper extends BaseMapper<TokenPool> {
@@ -15,4 +16,10 @@ public interface TokenPoolMapper extends BaseMapper<TokenPool> {
 
     @Update("UPDATE pdk_token_pool SET health_status = #{status}, last_fault_time = NOW() WHERE id = #{id}")
     int markTokenFaultStatus(@Param("id") Long id, @Param("status") String status);
+
+    @Select("SELECT t.* FROM pdk_token_pool t WHERE t.health_status = 'HEALTHY' " +
+            "AND t.daily_calls_count < t.daily_max_capacity AND NOT EXISTS " +
+            "(SELECT 1 FROM pdk_account_assignment a WHERE a.token_id = t.id AND a.status = 'ACTIVE') " +
+            "ORDER BY t.risk_score ASC, t.daily_calls_count ASC LIMIT #{limit} FOR UPDATE")
+    List<TokenPool> selectUnassignedHealthyForUpdate(@Param("limit") int limit);
 }

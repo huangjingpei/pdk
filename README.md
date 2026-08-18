@@ -1,20 +1,47 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://ai.google.dev/static/site-assets/images/share-ais-513315318.png" />
-</div>
+# PDK 云控商业化平台
 
-# Run and deploy your AI Studio app
+仓库包含三个可运行部分：
 
-This contains everything you need to run your app locally.
+- `backend-springboot`：Spring Boot 3、MyBatis-Plus、MySQL、Redis、Sa-Token
+- `admin-vue3`：Vue 3 + Element Plus 多角色管理后台
+- `client-pyqt`：PyQt6 客户端接口联调 Demo
 
-View your app in AI Studio: https://ai.studio/apps/49923b72-efb0-48d9-92f7-59bcf68e0aeb
+完整的模块边界、角色权限和接口说明见 [IMPLEMENTATION_ANALYSIS.md](./IMPLEMENTATION_ANALYSIS.md)。
 
-## Run Locally
+完整编译、Docker/传统 Linux 部署、升级回滚与验收步骤见 [BUILD_AND_DEPLOY.md](./BUILD_AND_DEPLOY.md)。
 
-**Prerequisites:**  Node.js
+## 1. 启动基础服务
 
+准备 MySQL 8 和 Redis。默认连接为：
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+- MySQL：`localhost:3306`，账号 `root`，密码读取 `DB_PASS`
+- Redis：`localhost:6379`
+
+## 2. 启动后端
+
+```powershell
+cd backend-springboot
+$env:DB_USER='root'
+$env:DB_PASS='你的MySQL密码'
+mvn spring-boot:run
+```
+
+首次启动会由 JDBC 自动创建 `pdk_biz_db`，随后 Spring Boot 自动执行 `src/main/resources/schema-mysql.sql`。脚本使用 `IF NOT EXISTS`、`ON DUPLICATE KEY UPDATE` 和条件插入，可重复启动。
+
+## 3. 启动管理端
+
+```powershell
+cd admin-vue3
+npm install
+npm run dev
+```
+
+访问 `http://localhost:8081`。默认超级管理员为 `13454118762 / admin123`。注册用户默认是 `CUSTOMER`，只能由超级管理员提升为 `PARTNER` 后登录管理后台并制套餐、制卡。
+
+本地短信使用统一短信接口的 `local` 实现；使用 `--spring.profiles.active=local` 才会启用固定测试验证码，验证码由 `PDK_SMS_FIXED_CODE` 配置。默认配置和生产环境均关闭固定验证码；生产环境应将 `PDK_SMS_PROVIDER` 切换为 `aliyun`。当前仓库已预留阿里云配置和适配器外壳，正式 SDK 调用需在取得 AccessKey、签名和模板后接入。
+
+## 4. 启动 PyQt 客户端
+
+参见 [client-pyqt/README.md](./client-pyqt/README.md)。
+
+> SQL 中的管理员和小号资源均为本地联调种子。部署前必须替换默认密码、密码 pepper、数据库密码、AES 根密钥及演示 Token。

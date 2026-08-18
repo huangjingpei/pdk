@@ -71,10 +71,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive } from 'vue';
+import { ref, reactive, onMounted } from 'vue';
 import { Plus } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
-import { TokenPoolItem } from '../../types';
+import type { TokenPoolItem } from '../../types';
+import { api, type ApiResult, type PageResult } from '../../api';
 
 const dialogVisible = ref(false);
 
@@ -84,60 +85,32 @@ const form = reactive({
   dailyMaxCapacity: 500,
 });
 
-const tableData = ref<TokenPoolItem[]>([
-  {
-    id: 1,
-    tokenVal: 'pdd_sess_tok_77218392183912093810293123',
-    accountAlias: 'PDD-BUYER-SLOT-01 (优质买家号)',
-    healthStatus: 'HEALTHY',
-    dailyCallsCount: 142,
-    dailyMaxCapacity: 500,
-    riskScore: 12,
-  },
-  {
-    id: 2,
-    tokenVal: 'pdd_sess_tok_44120938102938109238120391',
-    accountAlias: 'PDD-BUYER-SLOT-02 (高频采集号)',
-    healthStatus: 'HEALTHY',
-    dailyCallsCount: 289,
-    dailyMaxCapacity: 500,
-    riskScore: 24,
-  },
-  {
-    id: 3,
-    tokenVal: 'pdd_sess_tok_11092381029381029381209381',
-    accountAlias: 'PDD-BUYER-SLOT-03 (风控告警号)',
-    healthStatus: 'FAULT_BLACK',
-    dailyCallsCount: 498,
-    dailyMaxCapacity: 500,
-    riskScore: 88,
-    lastFaultTime: '2026-08-15 12:00:00',
-  },
-]);
+const tableData = ref<TokenPoolItem[]>([]);
 
-const submitToken = () => {
-  tableData.value.push({
-    id: tableData.value.length + 1,
-    tokenVal: form.tokenVal,
-    accountAlias: form.accountAlias,
-    healthStatus: 'HEALTHY',
-    dailyCallsCount: 0,
-    dailyMaxCapacity: form.dailyMaxCapacity,
-    riskScore: 5,
-  });
-  dialogVisible.value = false;
-  ElMessage.success('底层 Token 已加入公共调度池');
-};
+async function load(): Promise<void> {
+  try {
+    const response = await api.get<ApiResult<PageResult<TokenPoolItem>>>('/api/v1/admin/token/list', { params: { size: 100 } });
+    tableData.value = response.data.data.records;
+  } catch (error) { ElMessage.error(error instanceof Error ? error.message : '资源池加载失败'); }
+}
 
-const blackToken = (row: TokenPoolItem) => {
-  row.healthStatus = 'FAULT_BLACK';
-  ElMessage.warning(`已手动拉黑槽位: ${row.accountAlias}`);
-};
+async function submitToken(): Promise<void> {
+  try {
+    await api.post('/api/v1/admin/token', form);
+    dialogVisible.value = false;
+    ElMessage.success('底层 Token 已加入公共调度池');
+    await load();
+  } catch (error) { ElMessage.error(error instanceof Error ? error.message : '录入失败'); }
+}
 
-const recoverToken = (row: TokenPoolItem) => {
-  row.healthStatus = 'HEALTHY';
-  row.dailyCallsCount = 0;
-  row.riskScore = 10;
-  ElMessage.success(`槽位已重置并自愈上线: ${row.accountAlias}`);
-};
+async function setStatus(row: TokenPoolItem, status: string): Promise<void> {
+  try {
+    await api.put(`/api/v1/admin/token/${row.id}/status`, null, { params: { status } });
+    ElMessage.success(`资源状态已更新: ${row.accountAlias}`);
+    await load();
+  } catch (error) { ElMessage.error(error instanceof Error ? error.message : '更新失败'); }
+}
+const blackToken = (row: TokenPoolItem) => setStatus(row, 'FAULT_BLACK');
+const recoverToken = (row: TokenPoolItem) => setStatus(row, 'HEALTHY');
+onMounted(load);
 </script>

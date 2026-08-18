@@ -13,6 +13,10 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import com.baomidou.mybatisplus.core.MybatisConfiguration;
+import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
+import org.apache.ibatis.builder.MapperBuilderAssistant;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -31,9 +35,11 @@ public class CardKeyActivationServiceImplTest {
     @Mock
     private UserMapper userMapper;
     @Mock
-    private PackageTemplateMapper packageTemplateMapper;
+    private PackagePlanMapper packagePlanMapper;
     @Mock
-    private AdminAuditLogMapper auditLogMapper;
+    private PdkAdminAuditLogMapper auditLogMapper;
+    @Mock
+    private AccountAssignmentService assignmentService;
 
     @InjectMocks
     private CardKeyActivationServiceImpl activationService;
@@ -41,10 +47,12 @@ public class CardKeyActivationServiceImplTest {
     private ActivateCardDTO validDTO;
     private CardKey unusedCard;
     private User activeUser;
-    private PackageTemplate standardPkg;
+    private PackagePlan standardPkg;
 
     @BeforeEach
     void setUp() {
+        TableInfoHelper.initTableInfo(new MapperBuilderAssistant(new MybatisConfiguration(), ""), CardKey.class);
+        ReflectionTestUtils.setField(activationService, "trialSmsCode", "888888");
         validDTO = new ActivateCardDTO();
         validDTO.setCardKey("PDK-8891-2041-9982");
         validDTO.setUserPhone("13800138000");
@@ -67,13 +75,15 @@ public class CardKeyActivationServiceImplTest {
         activeUser.setRemainingCalls(20);
         activeUser.setExpireTime(LocalDateTime.now().plusDays(1));
 
-        standardPkg = new PackageTemplate();
+        standardPkg = new PackagePlan();
         standardPkg.setId(2);
         standardPkg.setName("200元月卡多账号防控版");
-        standardPkg.setPrice(new BigDecimal("200.00"));
-        standardPkg.setDurationDays(30);
-        standardPkg.setAccountCountX(10);
-        standardPkg.setCallsPerAccountY(30);
+        standardPkg.setListPrice(new BigDecimal("200.00"));
+        standardPkg.setSalePrice(new BigDecimal("200.00"));
+        standardPkg.setDurationHours(720);
+        standardPkg.setAccountCount(10);
+        standardPkg.setCallsPerAccount(30);
+        standardPkg.setStatus("ACTIVE");
     }
 
     @Test
@@ -81,7 +91,7 @@ public class CardKeyActivationServiceImplTest {
     void testActivateCardKey_Success() {
         when(cardKeyMapper.selectOneForUpdate("PDK-8891-2041-9982")).thenReturn(unusedCard);
         when(userMapper.selectOne(any())).thenReturn(activeUser);
-        when(packageTemplateMapper.selectById(2)).thenReturn(standardPkg);
+        when(packagePlanMapper.selectById(2)).thenReturn(standardPkg);
         when(cardKeyMapper.update(any(), any())).thenReturn(1); // CAS 成功
 
         ActivationResultVO result = activationService.activateCardKeyAtomic(validDTO);
@@ -96,7 +106,8 @@ public class CardKeyActivationServiceImplTest {
         // 验证动作三：更新用户配额与到期日
         verify(userMapper, times(1)).updateById(any(User.class));
         // 验证动作四：写入永久审计日志
-        verify(auditLogMapper, times(1)).insert(any(AdminAuditLog.class));
+        verify(auditLogMapper, times(1)).insert(any(PdkAdminAuditLog.class));
+        verify(assignmentService).activatePaid(activeUser, standardPkg, unusedCard.getId());
     }
 
     @Test
@@ -113,5 +124,61 @@ public class CardKeyActivationServiceImplTest {
         assertEquals(40002, ex.getCode());
         assertTrue(ex.getMessage().contains("已被核销使用"));
         verify(financialIncomeMapper, never()).insert(any(FinancialIncome.class));
+    }
+
+    @Test
+    @DisplayName("UT-03: 客户端不能篡改卡密面值")
+    void rejectsTamperedAmount() {
+        validDTO.setActualAmount(new BigDecimal("1.00"));
+        when(cardKeyMapper.selectOneForUpdate(validDTO.getCardKey())).thenReturn(unusedCard);
+        when(packagePlanMapper.selectById(2)).thenReturn(standardPkg);
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> activationService.activateCardKeyAtomic(validDTO));
+        assertEquals(40005, error.getCode());
+        verify(userMapper, never()).insert(any(User.class));
+        verify(financialIncomeMapper, never()).insert(any(FinancialIncome.class));
+    }
+
+    @Test
+    @DisplayName("UT-04: 已绑定其他电脑时禁止直接激活覆盖")
+    void rejectsActivationFromDifferentDevice() {
+        activeUser.setDeviceId("DEVICE-OLD");
+        when(cardKeyMapper.selectOneForUpdate(validDTO.getCardKey())).thenReturn(unusedCard);
+        when(packagePlanMapper.selectById(2)).thenReturn(standardPkg);
+        when(userMapper.selectOne(any())).thenReturn(activeUser);
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> activationService.activateCardKeyAtomic(validDTO));
+        assertEquals(40103, error.getCode());
+        verify(financialIncomeMapper, never()).insert(any(FinancialIncome.class));
+    }
+
+    @Test
+    @DisplayName("UT-05: 停用套餐对应卡密不能激活")
+    void rejectsInactivePackage() {
+        standardPkg.setStatus("INACTIVE");
+        when(cardKeyMapper.selectOneForUpdate(validDTO.getCardKey())).thenReturn(unusedCard);
+        when(packagePlanMapper.selectById(2)).thenReturn(standardPkg);
+
+        assertEquals(40007, assertThrows(BusinessException.class,
+                () -> activationService.activateCardKeyAtomic(validDTO)).getCode());
+    }
+
+    @Test
+    @DisplayName("UT-06: 试用验证码错误与重复领取均被拒绝")
+    void validatesTrialCodeAndSingleClaim() {
+        com.pdk.domain.dto.TrialRegisterDTO trial = new com.pdk.domain.dto.TrialRegisterDTO();
+        trial.setPhone("13800138000");
+        trial.setDeviceId("DEVICE-A");
+        trial.setSmsCode("000000");
+        assertEquals(40011, assertThrows(BusinessException.class,
+                () -> activationService.registerTrialAccount(trial)).getCode());
+
+        trial.setSmsCode("888888");
+        activeUser.setIsTrialClaimed(1);
+        when(userMapper.selectOne(any())).thenReturn(activeUser);
+        assertEquals(40010, assertThrows(BusinessException.class,
+                () -> activationService.registerTrialAccount(trial)).getCode());
     }
 }

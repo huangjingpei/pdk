@@ -4,6 +4,7 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
 import lombok.Data;
 import java.math.BigDecimal;
+import jakarta.validation.constraints.DecimalMin;
 
 @Data
 public class ActivateCardDTO {
@@ -22,13 +23,16 @@ public class ActivateCardDTO {
     /**
      * 财务实收金额 (代理商或前台结算金额)
      */
+    @DecimalMin(value = "0.00", message = "实收金额不能为负数")
     private BigDecimal actualAmount;
 
     /**
      * 销售类型: NORMAL_SALE, DISCOUNT_SALE, GIFT_FREE
      */
+    @Pattern(regexp = "NORMAL_SALE", message = "客户端激活仅允许 NORMAL_SALE")
     private String orderType = "NORMAL_SALE";
 
+    @Pattern(regexp = "ALIPAY|WECHAT_PAY|BANK_TRANSFER|OFFLINE", message = "支付通道不合法")
     private String paymentChannel = "ALIPAY";
 
     private String paymentTxnNo;

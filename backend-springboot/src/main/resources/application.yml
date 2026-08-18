@@ -8,9 +8,16 @@ spring:
     name: pdk-commercial-system
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
-    url: jdbc:mysql://localhost:3306/pdk_biz_db?useUnicode=true&characterEncoding=utf-8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
+    # createDatabaseIfNotExist 让 JDBC 在首次启动时先创建库，随后 Spring SQL Init
+    # 会自动执行 schema-mysql.sql。脚本本身保持幂等，可安全重复启动。
+    url: ${DB_URL:jdbc:mysql://localhost:3306/pdk_biz_db?createDatabaseIfNotExist=true&useUnicode=true&characterEncoding=utf-8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true}
     username: ${DB_USER:root}
     password: ${DB_PASS:89dfu*#$ewr87l}
+    hikari:
+      maximum-pool-size: 20
+      minimum-idle: 5
+      idle-timeout: 30000
+      connection-timeout: 10000
 
   # 启动自动执行建表/种子 SQL（默认仅内嵌库生效，MySQL 需显式开启）
   # schema-mysql.sql 使用 IF NOT EXISTS / ON DUPLICATE KEY UPDATE，可重复执行
@@ -20,11 +27,6 @@ spring:
       schema-locations: classpath:schema-mysql.sql
       encoding: UTF-8
       continue-on-error: false
-    hikari:
-      maximum-pool-size: 20
-      minimum-idle: 5
-      idle-timeout: 30000
-      connection-timeout: 10000
   data:
     redis:
       host: localhost
@@ -56,7 +58,36 @@ sa-token:
 
 # 业务安全配置
 pdk:
+  trial:
+    duration-hours: ${PDK_TRIAL_DURATION_HOURS:24}
+    account-count: ${PDK_TRIAL_ACCOUNT_COUNT:1}
+    calls-per-account: ${PDK_TRIAL_CALLS_PER_ACCOUNT:20}
+  sms:
+    provider: ${PDK_SMS_PROVIDER:local}
+    code-expire-minutes: 5
+    local:
+      fixed-code-enabled: ${PDK_SMS_FIXED_CODE_ENABLED:false}
+      fixed-code: ${PDK_SMS_FIXED_CODE:888888}
+    aliyun:
+      access-key-id: ${ALIYUN_SMS_ACCESS_KEY_ID:}
+      access-key-secret: ${ALIYUN_SMS_ACCESS_KEY_SECRET:}
+      sign-name: ${ALIYUN_SMS_SIGN_NAME:}
+      template-code: ${ALIYUN_SMS_TEMPLATE_CODE:}
   security:
     dynamic-window-minutes: 10
     magic-bytes: "5044" # 0x50 0x44
     token-lease-seconds: 300
+    lease-recovery-interval-ms: 60000
+    daily-counter-reset-cron: "0 0 0 * * *"
+    scheduler-zone: Asia/Shanghai
+    trial-sms-code: ${PDK_TRIAL_SMS_CODE:888888}
+    admin-password-pepper: ${PDK_ADMIN_PASSWORD_PEPPER:PDK_ADMIN_2026}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: never

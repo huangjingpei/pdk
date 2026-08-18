@@ -1,0 +1,5 @@
+pdk:
+  sms:
+    local:
+      fixed-code-enabled: true
+      fixed-code: ${PDK_SMS_FIXED_CODE:888888}

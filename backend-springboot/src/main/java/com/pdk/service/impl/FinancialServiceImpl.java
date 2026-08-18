@@ -6,6 +6,7 @@ import com.pdk.domain.entity.CompanyExpense;
 import com.pdk.domain.entity.FinancialIncome;
 import com.pdk.domain.entity.TokenPool;
 import com.pdk.domain.vo.FinanceSummaryVO;
+import com.pdk.common.exception.BusinessException;
 import com.pdk.mapper.CompanyExpenseMapper;
 import com.pdk.mapper.FinancialIncomeMapper;
 import com.pdk.mapper.TokenPoolMapper;
@@ -101,6 +102,15 @@ public class FinancialServiceImpl implements IFinancialService {
 
     @Override
     public CompanyExpense recordTokenPurchaseExpense(int tokenCount, BigDecimal unitCost, String supplier, String purchaser) {
+        if (tokenCount <= 0) {
+            throw new BusinessException(40040, "采购数量必须大于0");
+        }
+        if (unitCost == null || unitCost.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new BusinessException(40041, "采购单价必须大于0");
+        }
+        if (supplier == null || supplier.isBlank()) {
+            throw new BusinessException(40042, "供应商名称不能为空");
+        }
         CompanyExpense exp = new CompanyExpense();
         exp.setExpenseOrderNo("EXP-" + System.currentTimeMillis() + "-" + (int)(Math.random() * 9000 + 1000));
         exp.setCategory("TOKEN_PURCHASE");

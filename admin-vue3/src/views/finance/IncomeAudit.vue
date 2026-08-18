@@ -2,7 +2,7 @@
   <div class="space-y-4">
     <div class="flex justify-between items-center">
       <div>
-        <h2 class="text-xl font-bold text-slate-800">实收收入对账流水 (独立财务表)</h2>
+        <h2 class="text-xl font-bold text-slate-800">{{ partnerView ? '我的销售与续费记录' : '实收收入对账流水 (独立财务表)' }}</h2>
         <p class="text-xs text-slate-500 mt-1">
           记录每一笔已激活卡密的真实财务实收金额，支持正价、折价及免费赠送归因对账
         </p>
@@ -17,6 +17,7 @@
             <el-option label="正价售卖 (NORMAL_SALE)" value="NORMAL_SALE" />
             <el-option label="折价优惠 (DISCOUNT_SALE)" value="DISCOUNT_SALE" />
             <el-option label="商务赠送 (GIFT_FREE)" value="GIFT_FREE" />
+            <el-option label="套餐续费 (RENEWAL)" value="RENEWAL" />
           </el-select>
         </el-form-item>
 
@@ -52,6 +53,7 @@
           <template #default="scope">
             <el-tag v-if="scope.row.orderType === 'NORMAL_SALE'" type="success" size="small">正价全款</el-tag>
             <el-tag v-else-if="scope.row.orderType === 'DISCOUNT_SALE'" type="warning" size="small">折价让利</el-tag>
+            <el-tag v-else-if="scope.row.orderType === 'RENEWAL'" type="primary" size="small">套餐续费</el-tag>
             <el-tag v-else type="info" size="small">商务赠送 (0元)</el-tag>
           </template>
         </el-table-column>
@@ -72,72 +74,36 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive } from 'vue';
+import { ref, reactive, onMounted } from 'vue';
 import { Search, Refresh } from '@element-plus/icons-vue';
-import { FinancialIncome } from '../../types';
+import type { FinancialIncome } from '../../types';
+import { api, type ApiResult, type PageResult } from '../../api';
+import { ElMessage } from 'element-plus';
+import { useRoute } from 'vue-router';
+
+const route = useRoute();
+const partnerView = route.path === '/sales';
 
 const queryForm = reactive({
   orderType: '',
   searchKey: '',
 });
 
-const tableData = ref<FinancialIncome[]>([
-  {
-    id: 1,
-    incomeOrderNo: 'INC-177112001928-8812',
-    cardKeyId: 101,
-    cardKey: 'PDK-8891-2041-9982',
-    userPhone: '13800138000',
-    packageId: 2,
-    packageName: '200元月卡（多账号防控版）',
-    faceValue: 200.00,
-    amount: 200.00,
-    discountAmount: 0.00,
-    orderType: 'NORMAL_SALE',
-    paymentChannel: 'ALIPAY',
-    auditAdmin: 'super_admin',
-    activatedAt: '2026-08-15 14:10:22',
-  },
-  {
-    id: 2,
-    incomeOrderNo: 'INC-177112003810-5519',
-    cardKeyId: 102,
-    cardKey: 'PDK-9921-7712-4410',
-    userPhone: '13911223344',
-    packageId: 3,
-    packageName: '500元季卡（高并发工作室版）',
-    faceValue: 500.00,
-    amount: 450.00,
-    discountAmount: 50.00,
-    orderType: 'DISCOUNT_SALE',
-    paymentChannel: 'WECHAT_PAY',
-    auditAdmin: 'agent_beijing',
-    activatedAt: '2026-08-15 13:45:10',
-  },
-  {
-    id: 3,
-    incomeOrderNo: 'INC-177112009981-1209',
-    cardKeyId: 103,
-    cardKey: 'PDK-1102-3399-5588',
-    userPhone: '13700008888',
-    packageId: 1,
-    packageName: '20元天卡（高频体验版）',
-    faceValue: 20.00,
-    amount: 0.00,
-    discountAmount: 20.00,
-    orderType: 'GIFT_FREE',
-    paymentChannel: 'OFFLINE',
-    auditAdmin: 'super_admin',
-    activatedAt: '2026-08-15 11:20:00',
-  },
-]);
+const tableData = ref<FinancialIncome[]>([]);
 
-const handleSearch = () => {
-  // 执行后台查询
-};
+async function handleSearch(): Promise<void> {
+  try {
+    const params = { size: 100, orderType: queryForm.orderType || undefined, searchKey: queryForm.searchKey || undefined };
+    const endpoint = partnerView ? '/api/v1/admin/sales/list' : '/api/v1/admin/finance/incomes';
+    const response = await api.get<ApiResult<PageResult<FinancialIncome>>>(endpoint, { params });
+    tableData.value = response.data.data.records;
+  } catch (error) { ElMessage.error(error instanceof Error ? error.message : '收入流水加载失败'); }
+}
 
-const resetSearch = () => {
+const resetSearch = async () => {
   queryForm.orderType = '';
   queryForm.searchKey = '';
+  await handleSearch();
 };
+onMounted(handleSearch);
 </script>

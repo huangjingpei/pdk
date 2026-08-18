@@ -2,7 +2,6 @@ package com.pdk.controller;
 
 import com.pdk.common.api.CommonResult;
 import com.pdk.domain.dto.ActivateCardDTO;
-import com.pdk.domain.dto.TrialRegisterDTO;
 import com.pdk.domain.vo.ActivationResultVO;
 import com.pdk.service.ICardKeyActivationService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -35,10 +34,4 @@ public class CardKeyActivationController {
         return CommonResult.success(vo, "卡密核销成功，权益已实时到账");
     }
 
-    @PostMapping("/register-trial")
-    @Operation(summary = "新人手机号短信注册领试用", description = "赠送1天20次体验配额，同手机号防重复领取")
-    public CommonResult<ActivationResultVO> registerTrial(@Valid @RequestBody TrialRegisterDTO dto) {
-        ActivationResultVO vo = activationService.registerTrialAccount(dto);
-        return CommonResult.success(vo, "新人1天体验权益已激活");
-    }
 }

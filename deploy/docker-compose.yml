@@ -1,0 +1,66 @@
+services:
+  mysql:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: pdk_biz_db
+      MYSQL_USER: pdk
+      MYSQL_PASSWORD: ${PDK_DB_PASSWORD:?set PDK_DB_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${PDK_DB_PASSWORD:?set PDK_DB_PASSWORD}
+      TZ: Asia/Shanghai
+    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci"]
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 20
+
+  backend:
+    build: ../backend-springboot
+    restart: unless-stopped
+    environment:
+      DB_URL: jdbc:mysql://mysql:3306/pdk_biz_db?createDatabaseIfNotExist=true&useUnicode=true&characterEncoding=utf-8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
+      DB_USER: pdk
+      DB_PASS: ${PDK_DB_PASSWORD:?set PDK_DB_PASSWORD}
+      SPRING_DATA_REDIS_HOST: redis
+      PDK_ADMIN_PASSWORD_PEPPER: ${PDK_ADMIN_PASSWORD_PEPPER:?set PDK_ADMIN_PASSWORD_PEPPER}
+      PDK_SECURITY_ROOT_SALT: ${PDK_SECURITY_ROOT_SALT:?set PDK_SECURITY_ROOT_SALT}
+      PDK_TRIAL_SMS_CODE: ${PDK_TRIAL_SMS_CODE:?set PDK_TRIAL_SMS_CODE}
+      TZ: Asia/Shanghai
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/actuator/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+
+  admin:
+    build: ../admin-vue3
+    restart: unless-stopped
+    ports:
+      - "8081:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+volumes:
+  mysql_data:
+  redis_data:

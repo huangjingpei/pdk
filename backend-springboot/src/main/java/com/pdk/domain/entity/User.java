@@ -21,6 +21,13 @@ public class User implements Serializable {
     private Integer maxAccounts;
     private Integer isTrialClaimed;
 
+    @TableField(exist = false)
+    private String roleCode;
+    @TableField(exist = false)
+    private String invitationCode;
+    @TableField(exist = false)
+    private String invitedByPhone;
+
     @TableField(fill = FieldFill.INSERT)
     private LocalDateTime createdAt;
 

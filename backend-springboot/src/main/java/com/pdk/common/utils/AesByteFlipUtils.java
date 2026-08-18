@@ -18,7 +18,8 @@ import java.util.Arrays;
  */
 public class AesByteFlipUtils {
 
-    private static final String ROOT_SALT = "PDK_SECRET_SALT_2026_ENTERPRISE";
+    private static final String ROOT_SALT = System.getenv().getOrDefault(
+            "PDK_SECURITY_ROOT_SALT", "PDK_SECRET_SALT_2026_ENTERPRISE");
     private static final int GCM_TAG_LENGTH = 128;
     private static final int IV_LENGTH = 12;
     private static final byte MAGIC_BYTE_1 = (byte) 0x50; // 'P'
@@ -82,6 +83,9 @@ public class AesByteFlipUtils {
     public static String decryptAndUnflip(String base64Encrypted) {
         try {
             byte[] flipped = Base64.decodeBase64(base64Encrypted);
+            if (flipped.length < 2 + IV_LENGTH + 16) {
+                throw new IllegalArgumentException("加密数据包长度不足");
+            }
             // 1. 还原字节正序
             byte[] rawPayload = new byte[flipped.length];
             for (int i = 0; i < flipped.length; i++) {

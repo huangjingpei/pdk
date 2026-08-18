@@ -1,2 +1,11 @@
-com\pdk\utils\AesByteFlipUtilsTest.class
+com\pdk\interceptor\DeviceSecurityInterceptorTest.class
+com\pdk\service\AdminAuditServiceTest.class
+com\pdk\service\FinancialServiceImplTest.class
+com\pdk\service\DispatchGatewayServiceImplTest.class
+com\pdk\interceptor\AdminAuthInterceptorTest$SecuredHandlers.class
+com\pdk\security\RolePermissionsTest.class
+com\pdk\service\DeviceBindingServiceTest.class
+com\pdk\service\ResourceLeaseServiceTest.class
 com\pdk\service\CardKeyActivationServiceImplTest.class
+com\pdk\utils\AesByteFlipUtilsTest.class
+com\pdk\interceptor\AdminAuthInterceptorTest.class

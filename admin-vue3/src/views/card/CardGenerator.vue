@@ -45,6 +45,12 @@
         </el-table-column>
         <el-table-column prop="generatedByAdmin" label="制卡账号" width="110" />
         <el-table-column prop="createdAt" label="制卡时间" width="170" />
+        <el-table-column label="操作" width="170" fixed="right">
+          <template #default="scope">
+            <el-button v-if="scope.row.status === 'ACTIVATED'" type="primary" size="small" @click="openRenew(scope.row)">续费</el-button>
+            <el-button v-if="scope.row.status !== 'VOID'" type="danger" size="small" @click="voidCard(scope.row)">作废</el-button>
+          </template>
+        </el-table-column>
       </el-table>
     </el-card>
 
@@ -68,66 +74,83 @@
         <el-button type="primary" @click="handleBatchGenerate">立即批量生成</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog v-model="renewVisible" title="原卡密续费" width="480px">
+      <el-alert type="info" :closable="false" title="续费后卡密保持不变，并生成新的续费销售流水" />
+      <el-form label-width="100px" style="margin-top:16px">
+        <el-form-item label="卡密"><el-input :model-value="renewCardKey" disabled /></el-form-item>
+        <el-form-item label="套餐版本"><el-select v-model="renewPackageId" style="width:100%"><el-option v-for="p in plans" :key="p.id" :value="p.id" :label="`${p.name} V${p.versionNo} / ¥${p.salePrice}`" /></el-select></el-form-item>
+      </el-form>
+      <template #footer><el-button @click="renewVisible=false">取消</el-button><el-button type="primary" @click="renew">确认线下收款并续费</el-button></template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive } from 'vue';
+import { ref, reactive, onMounted } from 'vue';
 import { Key } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
-import { CardKeyItem } from '../../types';
+import type { CardKeyItem } from '../../types';
+import { api, type ApiResult, type PageResult } from '../../api';
+import { ElMessageBox } from 'element-plus';
 
 const dialogVisible = ref(false);
+const renewVisible = ref(false);
+const renewCardKey = ref('');
+const renewPackageId = ref<number>();
+interface Plan { id:number; name:string; versionNo:number; salePrice:number }
+const plans = ref<Plan[]>([]);
 
 const form = reactive({
   packageId: 2,
   count: 5,
 });
 
-const tableData = ref<CardKeyItem[]>([
-  {
-    id: 1,
-    cardKey: 'PDK-8891-2041-9982',
-    packageId: 2,
-    status: 'ACTIVATED',
-    generatedByAdmin: 'super_admin',
-    activatedByPhone: '13800138000',
-    activatedAt: '2026-08-15 14:10:22',
-    createdAt: '2026-08-15 10:00:00',
-  },
-  {
-    id: 2,
-    cardKey: 'PDK-7712-9901-3310',
-    packageId: 2,
-    status: 'UNUSED',
-    generatedByAdmin: 'super_admin',
-    createdAt: '2026-08-15 10:00:00',
-  },
-  {
-    id: 3,
-    cardKey: 'PDK-1120-4499-8821',
-    packageId: 3,
-    status: 'UNUSED',
-    generatedByAdmin: 'agent_beijing',
-    createdAt: '2026-08-15 11:30:00',
-  },
-]);
+const tableData = ref<CardKeyItem[]>([]);
 
-const handleBatchGenerate = () => {
-  for (let i = 0; i < form.count; i++) {
-    const r1 = Math.random().toString(36).substring(2, 6).toUpperCase();
-    const r2 = Math.random().toString(36).substring(2, 6).toUpperCase();
-    const r3 = Math.random().toString(36).substring(2, 6).toUpperCase();
-    tableData.value.unshift({
-      id: Date.now() + i,
-      cardKey: `PDK-${r1}-${r2}-${r3}`,
-      packageId: form.packageId,
-      status: 'UNUSED',
-      generatedByAdmin: 'super_admin',
-      createdAt: new Date().toLocaleString(),
-    });
+async function load(): Promise<void> {
+  try {
+    const response = await api.get<ApiResult<PageResult<CardKeyItem>>>('/api/v1/admin/card/list', { params: { size: 100 } });
+    tableData.value = response.data.data.records;
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '卡密列表加载失败');
   }
-  dialogVisible.value = false;
-  ElMessage.success(`成功批量生成 ${form.count} 张新卡密`);
-};
+}
+
+async function loadPlans(): Promise<void> {
+  const response = await api.get<ApiResult<Plan[]>>('/api/v1/admin/package/list', { params: { status: 'ACTIVE' } });
+  plans.value = response.data.data;
+}
+
+async function openRenew(row: CardKeyItem): Promise<void> {
+  renewCardKey.value = row.cardKey;
+  await loadPlans();
+  renewPackageId.value = plans.value[0]?.id;
+  renewVisible.value = true;
+}
+
+async function renew(): Promise<void> {
+  if (!renewPackageId.value) return;
+  try { await api.post(`/api/v1/admin/card/${renewCardKey.value}/renew`, { packageId: renewPackageId.value }); renewVisible.value=false; ElMessage.success('原卡密续费成功'); await load(); }
+  catch(error){ ElMessage.error(error instanceof Error ? error.message : '续费失败'); }
+}
+
+async function voidCard(row: CardKeyItem): Promise<void> {
+  await ElMessageBox.confirm('作废已激活卡密会立即终止授权并释放小号，确认继续？','作废卡密',{type:'warning'});
+  try { await api.put(`/api/v1/admin/card/${row.cardKey}/void`); ElMessage.success('卡密已作废'); await load(); }
+  catch(error){ ElMessage.error(error instanceof Error ? error.message : '作废失败'); }
+}
+
+async function handleBatchGenerate(): Promise<void> {
+  try {
+    const response = await api.post<ApiResult<string[]>>('/api/v1/admin/card/batch-generate', form);
+    dialogVisible.value = false;
+    ElMessage.success(`成功批量生成 ${response.data.data.length} 张新卡密`);
+    await load();
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '制卡失败');
+  }
+}
+
+onMounted(load);
 </script>
