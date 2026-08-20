@@ -1,0 +1,250 @@
+"""PDK 客户端核心 API 客户端（无 GUI 依赖）。
+
+所有请求路径均对应后端真实接口，与 docs/TESTING_GUIDE.md 一致：
+  - 客户端鉴权：/api/v1/client/auth/{register,login,sms/send,logout,unbind-device,change-password}
+  - 卡密核销：/api/v1/card/activate （开放，无需登录）
+  - 短效 Token 调度：/api/v1/dispatch/acquire-token、/api/v1/dispatch/report-result
+  - 账号查询：/api/v1/client/account/{profile,usage,card}、/api/v1/client/resources/status
+
+通信加密方案（必须与后端 AesByteFlipUtils 一致）：
+  密文 = Base64( reverse( MAGIC('PD') + IV(12B) + AES-128-GCM(Token明文) ) )
+  密钥  = SHA256( ROOT_SALT + "_" + epochMinutes//10 )[:16]
+"""
+from __future__ import annotations
+
+import base64
+import hashlib
+import json
+import os
+import random
+import string
+import time
+from dataclasses import dataclass, field
+from typing import Any, Optional
+
+import requests
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+ROOT_SALT = os.getenv("PDK_SECURITY_ROOT_SALT", "PDK_SECRET_SALT_2026_ENTERPRISE")
+DEFAULT_BASE_URL = os.getenv("PDK_API_BASE", "http://localhost:8080")
+
+
+class ApiError(RuntimeError):
+    """网络层错误（区别于业务返回码）。"""
+
+
+def default_device_id() -> str:
+    """生成一个稳定的本机设备标识。"""
+    import platform
+    import uuid
+
+    source = f"{platform.node()}:{uuid.getnode()}:{platform.system()}"
+    digest = hashlib.sha256(source.encode("utf-8")).hexdigest()[:24].upper()
+    return f"PYQT-{digest}"
+
+
+def decrypt_payload(payload: str) -> dict[str, Any]:
+    """解密后端 acquire-token 下发的加密报文，返回明文 JSON dict。
+
+    与后端 AesByteFlipUtils.encryptAndFlip 完全对称：先整体字节逆序，
+    再校验魔数 'PD'，取 12 字节 IV 后用时间窗派生密钥做 AES-128-GCM 解密。
+    """
+    raw = base64.b64decode(payload)[::-1]
+    if len(raw) < 14 or raw[:2] != b"PD":
+        raise ValueError("不是有效的 PDK 加密报文（缺少 PD 魔数）")
+    iv, ciphertext = raw[2:14], raw[14:]
+    current_window = int(time.time() // 60 // 10)
+    last_err: Optional[Exception] = None
+    for window in (current_window, current_window - 1, current_window + 1):
+        key = hashlib.sha256(f"{ROOT_SALT}_{window}".encode()).digest()[:16]
+        try:
+            plaintext = AESGCM(key).decrypt(iv, ciphertext, None)
+            return json.loads(plaintext.decode("utf-8"))
+        except Exception as exc:  # noqa: BLE001 - 尝试相邻时间窗
+            last_err = exc
+            continue
+    raise ValueError(f"解密失败：时间窗口过期或数据损坏 ({last_err})")
+
+
+@dataclass
+class ClientSession:
+    token_name: str = "satoken"
+    token_value: str = ""
+    phone: str = ""
+    device_id: str = ""
+    password: str = ""
+
+
+class PdkApiClient:
+    """对 PDK 后端发起真实 HTTP 调用的轻量客户端。"""
+
+    def __init__(self, base_url: str = DEFAULT_BASE_URL) -> None:
+        self.base_url = base_url.rstrip("/")
+        self.session = ClientSession()
+        self.http = requests.Session()
+
+    # ------------------------------------------------------------------ 通用请求
+    def request(
+        self,
+        method: str,
+        path: str,
+        *,
+        authenticated: bool = False,
+        include_phone: bool = True,
+        include_device: bool = True,
+        override_device_id: Optional[str] = None,
+        headers: Optional[dict[str, str]] = None,
+        json: Optional[dict[str, Any]] = None,
+        params: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
+        """发起请求并返回 CommonResult 完整报文（code/message/data）。
+
+        业务失败（code != 200）也照常返回报文，便于边界测试断言返回码；
+        仅在「网络不可达 / 非 JSON 响应」时返回 code=0 的本地错误报文。
+        """
+        hdrs: dict[str, str] = {"Accept": "application/json"}
+        if authenticated:
+            if self.session.token_value:
+                hdrs[self.session.token_name] = self.session.token_value
+            if include_phone and self.session.phone:
+                hdrs["X-PDK-Phone"] = self.session.phone
+            dev = override_device_id if override_device_id is not None else self.session.device_id
+            if include_device and dev:
+                hdrs["X-PDK-Device-ID"] = dev
+        if headers:
+            hdrs.update(headers)
+        try:
+            resp = self.http.request(
+                method,
+                f"{self.base_url}{path}",
+                headers=hdrs,
+                json=json,
+                params=params,
+                timeout=20,
+            )
+            try:
+                return resp.json()
+            except ValueError:
+                return {"code": 0, "message": f"服务端返回非 JSON（HTTP {resp.status_code}）", "data": None}
+        except requests.RequestException as exc:
+            return {"code": 0, "message": f"网络请求失败: {exc}", "data": None}
+
+    @staticmethod
+    def is_ok(body: dict[str, Any]) -> bool:
+        return body.get("code") == 200
+
+    @staticmethod
+    def code(body: dict[str, Any]) -> int:
+        return int(body.get("code", 0) or 0)
+
+    # ------------------------------------------------------------------ 鉴权相关
+    def send_sms(self, phone: str, purpose: str = "REGISTER") -> dict[str, Any]:
+        return self.request("POST", "/api/v1/client/auth/sms/send",
+                            json={"phone": phone, "purpose": purpose})
+
+    def register(self, phone: str, password: str, device_id: str, sms_code: str,
+                 invitation_code: str = "") -> dict[str, Any]:
+        body = self.request("POST", "/api/v1/client/auth/register", json={
+            "phone": phone,
+            "password": password,
+            "deviceId": device_id,
+            "smsCode": sms_code,
+            "invitationCode": invitation_code or None,
+        })
+        if self.is_ok(body):
+            data = body.get("data") or {}
+            self.session.token_name = data.get("tokenName", "satoken")
+            self.session.token_value = data.get("tokenValue", "")
+            self.session.phone = phone
+            self.session.device_id = device_id
+            self.session.password = password
+        return body
+
+    def login(self, phone: str, password: str, device_id: str) -> dict[str, Any]:
+        body = self.request("POST", "/api/v1/client/auth/login", json={
+            "phone": phone,
+            "password": password,
+            "deviceId": device_id,
+        })
+        if self.is_ok(body):
+            data = body.get("data") or {}
+            self.session.token_name = data.get("tokenName", "satoken")
+            self.session.token_value = data.get("tokenValue", "")
+            self.session.phone = phone
+            self.session.device_id = device_id
+            self.session.password = password
+        return body
+
+    def logout(self) -> dict[str, Any]:
+        body = self.request("POST", "/api/v1/client/auth/logout", authenticated=True)
+        if self.is_ok(body):
+            self.session.token_value = ""
+        return body
+
+    def unbind_device(self) -> dict[str, Any]:
+        body = self.request("POST", "/api/v1/client/auth/unbind-device", authenticated=True)
+        if self.is_ok(body):
+            self.session.token_value = ""
+            self.session.device_id = ""
+        return body
+
+    def change_password(self, phone: str, old_password: str, new_password: str) -> dict[str, Any]:
+        return self.request("POST", "/api/v1/client/auth/change-password", json={
+            "phone": phone, "oldPassword": old_password, "newPassword": new_password,
+        })
+
+    # ------------------------------------------------------------------ 卡密核销
+    def activate_card(self, card_key: str, user_phone: str, device_id: str) -> dict[str, Any]:
+        return self.request("POST", "/api/v1/card/activate", json={
+            "cardKey": card_key.strip(),
+            "userPhone": user_phone,
+            "deviceId": device_id,
+            "orderType": "NORMAL_SALE",
+            "paymentChannel": "OFFLINE",
+        })
+
+    # ------------------------------------------------------------------ 调度网关
+    def acquire_token(self, action_type: str, goods_id: str, *,
+                      override_device_id: Optional[str] = None,
+                      include_device: bool = True) -> dict[str, Any]:
+        return self.request(
+            "POST", "/api/v1/dispatch/acquire-token",
+            authenticated=True, include_device=include_device,
+            override_device_id=override_device_id,
+            json={"actionType": action_type, "goodsId": goods_id,
+                  "timestamp": int(time.time() * 1000)},
+        )
+
+    def report_result(self, lease_trace_id: str, status: str,
+                      duration_ms: Optional[int] = None,
+                      error_message: str = "") -> dict[str, Any]:
+        return self.request(
+            "POST", "/api/v1/dispatch/report-result",
+            authenticated=True,
+            json={"leaseTraceId": lease_trace_id, "status": status,
+                  "responseDurationMs": duration_ms if duration_ms is not None else 1000,
+                  "errorMessage": error_message},
+        )
+
+    # ------------------------------------------------------------------ 账号查询
+    def profile(self) -> dict[str, Any]:
+        return self.request("GET", "/api/v1/client/account/profile", authenticated=True)
+
+    def usage(self) -> dict[str, Any]:
+        return self.request("GET", "/api/v1/client/account/usage", authenticated=True)
+
+    def resource_status(self) -> dict[str, Any]:
+        return self.request("GET", "/api/v1/client/resources/status", authenticated=True)
+
+    def card_list(self) -> dict[str, Any]:
+        return self.request("GET", "/api/v1/client/account/card", authenticated=True)
+
+
+def random_phone() -> str:
+    """生成一个未注册的测试手机号（1[3-9] 开头 + 9 位随机）。"""
+    return "1" + random.choice("3456789") + "".join(random.choices(string.digits, k=9))
+
+
+def random_password() -> str:
+    """生成一个满足长度 >=8 的随机密码。"""
+    return "Pdk" + "".join(random.choices(string.ascii_letters + string.digits, k=10))

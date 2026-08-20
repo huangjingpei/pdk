@@ -13,3 +13,6 @@ coverage/
 
 # WorkBuddy session data (memory/skills) — not project code
 .workbuddy/
+
+# Vite 构建临时产物
+vite.config.ts.timestamp-*.mjs
