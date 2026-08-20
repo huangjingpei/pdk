@@ -6,7 +6,7 @@
         <p>管理客户端注册用户及其绑定电脑；可手工建号、调整套餐/次数/期限、冻结账号。套餐字段由卡密激活自动写入，此处仅作例外人工调整。</p>
       </div>
       <div class="flex gap-2">
-        <el-button v-if="canEdit" type="primary" :icon="Plus" @click="openCreate">新增用户</el-button>
+        <el-button v-if="isSuperAdmin" type="primary" :icon="Plus" @click="openCreate">新增用户</el-button>
         <el-button :icon="Refresh" @click="load">刷新</el-button>
       </div>
     </div>
@@ -51,14 +51,17 @@
         </el-table-column>
         <el-table-column prop="expireTime" label="到期时间" width="180" />
         <el-table-column prop="createdAt" label="注册时间" width="180" />
-        <el-table-column label="操作" width="320" fixed="right">
+        <el-table-column label="操作" width="470" fixed="right">
           <template #default="scope">
-            <el-button v-if="canUnbind && scope.row.deviceId" type="warning" size="small" @click="unbind(scope.row.id)">解绑</el-button>
-            <el-button v-if="canManagePartner && scope.row.roleCode === 'CUSTOMER'" type="primary" size="small" @click="changeRole(scope.row.id, 'PARTNER')">升级代理</el-button>
-            <el-button v-if="canManagePartner && scope.row.roleCode === 'PARTNER'" type="danger" size="small" @click="changeRole(scope.row.id, 'CUSTOMER')">取消代理</el-button>
-            <el-button v-if="canEdit" type="success" size="small" @click="openAdjust(scope.row)">调整套餐</el-button>
-            <el-button v-if="canEdit" :type="scope.row.status === 'FROZEN' ? 'primary' : 'danger'" size="small"
-              @click="toggleStatus(scope.row)">{{ scope.row.status === 'FROZEN' ? '解冻' : '冻结' }}</el-button>
+            <div class="action-cell">
+              <el-button type="info" size="small" @click="openDetail(scope.row)">套餐详情</el-button>
+              <el-button v-if="canUnbind && scope.row.deviceId" type="warning" size="small" @click="unbind(scope.row.id)">解绑</el-button>
+              <el-button v-if="canManagePartner && scope.row.roleCode === 'CUSTOMER'" type="primary" size="small" @click="changeRole(scope.row.id, 'PARTNER')">升级代理</el-button>
+              <el-button v-if="canManagePartner && scope.row.roleCode === 'PARTNER'" type="danger" size="small" @click="changeRole(scope.row.id, 'CUSTOMER')">取消代理</el-button>
+              <el-button v-if="canEdit" type="success" size="small" @click="openAdjust(scope.row)">调整套餐</el-button>
+              <el-button v-if="isSuperAdmin" :type="scope.row.status === 'FROZEN' ? 'primary' : 'danger'" size="small"
+                @click="toggleStatus(scope.row)">{{ scope.row.status === 'FROZEN' ? '解冻' : '冻结' }}</el-button>
+            </div>
           </template>
         </el-table-column>
       </el-table>
@@ -112,6 +115,62 @@
         <el-button type="primary" :loading="adjusting" @click="submitAdjust">确认调整</el-button>
       </template>
     </el-dialog>
+
+    <!-- 套餐使用详情抽屉 -->
+    <el-drawer v-model="detailVisible" title="客户当前套餐使用详情" size="640px" direction="rtl">
+      <div v-loading="detailLoading">
+        <template v-if="detail">
+          <el-descriptions :column="2" border size="small" class="mb-4">
+            <el-descriptions-item label="手机号">{{ detail.phone || '-' }}</el-descriptions-item>
+            <el-descriptions-item label="套餐">{{ detail.currentPackageName || '未开通' }}</el-descriptions-item>
+            <el-descriptions-item label="剩余总次数">
+              <span class="font-semibold text-emerald-600">{{ detail.remainingCalls }}</span>
+            </el-descriptions-item>
+            <el-descriptions-item label="已用 / 总分配">
+              {{ detail.totalUsed }} / {{ detail.totalAllocated }}
+            </el-descriptions-item>
+            <el-descriptions-item label="到期时间" :span="2">{{ detail.expireTime || '-' }}</el-descriptions-item>
+          </el-descriptions>
+
+          <div class="flex items-center justify-between mb-2">
+            <h3 class="text-sm font-semibold text-slate-700">底层小号明细（{{ detail.accounts.length }} 个）</h3>
+            <span class="text-xs text-slate-400">每个槽位：已分配 / 已用 / 剩余</span>
+          </div>
+
+          <el-table :data="detail.accounts" border size="small" max-height="420">
+            <el-table-column prop="slotIndex" label="槽位" width="60" />
+            <el-table-column label="小号UUID" min-width="180">
+              <template #default="scope">
+                <span class="font-mono text-xs text-slate-600 break-all">{{ scope.row.uuid || '-' }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column prop="accountAlias" label="别名" min-width="120" />
+            <el-table-column label="健康" width="100">
+              <template #default="scope">
+                <el-tag v-if="scope.row.healthStatus === 'HEALTHY'" type="success" size="small">正常</el-tag>
+                <el-tag v-else-if="scope.row.healthStatus === 'BUSY'" type="warning" size="small">占用</el-tag>
+                <el-tag v-else-if="scope.row.healthStatus === 'FAULT_BLACK'" type="danger" size="small">拉黑</el-tag>
+                <el-tag v-else-if="scope.row.healthStatus === 'EXPIRED'" type="info" size="small">过期</el-tag>
+                <span v-else>{{ scope.row.healthStatus || '-' }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="已分配" width="80" prop="allocatedCalls" />
+            <el-table-column label="已用" width="70" prop="usedCalls" />
+            <el-table-column label="剩余" width="70">
+              <template #default="scope">
+                <span class="font-semibold" :class="scope.row.remaining <= 0 ? 'text-rose-600' : 'text-emerald-600'">
+                  {{ scope.row.remaining }}
+                </span>
+              </template>
+            </el-table-column>
+            <el-table-column prop="status" label="状态" width="100" />
+          </el-table>
+
+          <el-alert v-if="detail.accounts.length === 0" type="info" :closable="false" class="mt-3"
+            title="该客户当前没有 ACTIVE 的小号分配（未开通套餐或已全部回收/释放）。" />
+        </template>
+      </div>
+    </el-drawer>
   </div>
 </template>
 
@@ -120,8 +179,8 @@ import { computed, onMounted, ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Plus, Search, Refresh, RefreshLeft } from '@element-plus/icons-vue';
 import { api, type ApiResult, type PageResult } from '../../api';
-import { hasPermission } from '../../auth';
-import type { ClientUser, PackagePlanLite } from '../../types';
+import { hasPermission, authState } from '../../auth';
+import type { ClientUser, PackagePlanLite, UserAssignmentDetail } from '../../types';
 
 const rows = ref<ClientUser[]>([]);
 const loading = ref(false);
@@ -134,6 +193,8 @@ const statusFilter = ref('');
 const canEdit = computed(() => hasPermission('user:edit'));
 const canUnbind = computed(() => hasPermission('user:unbind'));
 const canManagePartner = computed(() => hasPermission('partner:manage'));
+// 仅超级管理员可执行「新增用户」与「删除（冻结/解冻）」——按角色严格控制，不依赖权限位分配
+const isSuperAdmin = computed(() => authState.session?.role === 'SUPER_ADMIN');
 
 async function load(p = 1): Promise<void> {
   page.value = p;
@@ -186,6 +247,25 @@ async function submitCreate(): Promise<void> {
     ElMessage.error(error instanceof Error ? error.message : '创建失败');
   } finally {
     creating.value = false;
+  }
+}
+
+// ---- 套餐使用详情 ----
+const detailVisible = ref(false);
+const detailLoading = ref(false);
+const detail = ref<UserAssignmentDetail | null>(null);
+
+async function openDetail(row: ClientUser): Promise<void> {
+  detailVisible.value = true;
+  detailLoading.value = true;
+  detail.value = null;
+  try {
+    const response = await api.get<ApiResult<UserAssignmentDetail>>(`/api/v1/admin/user/${row.id}/assignments`);
+    detail.value = response.data.data;
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '加载套餐详情失败');
+  } finally {
+    detailLoading.value = false;
   }
 }
 
@@ -284,4 +364,6 @@ onMounted(load);
 .page-title { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex-wrap: wrap; gap: 12px; }
 h2 { margin: 0; color: #1e293b; }
 p { margin: 6px 0 0; color: #64748b; font-size: 13px; max-width: 720px; }
+.action-cell { display: flex; flex-wrap: nowrap; gap: 5px; }
+.action-cell .el-button { flex: 1 1 0; min-width: 0; padding: 0 4px; margin: 0; }
 </style>

@@ -119,19 +119,26 @@ public class DispatchGatewayServiceImpl implements IDispatchGatewayService {
         String execStatus;
 
         if ("SUCCESS".equals(dto.getStatus())) {
-            // 正常执行: 用户扣减 1 次配额，底层 Token 调度次数 +1
-            int deducted = userMapper.update(null, new LambdaUpdateWrapper<User>()
-                    .eq(User::getPhone, userPhone)
-                    .gt(User::getRemainingCalls, 0)
-                    .setSql("remaining_calls = remaining_calls - 1"));
-            if (deducted == 0) {
-                throw new BusinessException(40302, "ERR_QUOTA_EXHAUSTED: 可用调用次数已耗尽");
+            // 正常执行: 小号槽位 used_calls +1（封顶 allocated），用户总池由槽位额度派生
+            if (assignmentId != null) {
+                assignmentService.recordSuccess(assignmentId);
+            } else {
+                // 兜底: 无 assignment 关联时直接递减用户级总池
+                int deducted = userMapper.update(null, new LambdaUpdateWrapper<User>()
+                        .eq(User::getPhone, userPhone)
+                        .gt(User::getRemainingCalls, 0)
+                        .setSql("remaining_calls = remaining_calls - 1"));
+                if (deducted == 0) {
+                    throw new BusinessException(40302, "ERR_QUOTA_EXHAUSTED: 可用调用次数已耗尽");
+                }
             }
 
             tokenPoolMapper.update(null, new LambdaUpdateWrapper<TokenPool>()
                     .eq(TokenPool::getId, tokenId)
                     .setSql("daily_calls_count = daily_calls_count + 1"));
-            if (assignmentId != null) assignmentService.recordSuccess(assignmentId);
+            // 以 assignment 槽位额度为唯一权威重算用户总池，消除双计数错位
+            User user = userMapper.selectOne(new LambdaQueryWrapper<User>().eq(User::getPhone, userPhone));
+            if (user != null) assignmentService.recomputeUserRemainingCalls(user.getId());
 
             log.info("业务调用成功上报并扣费: user={}, tokenId={}", userPhone, tokenId);
             deductCount = 1;

@@ -35,11 +35,8 @@ CREATE TABLE IF NOT EXISTS `pdk_card_key` (
     `activated_by_phone` VARCHAR(20) DEFAULT NULL COMMENT '激活绑定的用户手机号',
     `activated_at` DATETIME DEFAULT NULL COMMENT '激活核销时间',
     `activated_device_id` VARCHAR(128) DEFAULT NULL COMMENT '核销时绑定的设备UUID',
-    `token_pool_uuid` VARCHAR(36) DEFAULT NULL COMMENT '关联 pdk_token_pool.uuid，记录本卡密绑定的底层小号',
     `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '制卡时间'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='卡密凭证表';
-
--- 若 pdk_card_key 表已存在，请执行：ALTER TABLE `pdk_card_key` ADD COLUMN IF NOT EXISTS `token_pool_uuid` VARCHAR(36) DEFAULT NULL COMMENT '关联 pdk_token_pool.uuid';
 
 -- 3. 财务独立实收流水表 (与卡密物理拆分)
 CREATE TABLE IF NOT EXISTS `pdk_financial_income` (
@@ -91,7 +88,7 @@ CREATE TABLE IF NOT EXISTS `pdk_token_pool` (
     `leased_at` DATETIME DEFAULT NULL COMMENT '租借时间',
     `last_fault_time` DATETIME DEFAULT NULL COMMENT '最近一次报错故障时间',
     `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '录入时间',
-    `uuid` VARCHAR(36) DEFAULT NULL COMMENT '全局唯一标识，用于与卡密(pdk_card_key.token_pool_uuid)关联',
+    `uuid` VARCHAR(36) DEFAULT NULL COMMENT '全局唯一标识，用于与卡密分配记录(pdk_account_assignment)及调度对账关联',
     `is_discarded` TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否逻辑废弃(0否1是)；废弃后不参与调度，记录保留供管理员查看',
     UNIQUE KEY `uk_token_pool_uuid` (`uuid`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='拼多多官方 Token 公共调度池';
@@ -320,7 +317,7 @@ CREATE TABLE IF NOT EXISTS `pdk_system_config` (
 
 -- 平台配置种子数据（超级管理员可在后台「系统设置」修改；重复执行只更新元数据，不覆盖已修改的配置值）
 INSERT INTO `pdk_system_config` (`config_key`, `config_value`, `config_type`, `config_group`, `config_label`, `config_options`, `default_value`, `description`, `editable_by`) VALUES
-('token.allocation.mode', 'FIXED', 'SELECT', 'ACCOUNT', '账号小号 Token 使用方式', 'FIXED:固定分配,POLLING:轮询', 'FIXED', '固定分配=账号绑定固定 Token 槽位；轮询=每次请求轮流选取 Token', 'SUPER_ADMIN'),
+('token.allocation.mode', 'FIXED', 'SELECT', 'ACCOUNT', '账号小号 Token 使用方式', 'FIXED:固定分配,POLLING:轮询(预留未启用)', 'FIXED', '当前仅 FIXED(固定分配)生效：激活时把小号独占绑定给用户；POLLING(轮询)预留未启用', 'SUPER_ADMIN'),
 ('sms.register.enabled', 'false', 'SWITCH', 'SMS', '注册短信验证码', '', 'false', '开启后客户端注册必须校验短信验证码', 'SUPER_ADMIN'),
 ('security.encryption.enabled', 'true', 'SWITCH', 'SECURITY', '协议安全加密', '', 'true', '开启后服务端下发拼多多 Token 走 AES-GCM 加密；关闭可灰度降级', 'SUPER_ADMIN'),
 ('trial.days', '1', 'NUMBER', 'ACCOUNT', '新用户试用天数', '', '1', '注册赠送的体验版天数（预留，待启用）', 'SUPER_ADMIN'),

@@ -6,6 +6,12 @@ package com.pdk.config;
  */
 public final class ConfigKeys {
     // ---- 配置键 ----
+    /**
+     * 账号小号 Token 使用方式。
+     * 注意：当前系统【仅 FIXED(固定分配) 生效】——激活时把小号独占绑定给用户，
+     * 调度只从用户已独占的 assignment 中选取。POLLING(轮询/公共池动态分配) 为【预留未启用】，
+     * 无任何代码分支消费该值，切勿在激活/调度逻辑中假定它会被读取。
+     */
     public static final String TOKEN_ALLOCATION_MODE = "token.allocation.mode";
     public static final String SMS_REGISTER_ENABLED = "sms.register.enabled";
     public static final String SECURITY_ENCRYPTION_ENABLED = "security.encryption.enabled";

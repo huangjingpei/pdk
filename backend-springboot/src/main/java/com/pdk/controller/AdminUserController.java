@@ -7,6 +7,7 @@ import com.pdk.common.api.CommonResult;
 import com.pdk.common.exception.BusinessException;
 import com.pdk.domain.dto.AdminAdjustUserDTO;
 import com.pdk.domain.dto.AdminCreateUserDTO;
+import com.pdk.domain.dto.UserAssignmentDetail;
 import com.pdk.domain.entity.InvitationCode;
 import com.pdk.domain.entity.PackagePlan;
 import com.pdk.domain.entity.User;
@@ -20,6 +21,7 @@ import com.pdk.mapper.UserReferralMapper;
 import com.pdk.security.AdminPrincipal;
 import com.pdk.security.RequirePermission;
 import com.pdk.security.RolePermissions;
+import com.pdk.service.AccountAssignmentService;
 import com.pdk.service.AdminAuditService;
 import com.pdk.service.DeviceBindingService;
 import com.pdk.service.InvitationService;
@@ -40,6 +42,7 @@ public class AdminUserController {
     private final UserCredentialMapper credentialMapper;
     private final PackagePlanMapper packagePlanMapper;
     private final DeviceBindingService deviceBindingService;
+    private final AccountAssignmentService assignmentService;
     private final AdminAuditService adminAuditService;
     private final InvitationService invitationService;
     private final InvitationCodeMapper invitationCodeMapper;
@@ -79,6 +82,12 @@ public class AdminUserController {
             }
         });
         return CommonResult.success(result);
+    }
+
+    @GetMapping("/{id}/assignments")
+    @RequirePermission(RolePermissions.USER_VIEW)
+    public CommonResult<UserAssignmentDetail> assignments(@PathVariable Long id) {
+        return CommonResult.success(assignmentService.detailByUser(id));
     }
 
     @PostMapping
@@ -145,8 +154,14 @@ public class AdminUserController {
 
         int extra = dto.getExtraCalls() == null ? 0 : dto.getExtraCalls();
         if (extra != 0) {
-            int newRemain = (user.getRemainingCalls() == null ? 0 : user.getRemainingCalls()) + extra;
-            user.setRemainingCalls(Math.max(0, newRemain));
+            // 「补次数」改为调整该用户小号槽位的 allocated_calls（而非直接改用户总池），
+            // 保持用户总池始终由 assignment 槽位派生；无 assignment 时回退为直接调整用户级总池
+            boolean adjustedByAssignment = assignmentService.adjustAllocatedCalls(id, extra);
+            if (!adjustedByAssignment) {
+                userMapper.update(null, new LambdaUpdateWrapper<User>()
+                        .eq(User::getId, id)
+                        .setSql("remaining_calls = GREATEST(0, remaining_calls + " + extra + ")"));
+            }
         }
 
         int days = dto.getExtendDays() == null ? 0 : dto.getExtendDays();
@@ -155,6 +170,8 @@ public class AdminUserController {
             user.setExpireTime(base.plusDays(days));
         }
 
+        // remaining_calls 一律由 assignment 槽位派生/单独 setSql 处理，updateById 不覆盖它
+        user.setRemainingCalls(null);
         userMapper.updateById(user);
         AdminPrincipal admin = (AdminPrincipal) request.getAttribute("pdkAdminPrincipal");
         adminAuditService.record(admin, "MANUAL_ADJUST_USER", "USER", user.getPhone(), before,

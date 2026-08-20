@@ -100,3 +100,26 @@ export interface PackagePlanLite {
   description?: string;
 }
 
+export interface UserAssignmentDetail {
+  userId: number;
+  phone?: string;
+  currentPackageName?: string;
+  expireTime?: string;
+  remainingCalls: number;
+  totalAllocated: number;
+  totalUsed: number;
+  accounts: AssignmentItem[];
+}
+
+export interface AssignmentItem {
+  slotIndex?: number;
+  uuid?: string;
+  accountAlias?: string;
+  healthStatus?: 'HEALTHY' | 'BUSY' | 'FAULT_BLACK' | 'EXPIRED';
+  allocatedCalls: number;
+  usedCalls: number;
+  remaining: number;
+  status?: string;
+  expireAt?: string;
+}
+

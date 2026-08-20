@@ -3,13 +3,16 @@ package com.pdk.service;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.pdk.common.exception.BusinessException;
+import com.pdk.domain.dto.UserAssignmentDetail;
 import com.pdk.domain.entity.AccountAssignment;
 import com.pdk.domain.entity.PackagePlan;
 import com.pdk.domain.entity.TokenPool;
 import com.pdk.domain.entity.User;
 import com.pdk.mapper.AccountAssignmentMapper;
 import com.pdk.mapper.TokenPoolMapper;
+import com.pdk.mapper.UserMapper;
 import lombok.RequiredArgsConstructor;
+import java.util.ArrayList;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -21,6 +24,7 @@ import java.util.List;
 public class AccountAssignmentService {
     private final AccountAssignmentMapper assignmentMapper;
     private final TokenPoolMapper tokenPoolMapper;
+    private final UserMapper userMapper;
 
     public record AssignedResource(AccountAssignment assignment, TokenPool token) {}
 
@@ -78,7 +82,41 @@ public class AccountAssignmentService {
             throw new BusinessException(50301, "当前套餐没有可用的小号资源，请联系代理或平台处理");
         }
         TokenPool token = tokenPoolMapper.selectById(assignment.getTokenId());
+        // 回收过期槽位后，以 assignment 槽位额度为权威重算用户总池，消除双计数错位
+        recomputeUserRemainingCalls(user.getId());
         return new AssignedResource(assignment, token);
+    }
+
+    /**
+     * 用户总池 remaining_calls 的【唯一权威来源】 = 所有 ACTIVE assignment 的 (allocated_calls - used_calls) 之和。
+     * 只要槽位额度变化（扣费成功 / 过期回收 / 故障换号 / 管理员调额度），都应调用此方法同步，
+     * 避免出现「总池仍有余额但无可用小号」的错位。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public void recomputeUserRemainingCalls(Long userId) {
+        Integer sum = assignmentMapper.selectSumRemaining(userId);
+        User user = userMapper.selectById(userId);
+        if (user != null) {
+            user.setRemainingCalls(sum == null ? 0 : sum);
+            userMapper.updateById(user);
+        }
+    }
+
+    /**
+     * 管理员「补次数」：调整为该用户所有 ACTIVE 小号槽位的 allocated_calls（而非直接改用户总池）。
+     * 返回是否有可调整的 assignment；调用方在无 assignment 时应回退为直接调整用户级总池。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public boolean adjustAllocatedCalls(Long userId, int extra) {
+        List<AccountAssignment> acts = activeAssignments(userId);
+        if (acts.isEmpty()) return false;
+        for (AccountAssignment a : acts) {
+            int newAlloc = a.getAllocatedCalls() + extra;
+            a.setAllocatedCalls(Math.max(a.getUsedCalls(), newAlloc));
+            assignmentMapper.updateById(a);
+        }
+        recomputeUserRemainingCalls(userId);
+        return true;
     }
 
     @Transactional(rollbackFor = Exception.class)
@@ -124,6 +162,52 @@ public class AccountAssignmentService {
                 .eq(AccountAssignment::getUserId, userId)
                 .eq(AccountAssignment::getStatus, "ACTIVE")
                 .orderByAsc(AccountAssignment::getSlotIndex));
+    }
+
+    /**
+     * 管理后台「客户当前套餐使用详情」：汇总该用户套餐进度 + 名下每个底层小号槽位的使用明细。
+     * 明细数据来自 pdk_account_assignment JOIN pdk_token_pool（uuid / 别名 / 健康状态）。
+     */
+    public UserAssignmentDetail detailByUser(Long userId) {
+        User user = userMapper.selectById(userId);
+        List<AccountAssignment> acts = activeAssignments(userId);
+
+        UserAssignmentDetail detail = new UserAssignmentDetail();
+        detail.setUserId(userId);
+        if (user != null) {
+            detail.setPhone(user.getPhone());
+            detail.setCurrentPackageName(user.getCurrentPackageName());
+            detail.setExpireTime(user.getExpireTime());
+            detail.setRemainingCalls(user.getRemainingCalls() == null ? 0 : user.getRemainingCalls());
+        }
+
+        int totalAlloc = 0;
+        int totalUsed = 0;
+        List<UserAssignmentDetail.AssignmentItem> items = new ArrayList<>();
+        for (AccountAssignment a : acts) {
+            TokenPool t = tokenPoolMapper.selectById(a.getTokenId());
+            UserAssignmentDetail.AssignmentItem item = new UserAssignmentDetail.AssignmentItem();
+            int alloc = a.getAllocatedCalls() == null ? 0 : a.getAllocatedCalls();
+            int used = a.getUsedCalls() == null ? 0 : a.getUsedCalls();
+            item.setSlotIndex(a.getSlotIndex());
+            item.setAllocatedCalls(alloc);
+            item.setUsedCalls(used);
+            item.setRemaining(alloc - used);
+            item.setStatus(a.getStatus());
+            item.setExpireAt(a.getExpireAt());
+            if (t != null) {
+                item.setUuid(t.getUuid());
+                item.setAccountAlias(t.getAccountAlias());
+                item.setHealthStatus(t.getHealthStatus());
+            }
+            totalAlloc += alloc;
+            totalUsed += used;
+            items.add(item);
+        }
+        detail.setTotalAllocated(totalAlloc);
+        detail.setTotalUsed(totalUsed);
+        detail.setAccounts(items);
+        return detail;
     }
 
     @Transactional(rollbackFor = Exception.class)
