@@ -123,3 +123,13 @@ export interface AssignmentItem {
   expireAt?: string;
 }
 
+export interface AdminAccount {
+  id: number;
+  username: string;
+  displayName: string;
+  roleCode: 'SUPER_ADMIN' | 'PARTNER';
+  status: 'ACTIVE' | 'DISABLED';
+  lastLoginAt?: string;
+  createdAt?: string;
+}
+

@@ -7,11 +7,7 @@ import com.pdk.common.exception.BusinessException;
 import com.pdk.common.utils.PasswordHashUtils;
 import com.pdk.domain.dto.AdminLoginDTO;
 import com.pdk.domain.entity.AdminUser;
-import com.pdk.domain.entity.User;
-import com.pdk.domain.entity.UserCredential;
 import com.pdk.mapper.AdminUserMapper;
-import com.pdk.mapper.UserMapper;
-import com.pdk.mapper.UserCredentialMapper;
 import com.pdk.security.AdminPrincipal;
 import com.pdk.security.RolePermissions;
 import jakarta.servlet.http.HttpServletRequest;
@@ -20,8 +16,6 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.bind.annotation.*;
-import org.springframework.security.crypto.password.PasswordEncoder;
-import com.pdk.service.InvitationService;
 
 import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
@@ -32,42 +26,33 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class AdminAuthController {
     private final AdminUserMapper adminUserMapper;
-    private final UserMapper userMapper;
-    private final UserCredentialMapper credentialMapper;
-    private final PasswordEncoder passwordEncoder;
-    private final InvitationService invitationService;
     @Qualifier("adminStpLogic")
     private final StpLogic adminStpLogic;
 
     @Value("${pdk.security.admin-password-pepper}")
     private String passwordPepper;
 
+    /**
+     * 统一后台登录：仅认 pdk_admin_user 表，角色为 SUPER_ADMIN 或 PARTNER 均视为管理员。
+     * 登录后按角色拿到对应权限，前端据此展示不同内容；不再允许客户端身份登录后台。
+     */
     @PostMapping("/login")
     public CommonResult<Map<String, Object>> login(@Valid @RequestBody AdminLoginDTO dto) {
         AdminUser admin = adminUserMapper.selectOne(new LambdaQueryWrapper<AdminUser>()
                 .eq(AdminUser::getUsername, dto.getUsername()));
-        AdminPrincipal principal;
-        if (admin != null) {
-            String incomingHash = PasswordHashUtils.sha256(passwordPepper, dto.getPassword());
-            if (!PasswordHashUtils.constantTimeEquals(admin.getPasswordHash(), incomingHash)
-                    || !"ACTIVE".equals(admin.getStatus()) || !"SUPER_ADMIN".equals(admin.getRoleCode())) {
-                throw new BusinessException(40111, "管理账号或密码错误");
-            }
-            adminStpLogic.login("ADMIN:" + admin.getId());
-            admin.setLastLoginAt(LocalDateTime.now());
-            adminUserMapper.updateById(admin);
-            principal = new AdminPrincipal(admin.getId(), admin.getUsername(), admin.getDisplayName(), "SUPER_ADMIN", "ADMIN");
-        } else {
-            User user = userMapper.selectOne(new LambdaQueryWrapper<User>().eq(User::getPhone, dto.getUsername()));
-            UserCredential credential = user == null ? null : credentialMapper.selectOne(new LambdaQueryWrapper<UserCredential>()
-                    .eq(UserCredential::getUserId, user.getId()));
-            if (user == null || credential == null || !"PARTNER".equals(credential.getRoleCode())
-                    || !"ACTIVE".equals(credential.getStatus()) || !passwordEncoder.matches(dto.getPassword(), credential.getPasswordHash())) {
-                throw new BusinessException(40111, "管理账号或密码错误，普通客户不能登录管理后台");
-            }
-            adminStpLogic.login("USER:" + user.getId());
-            principal = new AdminPrincipal(user.getId(), user.getPhone(), user.getPhone(), "PARTNER", "USER");
+        boolean matched = admin != null
+                && "ACTIVE".equals(admin.getStatus())
+                && java.util.Set.of("SUPER_ADMIN", "PARTNER").contains(admin.getRoleCode())
+                && PasswordHashUtils.constantTimeEquals(admin.getPasswordHash(),
+                        PasswordHashUtils.sha256(passwordPepper, dto.getPassword()));
+        if (!matched) {
+            throw new BusinessException(40111, "管理账号或密码错误");
         }
+        adminStpLogic.login("ADMIN:" + admin.getId());
+        admin.setLastLoginAt(LocalDateTime.now());
+        adminUserMapper.updateById(admin);
+        AdminPrincipal principal = new AdminPrincipal(admin.getId(), admin.getUsername(),
+                admin.getDisplayName(), admin.getRoleCode(), "ADMIN");
         return CommonResult.success(sessionPayload(principal), "登录成功");
     }
 
@@ -91,9 +76,6 @@ public class AdminAuthController {
         data.put("displayName", admin.displayName());
         data.put("role", admin.roleCode());
         data.put("permissions", RolePermissions.forRole(admin.roleCode()));
-        if ("PARTNER".equals(admin.roleCode())) {
-            data.put("invitationCode", invitationService.ensurePartnerCode(admin.id()).getCode());
-        }
         return data;
     }
 }

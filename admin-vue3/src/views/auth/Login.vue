@@ -13,7 +13,7 @@
         </el-form-item>
         <el-button type="primary" size="large" :loading="loading" style="width: 100%" @click="submit">登录</el-button>
       </el-form>
-      <el-alert class="demo-tip" type="info" :closable="false" title="本地超级管理员：13454118762 / admin123；PARTNER 使用注册手机号和密码登录" />
+      <el-alert class="demo-tip" type="info" :closable="false" title="本地超级管理员：13454118762 / admin123；合伙人（代理商）账号由超级管理员在「管理员与合伙人」中创建，使用其登录账号与密码进入同一套后台" />
     </el-card>
   </div>
 </template>

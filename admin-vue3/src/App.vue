@@ -23,57 +23,62 @@
       >
         <el-menu-item index="/dashboard">
           <el-icon><DataAnalysis /></el-icon>
-          <span>财务与运营大盘</span>
+          <span>运营大盘</span>
         </el-menu-item>
 
         <el-sub-menu v-if="hasPermission('finance:view')" index="finance">
           <template #title>
             <el-icon><Money /></el-icon>
-            <span>财务独立对账</span>
+            <span>财务对账</span>
           </template>
           <el-menu-item index="/finance/income">
             <el-icon><Tickets /></el-icon>
-            <span>实收流水 (独立表)</span>
+            <span>实收流水</span>
           </el-menu-item>
           <el-menu-item index="/finance/expense">
             <el-icon><ShoppingCart /></el-icon>
-            <span>Token 采购支出</span>
+            <span>采购支出</span>
           </el-menu-item>
         </el-sub-menu>
 
         <el-menu-item v-if="hasPermission('sales:view') && !hasPermission('finance:view')" index="/sales">
           <el-icon><Tickets /></el-icon>
-          <span>销售与续费记录</span>
+          <span>销售记录</span>
         </el-menu-item>
 
         <el-menu-item v-if="hasPermission('card:view')" index="/card/generator">
           <el-icon><Key /></el-icon>
-          <span>卡密制卡凭证池</span>
+          <span>激活码池</span>
         </el-menu-item>
 
         <el-menu-item v-if="hasPermission('package:view')" index="/package/manager">
           <el-icon><Box /></el-icon>
-          <span>套餐版本中心</span>
+          <span>套餐版本</span>
         </el-menu-item>
 
         <el-menu-item v-if="hasPermission('token:view')" index="/token/pool">
           <el-icon><Connection /></el-icon>
-          <span>拼多多 Token 调度池</span>
+          <span>调度中心</span>
         </el-menu-item>
 
         <el-menu-item v-if="hasPermission('user:view')" index="/user/manager">
           <el-icon><User /></el-icon>
-          <span>客户端用户与电脑</span>
+          <span>用户管理</span>
         </el-menu-item>
 
         <el-menu-item v-if="hasPermission('dispatch:view')" index="/testing/workbench">
           <el-icon><Aim /></el-icon>
-          <span>人工测试全链路工作台</span>
+          <span>测试平台</span>
         </el-menu-item>
 
         <el-menu-item v-if="hasPermission('system:config')" index="/settings">
           <el-icon><Setting /></el-icon>
           <span>系统设置</span>
+        </el-menu-item>
+
+        <el-menu-item v-if="hasPermission('admin:manage')" index="/admin/manager">
+          <el-icon><UserFilled /></el-icon>
+          <span>账号管理</span>
         </el-menu-item>
       </el-menu>
     </el-aside>

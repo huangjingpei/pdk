@@ -58,7 +58,8 @@ public class AdminAuthInterceptor implements HandlerInterceptor {
     private AdminPrincipal resolve(String loginId) {
         if (loginId.startsWith("ADMIN:")) {
             AdminUser admin = adminUserMapper.selectById(Long.parseLong(loginId.substring(6)));
-            if (admin == null || !"ACTIVE".equals(admin.getStatus()) || !"SUPER_ADMIN".equals(admin.getRoleCode())) return null;
+            if (admin == null || !"ACTIVE".equals(admin.getStatus())
+                    || !java.util.Set.of("SUPER_ADMIN", "PARTNER").contains(admin.getRoleCode())) return null;
             return new AdminPrincipal(admin.getId(), admin.getUsername(), admin.getDisplayName(), admin.getRoleCode(), "ADMIN");
         }
         if (loginId.startsWith("USER:")) {
