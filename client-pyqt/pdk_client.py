@@ -16,9 +16,11 @@ import base64
 import hashlib
 import json
 import os
+import platform
 import random
 import string
 import time
+import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
@@ -45,14 +47,69 @@ def redact_sensitive(payload: Any) -> Any:
     return payload
 
 
-def default_device_id() -> str:
-    """生成一个稳定的本机设备标识。"""
-    import platform
-    import uuid
+def _fingerprint_device_id() -> str:
+    """兜底标识：基于本机指纹（主机名:MAC:操作系统）的确定性 ID。
 
+    仅用于「首次无落盘记录」时作为持久化种子，以保证既有已绑定测试账号的设备 ID 不变。
+    """
     source = f"{platform.node()}:{uuid.getnode()}:{platform.system()}"
     digest = hashlib.sha256(source.encode("utf-8")).hexdigest()[:24].upper()
     return f"PYQT-{digest}"
+
+
+# 本地缓存文件：仅作为「首请求的引导缓存」，服务端 user.device_id 才是权威源。
+_DEVICE_ID_DIR = os.path.join(os.path.expanduser("~"), ".pdk_client")
+_DEVICE_ID_FILE = os.path.join(_DEVICE_ID_DIR, "device_id.json")
+
+
+def load_device_id() -> str:
+    """从本地缓存读取已持久化的 device_id（引导用，非权威）。读取失败返回空串。"""
+    try:
+        if os.path.exists(_DEVICE_ID_FILE):
+            with open(_DEVICE_ID_FILE, "r", encoding="utf-8") as f:
+                return (json.load(f).get("device_id") or "").strip()
+    except Exception:
+        pass
+    return ""
+
+
+def save_device_id(device_id: str) -> None:
+    """将 device_id 写入本地缓存，使下次启动可携带正确请求头（避免鉴权重试死锁）。
+
+    服务端仍是权威：登录/注册成功后会用服务端返回的 deviceId 覆盖此处。
+    """
+    if not device_id:
+        return
+    try:
+        os.makedirs(_DEVICE_ID_DIR, exist_ok=True)
+        with open(_DEVICE_ID_FILE, "w", encoding="utf-8") as f:
+            json.dump(
+                {"device_id": device_id, "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S")},
+                f,
+                ensure_ascii=False,
+            )
+    except Exception:
+        pass  # 写盘失败不影响本次运行（退化为每次重算指纹）
+
+
+def default_device_id() -> str:
+    """返回本安装实例的设备标识（本地缓存优先，服务端权威兜底）。
+
+    策略（方案A：服务端权威 + 本地缓存）：
+      ① PDK_DEVICE_ID 环境变量强制指定（最高优先级，用于同机多实例互不冲突）；
+      ② 本地缓存命中则直接复用（避免每次重算，并能在登录前携带正确请求头）；
+      ③ 均无则以「本机指纹」为种子落地，兼容既有已绑定测试账号的设备 ID。
+    真正权威的 device_id 来自服务端 user.device_id，登录/注册成功后会写回本地缓存。
+    """
+    env_id = (os.getenv("PDK_DEVICE_ID") or "").strip()
+    if env_id:
+        return env_id
+    cached = load_device_id()
+    if cached:
+        return cached
+    new_id = _fingerprint_device_id()
+    save_device_id(new_id)
+    return new_id
 
 
 def decrypt_payload(payload: str) -> dict[str, Any]:
@@ -216,7 +273,10 @@ class PdkApiClient:
             self.session.token_name = data.get("tokenName", "satoken")
             self.session.token_value = data.get("tokenValue", "")
             self.session.phone = phone
-            self.session.device_id = device_id
+            # 服务端权威：优先采用服务端返回的 deviceId，并写回本地缓存
+            server_did = (data.get("deviceId") or device_id)
+            self.session.device_id = server_did
+            save_device_id(server_did)
             self.session.password = password
         return body
 
@@ -231,7 +291,10 @@ class PdkApiClient:
             self.session.token_name = data.get("tokenName", "satoken")
             self.session.token_value = data.get("tokenValue", "")
             self.session.phone = phone
-            self.session.device_id = device_id
+            # 服务端权威：优先采用服务端返回的 deviceId，并写回本地缓存
+            server_did = (data.get("deviceId") or device_id)
+            self.session.device_id = server_did
+            save_device_id(server_did)
             self.session.password = password
         return body
 
@@ -244,8 +307,9 @@ class PdkApiClient:
     def unbind_device(self) -> dict[str, Any]:
         body = self.request("POST", "/api/v1/client/auth/unbind-device", authenticated=True)
         if self.is_ok(body):
+            # 方案A：device_id 为账号级稳定标识，解绑仅清登录态，保留 device_id
+            # （与服务端不再置空 user.device_id 的语义一致），下次登录复用同一标识
             self.session.token_value = ""
-            self.session.device_id = ""
         return body
 
     def change_password(self, phone: str, old_password: str, new_password: str) -> dict[str, Any]:

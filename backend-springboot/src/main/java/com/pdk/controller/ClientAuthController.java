@@ -158,12 +158,11 @@ public class ClientAuthController {
     @PostMapping("/unbind-device")
     public CommonResult<String> unbindDevice(HttpServletRequest request) {
         User user = (User) request.getAttribute("pdkClientUser");
-        userMapper.update(null, new LambdaUpdateWrapper<User>()
-                .eq(User::getId, user.getId())
-                .set(User::getDeviceId, null));
+        // 方案A：device_id 作为账号级稳定标识，解绑时【保留】 user.device_id，
+        // 仅释放当前活跃会话（Redis 绑定 + 登录态），后续登录仍复用同一 device_id。
         deviceBindingService.unbind(user.getPhone());
         clientStpLogic.logout();
-        return CommonResult.success("电脑已解绑，请重新登录");
+        return CommonResult.success("已解绑当前会话，账号设备标识保持不变");
     }
 
     private Map<String, Object> payload(User user, UserCredential credential) {

@@ -904,6 +904,8 @@ class MainWindow(QMainWindow):
         self.runner.client.expectation = "code=200 返回 token 并完成设备绑定"
         body = self.runner.client.login(phone, password, self.device_id.text().strip())
         if body.get("code") == 200:
+            # 服务端权威：把输入框同步成服务端返回的 deviceId（账号级稳定标识）
+            self.device_id.setText(self.runner.client.session.device_id)
             self.refresh_login_state()
             self.append_log("login", body)
         else:
@@ -930,9 +932,10 @@ class MainWindow(QMainWindow):
         self._sync_manual()
         self.run_all_scenarios_btn.setEnabled(False)
         self.run_all_scenarios_btn.setText("运行中…")
-        worker = Worker(self.runner.run_all_scenarios)
-        worker.finished.connect(self.on_scenarios_done)
-        worker.start()
+        self.scenario_worker = Worker(self.runner.run_all_scenarios)
+        self.scenario_worker.finished.connect(self.on_scenarios_done)
+        self.scenario_worker.finished.connect(self.scenario_worker.deleteLater)
+        self.scenario_worker.start()
 
     def on_scenarios_done(self, results: list[Result]) -> None:
         self.run_all_scenarios_btn.setEnabled(True)
@@ -944,9 +947,10 @@ class MainWindow(QMainWindow):
         self._sync_manual()
         self.run_all_boundary_btn.setEnabled(False)
         self.run_all_boundary_btn.setText("运行中…")
-        worker = Worker(self.runner.run_boundary_tests)
-        worker.finished.connect(self.on_boundary_done)
-        worker.start()
+        self.boundary_worker = Worker(self.runner.run_boundary_tests)
+        self.boundary_worker.finished.connect(self.on_boundary_done)
+        self.boundary_worker.finished.connect(self.boundary_worker.deleteLater)
+        self.boundary_worker.start()
 
     def on_boundary_done(self, results: list[Result]) -> None:
         self.run_all_boundary_btn.setEnabled(True)
