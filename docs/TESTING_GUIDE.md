@@ -209,6 +209,42 @@ client-pyqt/
 └── main.py              # PyQt6 桌面界面
 ```
 
+### Swagger UI 风格接口调试
+
+`client-pyqt/main.py` 启动后，「接口调试」页按后端真实接口列出 13 张独立卡片（与 Swagger UI 类似），每张卡片包含：
+
+- **请求行**：METHOD（GET/POST 颜色徽章）+ Path + 接口中文名称。
+- **参数表单**：根据接口定义动态生成输入框；手机号 / 密码 / 设备ID / 短信验证码 自动从顶部「连接与客户端身份」带入；注册手机号、密码留空时会自动生成随机值。
+- **请求预览**：随输入实时更新，清晰展示将要发送的 `method`、`url`、`headers`、`body`，并对 `password` / `token` 等字段脱敏。
+- **发送请求**：在后台线程调用 `pdk_client` 对应方法，避免界面卡死。
+- **响应结果**：HTTP 状态码 + 业务 `code` / `message` + 完整响应报文；`code=200` 绿色、`业务异常` 红色、`本地异常/未连通` 黄色。
+- **场景快捷入口**：部分卡片右上角带「作为 Sx 运行」按钮，可一键以场景方式执行（自动处理前后依赖与断言）。
+
+当前卡片覆盖的接口：
+
+| 接口 | METHOD | 关键输入参数 |
+|---|---|---|
+| 发送短信验证码 | POST | phone, purpose |
+| 客户端注册（试用） | POST | phone, password, deviceId, smsCode, invitationCode |
+| 客户端登录（绑设备） | POST | phone, password, deviceId |
+| 注销会话 | POST | — |
+| 解绑设备 | POST | — |
+| 修改密码 | POST | phone, oldPassword, newPassword |
+| 卡密核销 | POST | cardKey, userPhone, deviceId |
+| 加密 Token 下发 | POST | actionType, goodsId |
+| 执行结果上报 | POST | leaseTraceId, status, responseDurationMs, errorMessage |
+| 账号资料 | GET | — |
+| 使用统计 | GET | — |
+| 小号使用情况 | GET | — |
+| 已核销卡密 | GET | — |
+
+### HTTP 调试日志（每条请求显示「请求 / 响应 / 期待」）
+- `pdk_client.PdkApiClient.request` 内置 `on_request` 钩子，每次调用都会回传结构化记录（方法、完整 URL、请求体/查询参数、HTTP 状态码、业务 code/msg、响应报文、当前「期待」注解）。
+- GUI「响应日志」页把每条记录渲染为三段：**▶ 请求什么**（METHOD + URL + 参数）、**◀ 响应什么**（HTTP 状态 + code/msg + 报文）、**🎯 期待什么**（场景/边界的 expected，或手动按钮的合理预期）。
+- 八个功能场景与十六个边界用例在调用前会自动把自身 `expected` 注入日志注解；手动按钮（发送验证码 / 登录 / 注销 / 解绑 / 查询小号）也各自标注期待。
+- 调试日志对 `password` / `token` 等敏感字段自动脱敏（`***`），不影响明文请求体的排错可读性。
+- 跨线程安全：场景在后台线程跑，HTTP 记录经 `MainWindow.http_log_ready` 信号排队回主线程渲染，避免界面卡死或崩溃。
+
 ### 运行方式
 ```bash
 # 1) 安装依赖（已为你建好隔离 venv，直接用它即可）

@@ -20,7 +20,7 @@ import random
 import string
 import time
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import requests
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -31,6 +31,18 @@ DEFAULT_BASE_URL = os.getenv("PDK_API_BASE", "http://localhost:8080")
 
 class ApiError(RuntimeError):
     """网络层错误（区别于业务返回码）。"""
+
+
+_SENSITIVE_KEYS = ("password", "newPassword", "oldPassword", "tokenValue", "token")
+
+
+def redact_sensitive(payload: Any) -> Any:
+    """调试日志脱敏：对密码 / token 类字段做掩码，避免明文泄漏。"""
+    if isinstance(payload, dict):
+        return {k: ("***" if k in _SENSITIVE_KEYS else redact_sensitive(v)) for k, v in payload.items()}
+    if isinstance(payload, list):
+        return [redact_sensitive(v) for v in payload]
+    return payload
 
 
 def default_device_id() -> str:
@@ -82,6 +94,13 @@ class PdkApiClient:
         self.base_url = base_url.rstrip("/")
         self.session = ClientSession()
         self.http = requests.Session()
+        # 调试辅助：当前调用上下文的「期待」注解（由调用方设置，如场景 expected），
+        # 用于客户端 HTTP 日志展示「期待什么」；on_request 钩子把每条请求回传给 GUI。
+        self.expectation: str = ""
+        self.on_request: Optional[Callable[[dict[str, Any]], None]] = None
+        # 最后一条请求的完整记录（method/url/params/请求体/HTTP状态/响应体/期待），
+        # 供 GUI 接口调试卡片展示 request/response 细节。
+        self.last_request_record: Optional[dict[str, Any]] = None
 
     # ------------------------------------------------------------------ 通用请求
     def request(
@@ -101,6 +120,7 @@ class PdkApiClient:
 
         业务失败（code != 200）也照常返回报文，便于边界测试断言返回码；
         仅在「网络不可达 / 非 JSON 响应」时返回 code=0 的本地错误报文。
+        每次请求会经 on_request 钩子回传「请求+响应+期待」结构化记录，便于调试。
         """
         hdrs: dict[str, str] = {"Accept": "application/json"}
         if authenticated:
@@ -113,21 +133,61 @@ class PdkApiClient:
                 hdrs["X-PDK-Device-ID"] = dev
         if headers:
             hdrs.update(headers)
+        full_url = f"{self.base_url}{path}"
         try:
             resp = self.http.request(
                 method,
-                f"{self.base_url}{path}",
+                full_url,
                 headers=hdrs,
                 json=json,
                 params=params,
                 timeout=20,
             )
             try:
-                return resp.json()
+                body = resp.json()
             except ValueError:
-                return {"code": 0, "message": f"服务端返回非 JSON（HTTP {resp.status_code}）", "data": None}
+                body = {"code": 0, "message": f"服务端返回非 JSON（HTTP {resp.status_code}）", "data": None}
+            http_status = resp.status_code
         except requests.RequestException as exc:
-            return {"code": 0, "message": f"网络请求失败: {exc}", "data": None}
+            body = {"code": 0, "message": f"网络请求失败: {exc}", "data": None}
+            http_status = 0
+        self._emit_request(method, full_url, params, json, http_status, body)
+        return body
+
+    def last_http_status(self) -> int:
+        """返回最近一条请求的 HTTP 状态码（本地异常返回 0）。"""
+        rec = self.last_request_record
+        return int(rec.get("http_status", 0) or 0) if rec else 0
+
+    def _emit_request(
+        self,
+        method: str,
+        url: str,
+        params: Optional[dict[str, Any]],
+        request_json: Optional[dict[str, Any]],
+        http_status: int,
+        body: dict[str, Any],
+    ) -> None:
+        """保存最近请求记录并回传给 GUI 调试日志（钩子为空时仅保存）。"""
+        rec = {
+            "ts": time.strftime("%H:%M:%S"),
+            "method": method,
+            "url": url,
+            "params": params,
+            "request_json": request_json,
+            "http_status": http_status,
+            "code": int((body or {}).get("code", 0) or 0),
+            "msg": str((body or {}).get("message", "")),
+            "body": body,
+            "expected": self.expectation if self.expectation else "",
+        }
+        self.last_request_record = rec
+        if self.on_request is None:
+            return
+        try:
+            self.on_request(rec)
+        except Exception:  # noqa: BLE001 - 日志钩子异常不应影响主流程
+            pass
 
     @staticmethod
     def is_ok(body: dict[str, Any]) -> bool:
