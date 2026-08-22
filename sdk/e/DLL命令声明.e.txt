@@ -1,0 +1,113 @@
+; ============================================================================
+; PDK 客户端 SDK —— 易语言 DLL 命令声明
+; 说明：把下面的内容按「易语言 → 程序 → 新 DLL 命令」逐个添加。
+;       DLL 文件名：pdk_capi.dll（与 exe 同目录）
+;       ⚠ 重点：每个“文本型”参数与返回值，请在「编码」处选 UTF-8，
+;               否则中文会乱码（DLL 侧全部使用 UTF-8）。
+;       ⚠ 返回值若 IDE 不支持 UTF-8，请把返回类型改为「字节集」，再自行解码。
+; ============================================================================
+
+.DLL命令 pdk_create, 整数型, "pdk_capi.dll", "pdk_create", 公开
+    .参数 base_url, 文本型, , 服务端地址，如 "http://localhost:8080"（留空用默认）
+    .参数 device_id, 文本型, , 设备ID，留空自动生成（建议留空）
+    .参数 root_salt, 文本型, , 根密钥，留空用默认
+
+.DLL命令 pdk_destroy, , "pdk_capi.dll", "pdk_destroy", 公开
+    .参数 h, 整数型, , pdk_create 返回的句柄
+
+.DLL命令 pdk_free_string, , "pdk_capi.dll", "pdk_free_string", 公开
+    .参数 s, 整数型, , 由 DLL 返回的字符串指针（文本型在易语言中不能直接传指针，进阶用）
+
+.DLL命令 pdk_set_state_callback, , "pdk_capi.dll", "pdk_set_state_callback", 公开
+    .参数 h, 整数型, , 句柄
+    .参数 cb, 子程序指针, , 状态回调（易语言不常用，建议用轮询）
+    .参数 userData, 整数型, , 透传数据
+
+.DLL命令 pdk_set_log_callback, , "pdk_capi.dll", "pdk_set_log_callback", 公开
+    .参数 h, 整数型, , 句柄
+    .参数 cb, 子程序指针, , 调试日志回调
+    .参数 userData, 整数型, , 透传数据
+
+.DLL命令 pdk_get_last_state, 整数型, "pdk_capi.dll", "pdk_get_last_state", 公开
+    .参数 h, 整数型, , 句柄
+
+.DLL命令 pdk_get_last_state_detail, 文本型, "pdk_capi.dll", "pdk_get_last_state_detail", 公开, UTF-8
+    .参数 h, 整数型, , 句柄
+
+.DLL命令 pdk_is_logged_in, 整数型, "pdk_capi.dll", "pdk_is_logged_in", 公开
+    .参数 h, 整数型, , 句柄
+
+.DLL命令 pdk_get_phone, 文本型, "pdk_capi.dll", "pdk_get_phone", 公开, UTF-8
+    .参数 h, 整数型, , 句柄
+
+.DLL命令 pdk_get_device_id, 文本型, "pdk_capi.dll", "pdk_get_device_id", 公开, UTF-8
+    .参数 h, 整数型, , 句柄
+
+.DLL命令 pdk_get_token_value, 文本型, "pdk_capi.dll", "pdk_get_token_value", 公开, UTF-8
+    .参数 h, 整数型, , 句柄
+
+.DLL命令 pdk_send_sms, 文本型, "pdk_capi.dll", "pdk_send_sms", 公开, UTF-8
+    .参数 h, 整数型, , 句柄
+    .参数 phone, 文本型, , 手机号
+    .参数 purpose, 文本型, , 用途，填 "REGISTER"
+
+.DLL命令 pdk_register, 文本型, "pdk_capi.dll", "pdk_register", 公开, UTF-8
+    .参数 h, 整数型, , 句柄
+    .参数 phone, 文本型, , 手机号
+    .参数 password, 文本型, , 密码（≥8 位）
+    .参数 sms_code, 文本型, , 短信验证码
+    .参数 invitation_code, 文本型, , 邀请码，可留空
+
+.DLL命令 pdk_login, 文本型, "pdk_capi.dll", "pdk_login", 公开, UTF-8
+    .参数 h, 整数型, , 句柄
+    .参数 phone, 文本型, , 手机号
+    .参数 password, 文本型, , 密码
+
+.DLL命令 pdk_logout, 文本型, "pdk_capi.dll", "pdk_logout", 公开, UTF-8
+    .参数 h, 整数型, , 句柄
+
+.DLL命令 pdk_unbind_device, 文本型, "pdk_capi.dll", "pdk_unbind_device", 公开, UTF-8
+    .参数 h, 整数型, , 句柄
+
+.DLL命令 pdk_change_password, 文本型, "pdk_capi.dll", "pdk_change_password", 公开, UTF-8
+    .参数 h, 整数型, , 句柄
+    .参数 phone, 文本型, , 手机号
+    .参数 old_password, 文本型, , 旧密码
+    .参数 new_password, 文本型, , 新密码
+
+.DLL命令 pdk_activate_card, 文本型, "pdk_capi.dll", "pdk_activate_card", 公开, UTF-8
+    .参数 h, 整数型, , 句柄
+    .参数 card_key, 文本型, , 卡密，如 "PDK-8891-2041-9982"
+    .参数 user_phone, 文本型, , 充值手机号
+    .参数 payment_channel, 文本型, , 支付通道，如 "OFFLINE"
+    .参数 actual_amount, 双精度小数型, , 实收金额，无则传 0
+
+.DLL命令 pdk_acquire_token, 文本型, "pdk_capi.dll", "pdk_acquire_token", 公开, UTF-8
+    .参数 h, 整数型, , 句柄
+    .参数 action_type, 文本型, , 动作：GOODS_COLLECT / ORDER_PULL / DETAIL_QUERY
+    .参数 goods_id, 文本型, , 商品ID
+
+.DLL命令 pdk_decrypt_token, 文本型, "pdk_capi.dll", "pdk_decrypt_token", 公开, UTF-8
+    .参数 h, 整数型, , 句柄
+    .参数 encrypted_payload, 文本型, , 取自上一步 JSON 的 data.encryptedPayload
+
+.DLL命令 pdk_report_result, 文本型, "pdk_capi.dll", "pdk_report_result", 公开, UTF-8
+    .参数 h, 整数型, , 句柄
+    .参数 lease_trace_id, 文本型, , 租约号（acquire_token 返回的 data.leaseTraceId）
+    .参数 status, 文本型, , SUCCESS / FAIL_ACCOUNT_BANNED / FAIL_NETWORK / FAIL_BUSINESS
+    .参数 response_duration_ms, 整数型, , 耗时(毫秒)，无则 1000
+    .参数 error_message, 文本型, , 错误信息，无则留空
+
+.DLL命令 pdk_profile, 文本型, "pdk_capi.dll", "pdk_profile", 公开, UTF-8
+    .参数 h, 整数型, , 句柄
+
+.DLL命令 pdk_usage, 文本型, "pdk_capi.dll", "pdk_usage", 公开, UTF-8
+    .参数 h, 整数型, , 句柄
+    .参数 page, 整数型, , 页码，默认 1
+    .参数 size, 整数型, , 每页条数，默认 20
+
+.DLL命令 pdk_resource_status, 文本型, "pdk_capi.dll", "pdk_resource_status", 公开, UTF-8
+    .参数 h, 整数型, , 句柄
+
+.DLL命令 pdk_card_list, 文本型, "pdk_capi.dll", "pdk_card_list", 公开, UTF-8
+    .参数 h, 整数型, , 句柄

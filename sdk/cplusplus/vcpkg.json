@@ -1,0 +1,10 @@
+{
+  "name": "pdk-sdk",
+  "version": "1.0.0",
+  "description": "PDK 客户端多语言 SDK —— C++ 实现（libcurl + OpenSSL + nlohmann/json）",
+  "dependencies": [
+    "curl",
+    "openssl",
+    "nlohmann-json"
+  ]
+}

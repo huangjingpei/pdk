@@ -1,0 +1,10 @@
+# vcpkg 拉取的二进制依赖（libcurl / zlib 等），构建产物不入库
+vcpkg_installed/
+
+# 构建输出目录（CMake / Visual Studio）
+build/
+out/
+*.obj
+*.lib
+*.dll
+*.exe
