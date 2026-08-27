@@ -32,6 +32,23 @@
         返回 ()
     .如果结束
 
+    ' —— 1.5) 启用协议信封加密（防抓包：所有 body 自动 RSA+AES 加密）——
+    '   P0 公钥指纹钉扎：先设置期望指纹（通过独立可信渠道获取，这里示例用占位串），
+    '   之后 pdk_refresh_crypto_config 拉到的公钥会强制比对指纹，不符拒绝启用（防 MITM 替换公钥）。
+    pdk_set_public_key_pin (h, "a1b2c3d4e5f6...")  ' 替换为真实指纹（32 位 hex）
+    '   一行即可：拉取服务端公钥并按 encryptionMode 自动启用；mode=off 时保持明文（灰度）。
+    '   启用后 pdk_login / pdk_acquire_token 等带 body 的请求会自动加密，响应自动解密，
+    '   业务代码完全不用改。可选：用 pdk_is_envelope_enabled(h) 确认是否已启用。
+    返回JSON ＝ pdk_refresh_crypto_config (h)
+    解析.解析 (返回JSON)
+    .如果 (到整数 (解析.取属性 ("code").取数值 ()) ＝ 200)
+        .如果 (pdk_is_envelope_enabled (h) ＝ 1)
+            标签_状态.标题 ＝ "协议加密已启用（kid=" ＋ 解析.取属性 ("data.kid").取文本 () ＋ "）"
+        .否则
+            标签_状态.标题 ＝ "协议加密未启用（服务端 mode=off，明文传输）"
+        .如果结束
+    .如果结束
+
     ' —— 2) 发送短信验证码 ——
     返回JSON ＝ pdk_send_sms (h, 手机, "REGISTER")
     解析.解析 (返回JSON)

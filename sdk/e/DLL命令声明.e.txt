@@ -111,3 +111,32 @@
 
 .DLL命令 pdk_card_list, 文本型, "pdk_capi.dll", "pdk_card_list", 公开, UTF-8
     .参数 h, 整数型, , 句柄
+
+; ============================================================================
+; 协议信封加密（RSA-OAEP + AES-256-GCM，与后端 BodyCryptoService 对齐）
+; 用法：登录前调用一次 pdk_refresh_crypto_config 即可自动拉取公钥并启用；
+;       启用后所有带 body 的请求自动加密、响应自动解密，业务代码无需改动。
+;       mode=off 时不启用（灰度期可明文/密文混跑）。
+; ============================================================================
+
+.DLL命令 pdk_enable_envelope, , "pdk_capi.dll", "pdk_enable_envelope", 公开
+    .参数 h, 整数型, , 句柄
+    .参数 public_key_pem, 文本型, , 服务端 RSA 公钥（PEM 文本，取自 pdk_refresh_crypto_config 返回的 data.publicKey）
+    .参数 kid, 文本型, , 密钥版本，如 "v1"（留空默认 v1）
+
+.DLL命令 pdk_is_envelope_enabled, 整数型, "pdk_capi.dll", "pdk_is_envelope_enabled", 公开
+    .参数 h, 整数型, , 句柄
+    ; 返回 1=已启用 / 0=未启用
+
+.DLL命令 pdk_refresh_crypto_config, 文本型, "pdk_capi.dll", "pdk_refresh_crypto_config", 公开, UTF-8
+    .参数 h, 整数型, , 句柄
+    ; 返回 JSON：{"code":200,"message":"","data":{"encryptionMode":"optional","publicKey":"-----BEGIN PUBLIC KEY-----...","kid":"v1"},"httpStatus":200}
+    ; 内部已按 encryptionMode 自动启用；mode=off 时保持明文。
+
+; —— P0 公钥指纹钉扎（防 MITM 替换公钥）——
+; 设置后，pdk_refresh_crypto_config 拉到的公钥会先算 SHA-256 指纹（hex 前 32 字符）比对，
+; 不符则拒绝启用加密（返回 code=0 + message 说明指纹不符）。
+; 指纹必须通过独立可信渠道获取（编译期内置 / 配置文件 / 运维下发），勿从同一接口动态取。
+.DLL命令 pdk_set_public_key_pin, , "pdk_capi.dll", "pdk_set_public_key_pin", 公开
+    .参数 h, 整数型, , 句柄
+    .参数 fingerprint, 文本型, , 期望公钥指纹（SHA-256 hex 前 32 字符，如 "a1b2c3..."）；留空则不校验

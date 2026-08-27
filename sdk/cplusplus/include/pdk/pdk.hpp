@@ -202,6 +202,19 @@ public:
     static std::string describeState(State s);
     static std::string describeEvent(Event e);
 
+    // 协议信封加密（RSA-OAEP + AES-256-GCM，与后端 BodyCryptoService 对齐）
+    // 启用后，所有带 body 的请求会用服务端公钥加密，响应自动解密；请求侧仅一次 RSA，响应侧零非对称开销。
+    void enableEnvelope(const std::string& publicKeyPem, const std::string& kid = "v1");
+    bool isEnvelopeEnabled() const;
+    // 拉取服务端公钥配置（GET /api/v1/client/config/public）并按 encryptionMode 自动启用信封加密。
+    // 返回该配置接口的 ApiResponse；mode=off 时不启用，保持明文（便于灰度）。
+    // 若已 setPublicKeyPin，会先比对公钥指纹，不符则返回 NETWORK_ERROR 且不启用（防 MITM 替换公钥）。
+    ApiResponse refreshCryptoConfig();
+
+    // P0 公钥指纹钉扎：设置期望指纹（SHA-256(DER) 的 hex 前 32 字符）。
+    // 留空则不校验；设置后 refreshCryptoConfig 拉到的公钥指纹不符会拒绝启用加密。
+    void setPublicKeyPin(const std::string& fingerprint);
+
 private:
     struct Impl;                 // PImpl：隐藏 libcurl / OpenSSL 细节
     std::unique_ptr<Impl> impl_;

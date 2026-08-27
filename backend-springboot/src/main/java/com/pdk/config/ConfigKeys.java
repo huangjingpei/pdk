@@ -15,6 +15,13 @@ public final class ConfigKeys {
     public static final String TOKEN_ALLOCATION_MODE = "token.allocation.mode";
     public static final String SMS_REGISTER_ENABLED = "sms.register.enabled";
     public static final String SECURITY_ENCRYPTION_ENABLED = "security.encryption.enabled";
+    /**
+     * 协议安全加密模式（三态）：
+     * off    = 关闭，明文/信封都不处理（兼容旧客户端）
+     * optional = 灰度：信封请求解密、明文请求放行；响应仅在请求加密时加密
+     * force  = 强制：仅接受加密信封，拒绝明文
+     */
+    public static final String SECURITY_ENCRYPTION_MODE = "security.encryption.mode";
     public static final String TRIAL_DAYS = "trial.days";
     public static final String DEVICE_KICKOUT_ENABLED = "device.kickout.enabled";
     public static final String HEARTBEAT_INTERVAL_SECONDS = "heartbeat.interval.seconds";
@@ -23,6 +30,7 @@ public final class ConfigKeys {
     public static final String DEFAULT_TOKEN_ALLOCATION_MODE = "FIXED";
     public static final boolean DEFAULT_SMS_REGISTER_ENABLED = false;
     public static final boolean DEFAULT_SECURITY_ENCRYPTION_ENABLED = true;
+    public static final String DEFAULT_SECURITY_ENCRYPTION_MODE = "optional";
     public static final int DEFAULT_TRIAL_DAYS = 1;
     public static final boolean DEFAULT_DEVICE_KICKOUT_ENABLED = true;
     public static final int DEFAULT_HEARTBEAT_INTERVAL_SECONDS = 45;

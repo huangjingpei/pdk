@@ -20,7 +20,9 @@ from typing import Any, Callable, Optional
 import requests
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from .crypto import decrypt_payload, derive_key, ROOT_SALT
+from .crypto import (decrypt_payload, derive_key, encrypt_envelope,
+                     decrypt_response, fetch_public_config_pinned, is_envelope,
+                     PublicKeyPinMismatchError, ROOT_SALT)
 from .enums import Event, ResultCode, State
 
 DEFAULT_BASE_URL = os.getenv("PDK_API_BASE", "http://localhost:8080")
@@ -98,7 +100,9 @@ class PdkApiClient:
 
     def __init__(self, base_url: str = DEFAULT_BASE_URL,
                  root_salt: str = ROOT_SALT,
-                 device_id: str = "") -> None:
+                 device_id: str = "",
+                 auto_envelope: bool = False,
+                 public_key_pin: str = "") -> None:
         self.base_url = base_url.rstrip("/")
         self.root_salt = root_salt
         self.session = ClientSession()
@@ -118,7 +122,20 @@ class PdkApiClient:
         self.last_state: State = State.Uninitialized
         self.last_state_detail: str = ""
 
+        # 协议信封加密（RSA-OAEP + AES-256-GCM）：默认关闭，需拉取公钥后启用
+        self.envelope_public_key: str = ""
+        self.envelope_kid: str = "v1"
+        # P0 公钥指纹钉扎：非空时拉取公钥后强制比对指纹，不符拒绝启用
+        self.public_key_pin: str = (public_key_pin or "").strip().lower()
+
         self._emit_state(State.Ready, f"客户端初始化完成，设备ID={self.session.device_id}")
+
+        # 开启 auto_envelope 时主动拉取公钥；失败不影响明文链路
+        if auto_envelope:
+            try:
+                self.refresh_crypto_config()
+            except Exception:
+                self._emit_log("⚠️ 自动拉取协议加密配置失败，将使用明文请求")
 
     # ---------------------------------------------------------------- 回调
     def _emit_state(self, s: State, detail: str) -> None:
@@ -146,8 +163,8 @@ class PdkApiClient:
 
     # ---------------------------------------------------------------- 通用请求
     def request(self, method, path, *, authenticated=False, include_phone=True,
-                include_device=True, override_device_id=None, headers=None,
-                json=None, params=None):
+                include_device=True, override_device_id=None,  headers=None,
+                json_body=None, params=None):
         hdrs: dict = {"Accept": "application/json"}
         if authenticated:
             if self.session.token_value:
@@ -161,16 +178,38 @@ class PdkApiClient:
             hdrs.update(headers)
 
         full_url = f"{self.base_url}{path}"
+
+        # 协议信封加密：若已配置服务端公钥，用一次性 AES-256 密钥加密请求体
+        session_key = None
+        send_data = None
+        if json_body is not None and self.envelope_public_key:
+            envelope, session_key = encrypt_envelope(
+                json.dumps(json_body, ensure_ascii=False),
+                self.envelope_public_key, self.envelope_kid)
+            hdrs["Content-Type"] = "application/json"
+            send_data = envelope
+
         self._emit_event(Event.RequestSent, f"{method} {path}")
-        self._emit_log(f"▶ 请求: {method} {full_url}" + (f"\n   body: {json}" if json else ""))
+        self._emit_log(f"▶ 请求: {method} {full_url}" + (f"\n   body: {json_body}" if json_body else ""))
         if self.expectation:
             self._emit_log(f"🎯 期待: {self.expectation}")
 
         try:
-            resp = self.http.request(method, full_url, headers=hdrs, json=json,
-                                     params=params, timeout=20)
+            if send_data is not None:
+                resp = self.http.request(method, full_url, headers=hdrs, data=send_data,
+                                         params=params, timeout=20)
+            else:
+                resp = self.http.request(method, full_url, headers=hdrs, json=json_body,
+                                         params=params, timeout=20)
+            body_text = resp.text
+            # 若本次请求已加密，则解密响应信封（服务端复用同一会话密钥加密响应）
+            if session_key is not None and is_envelope(body_text):
+                try:
+                    body_text = decrypt_response(body_text, session_key)
+                except Exception:
+                    self._emit_log("⚠️ 响应信封解密失败，退回原始响应")
             try:
-                body = resp.json()
+                body = json.loads(body_text)
             except ValueError:
                 body = {"code": 0, "message": f"服务端返回非 JSON（HTTP {resp.status_code}）", "data": None}
             http_status = resp.status_code
@@ -182,8 +221,35 @@ class PdkApiClient:
                          f"HTTP {http_status} code={(body or {}).get('code')}")
         self._emit_log(f"◀ 响应: HTTP {http_status} | code={body.get('code')} | "
                        f"{body.get('message')} | data={body.get('data')}")
-        self._emit_record(method, full_url, params, json, http_status, body)
+        self._emit_record(method, full_url, params, json_body, http_status, body)
         return body
+
+    def refresh_crypto_config(self) -> bool:
+        """从服务端拉取协议加密配置（加密模式 / 公钥 / kid）。
+
+        成功后启用信封加密（灰度 optional：服务端接受明文与密文，客户端可渐进切换）。
+        返回 True 表示已启用。
+
+        若设置了 ``public_key_pin``，会先做指纹钉扎校验，不符才启用；不符抛
+        :class:`PublicKeyPinMismatchError` 并拒绝启用，以防 MITM 替换公钥。
+        """
+        try:
+            cfg = fetch_public_config_pinned(self.base_url, self.public_key_pin)
+        except PublicKeyPinMismatchError as exc:
+            self._emit_log(f"🚨 {exc}")
+            self._emit_state(State.Error, str(exc))
+            raise
+        data = cfg.get("data") or cfg
+        mode = data.get("encryptionMode") or data.get("encryptionMode")
+        pub = data.get("publicKey") or data.get("publicKey")
+        kid = data.get("kid") or data.get("kid") or "v1"
+        if mode and mode != "off" and pub:
+            self.envelope_public_key = pub
+            self.envelope_kid = kid
+            self._emit_log("🔐 已加载协议加密公钥，后续请求将自动加密")
+            return True
+        self._emit_log(f"服务端未启用协议加密（mode={mode}），继续使用明文")
+        return False
 
     def _emit_record(self, method, url, params, req_json, http_status, body):
         rec = {

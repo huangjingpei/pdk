@@ -18,6 +18,8 @@
 #include <curl/curl.h>
 #include <openssl/evp.h>
 #include <openssl/sha.h>
+#include <openssl/pem.h>
+#include <openssl/rand.h>
 #include <nlohmann/json.hpp>
 
 #ifdef _WIN32
@@ -287,6 +289,12 @@ struct Client::Impl {
     std::string phone;
     std::string deviceId;
     std::string password;
+
+    // 协议信封加密配置（启用后请求加密、响应自动解密）
+    std::string envelopePubKey_;
+    std::string envelopeKid_ = "v1";
+    // P0 公钥指纹钉扎：非空时 refreshCryptoConfig 拉到公钥后强制比对
+    std::string publicKeyPin_;
 };
 
 /* ============================================================================
@@ -340,6 +348,15 @@ std::string Client::tokenValue()  const { return impl_->tokenValue; }
 /* ============================================================================
  * 内部：统一请求 + 解析为 ApiResponse，并发出请求/响应事件与调试日志
  * ========================================================================== */
+// 前向声明：协议信封加密辅助（定义见文件末尾，避免头文件暴露 OpenSSL 细节）
+static bool        is_envelope_cpp(const std::string& body);
+static std::string build_envelope(const std::string& plain_json,
+                                  const std::string& public_key_pem,
+                                  const std::string& kid,
+                                  std::vector<unsigned char>& out_session_key);
+static std::string decrypt_response_envelope(const std::string& envelope_json,
+                                            const std::vector<unsigned char>& session_key);
+
 ApiResponse Client::request(const std::string& method,
                             const std::string& path,
                             bool authenticated,
@@ -356,6 +373,20 @@ ApiResponse Client::request(const std::string& method,
             hdrs["X-PDK-Device-ID"] = impl_->deviceId;
     }
 
+    // —— 协议信封加密：启用后，有 body 的请求先用服务端公钥加密，响应自动解密 ——
+    std::string sendBody = bodyJson;
+    std::vector<unsigned char> sessionKey;
+    bool didEnvelope = false;
+    if (!impl_->envelopePubKey_.empty() && !bodyJson.empty()) {
+        try {
+            sendBody = build_envelope(bodyJson, impl_->envelopePubKey_, impl_->envelopeKid_, sessionKey);
+            didEnvelope = true;
+            emitLog("[信封] 已用服务端公钥加密请求体（会话密钥 AES-256-GCM）");
+        } catch (const PdkException& e) {
+            emitLog("[信封] 加密失败，降级为明文发送: " + std::string(e.what()));
+        }
+    }
+
     std::string url = impl_->baseUrl + path;
     if (!query.empty()) url += "?" + query;
 
@@ -363,7 +394,7 @@ ApiResponse Client::request(const std::string& method,
     emitLog("[请求] " + method + " " + url + (bodyJson.empty() ? "" : "\n   body: " + bodyJson));
     if (!expectation.empty()) emitLog("[期待] " + expectation);
 
-    HttpResult hr = curl_exec(method, url, impl_->timeoutMs, hdrs, bodyJson);
+    HttpResult hr = curl_exec(method, url, impl_->timeoutMs, hdrs, sendBody);
 
     ApiResponse resp;
     resp.httpStatus = hr.httpStatus;
@@ -385,7 +416,21 @@ ApiResponse Client::request(const std::string& method,
     }
 
     try {
-        auto root = json::parse(hr.body);
+        std::string toParse = hr.body;
+        if (didEnvelope && !sessionKey.empty() && is_envelope_cpp(hr.body)) {
+            try {
+                toParse = decrypt_response_envelope(hr.body, sessionKey);
+                emitLog("[信封] 已用会话密钥解密响应");
+            } catch (const PdkException& e) {
+                resp.code = ResultCode::NETWORK_ERROR;
+                resp.message = std::string("响应信封解密失败: ") + e.what();
+                resp.dataJson = "null";
+                emitLog("[信封] " + resp.message);
+                emitState(State::Error, resp.message);
+                return resp;
+            }
+        }
+        auto root = json::parse(toParse);
         resp.code    = root.value("code", 0);
         resp.message = root.value("message", "");
         if (root.contains("data") && !root["data"].is_null())
@@ -435,7 +480,7 @@ ApiResponse Client::registerAccount(const std::string& phone,
         {"password", password},
         {"deviceId", impl_->deviceId},
         {"smsCode", smsCode},
-        {"invitationCode", invitationCode.empty() ? json(nullptr) : invitationCode},
+        {"invitationCode", invitationCode.empty() ? json(nullptr) : json(invitationCode)},
     };
     ApiResponse r = request("POST", "/api/v1/client/auth/register", false, j.dump(), "",
                             "期待: code=200，data 含 tokenValue/deviceId/remainingCalls");
@@ -728,6 +773,247 @@ std::string Client::describeEvent(Event e) {
 /* ============================================================================
  * 控制台 UTF-8 支持（Windows 控制台默认 GBK，会乱码中文）
  * ========================================================================== */
+/* ============================================================================
+ * 协议级信封加密（RSA-OAEP + AES-256-GCM）：与后端 BodyCryptoService 严格对齐
+ * ========================================================================== */
+static std::string base64_encode(const std::vector<unsigned char>& in) {
+    if (in.empty()) return "";
+    std::string out;
+    out.resize(((in.size() + 2) / 3) * 4);
+    int n = EVP_EncodeBlock(reinterpret_cast<unsigned char*>(&out[0]),
+                            in.data(), static_cast<int>(in.size()));
+    out.resize(static_cast<size_t>(n));
+    return out;
+}
+
+static std::vector<unsigned char> random_bytes(size_t n) {
+    std::vector<unsigned char> b(n);
+    RAND_bytes(b.data(), static_cast<int>(n));
+    return b;
+}
+
+/* AES-256-GCM 加密：输出 = 密文 || 16 字节 GCM Tag（与后端 doFinal 默认行为一致） */
+static std::vector<unsigned char> aes_256_gcm_encrypt(const std::vector<unsigned char>& key,
+                                                     const std::vector<unsigned char>& iv,
+                                                     const std::string& plain) {
+    EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
+    if (!ctx) throw PdkException("EVP_CIPHER_CTX 创建失败");
+    try {
+        if (EVP_EncryptInit_ex(ctx, EVP_aes_256_gcm(), nullptr, nullptr, nullptr) != 1)
+            throw PdkException("EVP_EncryptInit_ex 失败");
+        if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, static_cast<int>(iv.size()), nullptr) != 1)
+            throw PdkException("设置 IV 长度失败");
+        if (EVP_EncryptInit_ex(ctx, nullptr, nullptr, key.data(), iv.data()) != 1)
+            throw PdkException("EVP_EncryptInit_ex(key/iv) 失败");
+        std::vector<unsigned char> out(plain.size() + 16);
+        int len = 0;
+        if (EVP_EncryptUpdate(ctx, out.data(), &len,
+                              reinterpret_cast<const unsigned char*>(plain.data()),
+                              static_cast<int>(plain.size())) != 1)
+            throw PdkException("EVP_EncryptUpdate 失败");
+        int len2 = 0;
+        if (EVP_EncryptFinal_ex(ctx, out.data() + len, &len2) != 1)
+            throw PdkException("EVP_EncryptFinal_ex 失败");
+        unsigned char tag[16];
+        if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG, 16, tag) != 1)
+            throw PdkException("获取 GCM Tag 失败");
+        EVP_CIPHER_CTX_free(ctx);
+        out.resize(static_cast<size_t>(len + len2));
+        out.insert(out.end(), tag, tag + 16);
+        return out;
+    } catch (...) {
+        EVP_CIPHER_CTX_free(ctx);
+        throw;
+    }
+}
+
+/* AES-256-GCM 解密（data 末尾含 16 字节 Tag） */
+static std::string aes_256_gcm_decrypt(const std::vector<unsigned char>& key,
+                                      const std::vector<unsigned char>& iv,
+                                      const std::vector<unsigned char>& ctWithTag) {
+    if (ctWithTag.size() < 16) throw PdkException("密文长度不足（缺少 GCM Tag）");
+    std::vector<unsigned char> ciphertext(ctWithTag.begin(), ctWithTag.end() - 16);
+    std::vector<unsigned char> tag(ctWithTag.end() - 16, ctWithTag.end());
+    EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
+    if (!ctx) throw PdkException("EVP_CIPHER_CTX 创建失败");
+    try {
+        if (EVP_DecryptInit_ex(ctx, EVP_aes_256_gcm(), nullptr, nullptr, nullptr) != 1)
+            throw PdkException("EVP_DecryptInit_ex 失败");
+        if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, static_cast<int>(iv.size()), nullptr) != 1)
+            throw PdkException("设置 IV 长度失败");
+        if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG, 16, const_cast<unsigned char*>(tag.data())) != 1)
+            throw PdkException("设置 GCM Tag 失败");
+        if (EVP_DecryptInit_ex(ctx, nullptr, nullptr, key.data(), iv.data()) != 1)
+            throw PdkException("EVP_DecryptInit_ex(key/iv) 失败");
+        std::vector<unsigned char> out(ciphertext.size());
+        int len = 0, total = 0;
+        if (EVP_DecryptUpdate(ctx, out.data(), &len, ciphertext.data(), static_cast<int>(ciphertext.size())) != 1)
+            throw PdkException("EVP_DecryptUpdate 失败");
+        total += len;
+        int fret = 0;
+        if (EVP_DecryptFinal_ex(ctx, out.data() + total, &fret) != 1)
+            throw PdkException("GCM Tag 校验失败（数据被篡改或密钥错误）");
+        total += fret;
+        out.resize(static_cast<size_t>(total));
+        EVP_CIPHER_CTX_free(ctx);
+        return std::string(out.begin(), out.end());
+    } catch (...) {
+        EVP_CIPHER_CTX_free(ctx);
+        throw;
+    }
+}
+
+/* RSA-OAEP（SHA-256 + MGF1_SHA256）公钥加密 */
+static std::vector<unsigned char> rsa_oaep_encrypt(const std::string& public_key_pem,
+                                                  const std::vector<unsigned char>& plain) {
+    BIO* bio = BIO_new_mem_buf(public_key_pem.data(), static_cast<int>(public_key_pem.size()));
+    if (!bio) throw PdkException("BIO 创建失败");
+    EVP_PKEY* pub = nullptr;
+    try {
+        pub = PEM_read_bio_PUBKEY(bio, nullptr, nullptr, nullptr);
+        if (!pub) throw PdkException("解析公钥 PEM 失败");
+        EVP_PKEY_CTX* ctx = EVP_PKEY_CTX_new(pub, nullptr);
+        if (!ctx) throw PdkException("EVP_PKEY_CTX 创建失败");
+        if (EVP_PKEY_encrypt_init(ctx) != 1) throw PdkException("EVP_PKEY_encrypt_init 失败");
+        if (EVP_PKEY_CTX_set_rsa_oaep_md(ctx, EVP_sha256()) != 1)
+            throw PdkException("设置 OAEP MD 失败");
+        if (EVP_PKEY_CTX_set_rsa_mgf1_md(ctx, EVP_sha256()) != 1)
+            throw PdkException("设置 MGF1 MD 失败");
+        size_t outlen = 0;
+        if (EVP_PKEY_encrypt(ctx, nullptr, &outlen, plain.data(), plain.size()) != 1)
+            throw PdkException("RSA 加密长度探测失败");
+        std::vector<unsigned char> out(outlen);
+        if (EVP_PKEY_encrypt(ctx, out.data(), &outlen, plain.data(), plain.size()) != 1)
+            throw PdkException("RSA 加密失败");
+        EVP_PKEY_CTX_free(ctx);
+        EVP_PKEY_free(pub);
+        BIO_free(bio);
+        return out;
+    } catch (...) {
+        EVP_PKEY_free(pub);
+        BIO_free(bio);
+        throw;
+    }
+}
+
+static bool is_envelope_cpp(const std::string& body) {
+    if (body.empty()) return false;
+    try {
+        auto j = json::parse(body);
+        return j.is_object() && j.contains("enc") && j.contains("data") &&
+               j.contains("iv") && j.contains("kid");
+    } catch (...) { return false; }
+}
+
+/* 加密请求体为信封；out_session_key 输出本次会话 AES-256 密钥（用于解密响应） */
+static std::string build_envelope(const std::string& plain_json,
+                                  const std::string& public_key_pem,
+                                  const std::string& kid,
+                                  std::vector<unsigned char>& out_session_key) {
+    std::vector<unsigned char> aes_key = random_bytes(32);
+    std::vector<unsigned char> iv = random_bytes(12);
+    std::vector<unsigned char> ct = aes_256_gcm_encrypt(aes_key, iv, plain_json);
+    std::vector<unsigned char> wrapped = rsa_oaep_encrypt(public_key_pem, aes_key);
+    out_session_key = aes_key;
+    json env = {
+        {"kid", kid},
+        {"enc", base64_encode(wrapped)},
+        {"iv", base64_encode(iv)},
+        {"data", base64_encode(ct)},
+        {"ts", static_cast<long long>(std::time(nullptr) * 1000)},
+        {"rnd", base64_encode(random_bytes(8))},
+    };
+    return env.dump();
+}
+
+/* 用会话密钥解密服务端返回的响应信封（服务端 encryptResponse 复用同一会话密钥） */
+static std::string decrypt_response_envelope(const std::string& envelope_json,
+                                            const std::vector<unsigned char>& session_key) {
+    auto env = json::parse(envelope_json);
+    std::vector<unsigned char> iv = base64_decode(env["iv"].get<std::string>());
+    std::vector<unsigned char> data = base64_decode(env["data"].get<std::string>());
+    return aes_256_gcm_decrypt(session_key, iv, data);
+}
+
+/* P0 公钥指纹钉扎：计算 SHA-256(公钥 DER) 的 hex 前 32 字符，与 Python 端对齐。 */
+static std::string compute_public_key_fingerprint(const std::string& public_key_pem) {
+    BIO* bio = BIO_new_mem_buf(public_key_pem.data(), static_cast<int>(public_key_pem.size()));
+    if (!bio) return "";
+    EVP_PKEY* pub = PEM_read_bio_PUBKEY(bio, nullptr, nullptr, nullptr);
+    BIO_free(bio);
+    if (!pub) return "";
+
+    int len = i2d_PUBKEY(pub, nullptr);
+    if (len <= 0) { EVP_PKEY_free(pub); return ""; }
+    std::vector<unsigned char> der(static_cast<size_t>(len));
+    unsigned char* p = der.data();
+    i2d_PUBKEY(pub, &p);
+    EVP_PKEY_free(pub);
+
+    unsigned char hash[32];
+    EVP_Digest(der.data(), der.size(), hash, nullptr, EVP_sha256(), nullptr);
+    static const char* hex = "0123456789abcdef";
+    std::string out;
+    for (int i = 0; i < 16; ++i) { out += hex[hash[i] >> 4]; out += hex[hash[i] & 0xF]; }
+    return out;  // 32 字符 hex
+}
+
+static std::string to_lower(std::string s) {
+    for (auto& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return s;
+}
+
+void Client::enableEnvelope(const std::string& publicKeyPem, const std::string& kid) {
+    impl_->envelopePubKey_ = publicKeyPem;
+    impl_->envelopeKid_ = kid.empty() ? "v1" : kid;
+    emitLog("已启用协议信封加密");
+}
+
+bool Client::isEnvelopeEnabled() const { return !impl_->envelopePubKey_.empty(); }
+
+ApiResponse Client::refreshCryptoConfig() {
+    ApiResponse r = request("GET", "/api/v1/client/config/public", false, "", "",
+                            "期待: code=200，data 含 encryptionMode/publicKey/kid");
+    if (r.ok()) {
+        try {
+            auto d = json::parse(r.dataJson);
+            std::string mode = d.value("encryptionMode", "off");
+            std::string pub  = d.value("publicKey", "");
+            std::string kid  = d.value("kid", "v1");
+            if (mode != "off" && !pub.empty()) {
+                // P0 公钥指纹钉扎：设置期望指纹时强制比对，不符拒绝启用
+                if (!impl_->publicKeyPin_.empty()) {
+                    std::string actual = compute_public_key_fingerprint(pub);
+                    if (to_lower(actual) != impl_->publicKeyPin_) {
+                        r.code = ResultCode::NETWORK_ERROR;
+                        r.message = "公钥指纹钉扎失败：期望 " + impl_->publicKeyPin_ +
+                                    "，实际 " + actual + "，疑似 MITM 替换公钥";
+                        r.dataJson = "null";
+                        emitLog("[信封] 🚨 " + r.message);
+                        emitState(State::Error, r.message);
+                        return r;
+                    }
+                    emitLog("[信封] 公钥指纹钉扎校验通过");
+                }
+                enableEnvelope(pub, kid);
+                emitLog("[信封] 已从服务端拉取公钥并启用协议加密（mode=" + mode + ", kid=" + kid + "）");
+            } else {
+                emitLog("[信封] 服务端协议加密未启用（mode=" + mode + "），保持明文");
+            }
+        } catch (...) {
+            emitLog("[信封] 解析公钥配置失败");
+        }
+    }
+    return r;
+}
+
+void Client::setPublicKeyPin(const std::string& fingerprint) {
+    impl_->publicKeyPin_ = to_lower(fingerprint);
+    if (!impl_->publicKeyPin_.empty()) {
+        emitLog("[信封] 已设置公钥指纹钉扎，后续拉取公钥将强制校验");
+    }
+}
+
 void enable_utf8_console() {
 #ifdef _WIN32
     // 让控制台设备按 UTF-8 解读写入的字节。

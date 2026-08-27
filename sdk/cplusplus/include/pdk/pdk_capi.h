@@ -88,6 +88,20 @@ PDK_CAPI char* pdk_usage(PdkHandle h, int page, int size);
 PDK_CAPI char* pdk_resource_status(PdkHandle h);
 PDK_CAPI char* pdk_card_list(PdkHandle h);
 
+/* 协议信封加密（RSA-OAEP + AES-256-GCM，与后端 BodyCryptoService 对齐）
+ *   - pdk_enable_envelope: 用服务端公钥(PEM)与 kid 直接启用；启用后带 body 的请求自动加密、响应自动解密。
+ *   - pdk_is_envelope_enabled: 返回 1=已启用 / 0=未启用。
+ *   - pdk_refresh_crypto_config: 拉取 GET /api/v1/client/config/public 并按 encryptionMode 自动启用/关闭。
+ *     返回该配置接口的 JSON（同其他接口格式）；mode=off 时不启用，便于灰度。 */
+PDK_CAPI void pdk_enable_envelope(PdkHandle h, const char* public_key_pem, const char* kid);
+PDK_CAPI int  pdk_is_envelope_enabled(PdkHandle h);
+PDK_CAPI char* pdk_refresh_crypto_config(PdkHandle h);
+
+/* P0 公钥指纹钉扎：设置期望指纹（SHA-256(DER) 的 hex 前 32 字符）。
+ * 留空("")不校验；设置后 pdk_refresh_crypto_config 拉到的公钥指纹不符会拒绝启用。
+ * 指纹需通过独立可信渠道获取（编译期内置 / 配置文件 / 运维下发），勿从同一接口动态取。 */
+PDK_CAPI void pdk_set_public_key_pin(PdkHandle h, const char* fingerprint);
+
 #ifdef __cplusplus
 }
 #endif

@@ -228,4 +228,27 @@ PDK_CAPI char* pdk_card_list(PdkHandle h) {
     return dup_str(resp_to_json(inst->client.cardList()));
 }
 
+PDK_CAPI void pdk_enable_envelope(PdkHandle h, const char* public_key_pem, const char* kid) {
+    auto* inst = asInst(h);
+    if (!inst || !public_key_pem || !*public_key_pem) return;
+    inst->client.enableEnvelope(public_key_pem, kid ? kid : "v1");
+}
+
+PDK_CAPI int pdk_is_envelope_enabled(PdkHandle h) {
+    auto* inst = asInst(h);
+    return (inst && inst->client.isEnvelopeEnabled()) ? 1 : 0;
+}
+
+PDK_CAPI char* pdk_refresh_crypto_config(PdkHandle h) {
+    auto* inst = asInst(h);
+    if (!inst) return dup_str(R"({"code":0,"message":"无效句柄"})");
+    return dup_str(resp_to_json(inst->client.refreshCryptoConfig()));
+}
+
+PDK_CAPI void pdk_set_public_key_pin(PdkHandle h, const char* fingerprint) {
+    auto* inst = asInst(h);
+    if (!inst) return;
+    inst->client.setPublicKeyPin(fingerprint ? fingerprint : "");
+}
+
 } // extern "C"
