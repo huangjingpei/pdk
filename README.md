@@ -45,3 +45,8 @@ npm run dev
 参见 [client-pyqt/README.md](./client-pyqt/README.md)。
 
 > SQL 中的管理员和小号资源均为本地联调种子。部署前必须替换默认密码、密码 pepper、数据库密码、AES 根密钥及演示 Token。
+
+## 5. 分支说明
+
+- master 分支：是原先拼多多操作类工具，包含小号，下单，退单操作
+- pkd分支：是一个通用的授权，业务系统，和客户端联合联合用来限制客户端登录，注销，检测版本升级
