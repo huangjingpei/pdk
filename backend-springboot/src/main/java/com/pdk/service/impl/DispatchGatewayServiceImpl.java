@@ -4,6 +4,10 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.pdk.common.exception.BusinessException;
 import com.pdk.common.utils.AesByteFlipUtils;
+import com.pdk.business.pdd.PddBusinessHandler;
+import com.pdk.business.spi.BusinessHandler;
+import com.pdk.business.spi.BusinessHandlerRegistry;
+import com.pdk.business.spi.FailureDecision;
 import com.pdk.domain.dto.AcquireTokenRequestDTO;
 import com.pdk.domain.dto.ReportResultDTO;
 import com.pdk.domain.entity.TokenPool;
@@ -40,10 +44,15 @@ public class DispatchGatewayServiceImpl implements IDispatchGatewayService {
     private final DeviceBindingService deviceBindingService;
     private final ResourceLeaseService resourceLeaseService;
     private final AccountAssignmentService assignmentService;
+    private final BusinessHandlerRegistry businessRegistry;
 
     @Override
     @Transactional(rollbackFor = Exception.class)
     public EncryptedTokenPayloadVO acquireEncryptedToken(AcquireTokenRequestDTO dto, String userPhone, String deviceId) {
+        // 多业务上下文尚未接入请求协议；兼容阶段 appId=1 固定路由到 PDD Handler。
+        // 后续只需把这里的常量替换为 BusinessContext.bizCode，公共事务流程无需复制。
+        BusinessHandler businessHandler = businessRegistry.require(PddBusinessHandler.BIZ_CODE);
+        businessHandler.validateAcquire(dto);
         if (Math.abs(System.currentTimeMillis() - dto.getTimestamp()) > 5 * 60 * 1000L) {
             throw new BusinessException(40012, "客户端时间偏差超过5分钟，请校准系统时间");
         }
@@ -85,7 +94,7 @@ public class DispatchGatewayServiceImpl implements IDispatchGatewayService {
                 assigned.assignment().getId(), assigned.assignment().getSlotIndex()));
 
         // 5. 使用 AES-128-GCM + 0x50 0x44 字节倒序翻转混淆
-        String rawTokenPayload = "{\"token\":\"" + healthyToken.getTokenVal() + "\",\"leaseId\":\"" + leaseTraceId + "\",\"expire\":" + leaseSeconds + "}";
+        String rawTokenPayload = businessHandler.buildCredentialPayload(healthyToken, leaseTraceId, leaseSeconds);
         String encryptedData = AesByteFlipUtils.encryptAndFlip(rawTokenPayload);
 
         return EncryptedTokenPayloadVO.builder()
@@ -100,6 +109,7 @@ public class DispatchGatewayServiceImpl implements IDispatchGatewayService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void reportAndDeductQuota(ReportResultDTO dto, String userPhone) {
+        BusinessHandler businessHandler = businessRegistry.require(PddBusinessHandler.BIZ_CODE);
         Long existing = dispatchLogMapper.selectCount(new LambdaQueryWrapper<PdkDispatchLog>()
                 .eq(PdkDispatchLog::getReqUuid, dto.getLeaseTraceId()));
         if (existing != null && existing > 0) {
@@ -115,10 +125,11 @@ public class DispatchGatewayServiceImpl implements IDispatchGatewayService {
         String actionType = leaseInfo.actionType();
         Long assignmentId = leaseInfo.assignmentId();
 
+        FailureDecision decision = businessHandler.classifyReport(dto);
         int deductCount = 0;
-        String execStatus;
+        String execStatus = decision.execStatus();
 
-        if ("SUCCESS".equals(dto.getStatus())) {
+        if (decision.deductQuota()) {
             // 正常执行: 小号槽位 used_calls +1（封顶 allocated），用户总池由槽位额度派生
             if (assignmentId != null) {
                 assignmentService.recordSuccess(assignmentId);
@@ -142,20 +153,14 @@ public class DispatchGatewayServiceImpl implements IDispatchGatewayService {
 
             log.info("业务调用成功上报并扣费: user={}, tokenId={}", userPhone, tokenId);
             deductCount = 1;
-            execStatus = "SUCCESS";
-        } else if ("FAIL_ACCOUNT_BANNED".equals(dto.getStatus())) {
-            // 底层拼多多账号被封禁/过期 -> 触发免责自愈: 扣 0 次，拉黑故障 Token
+        } else if (decision.blacklistResource()) {
+            // 当前业务 Handler 判定资源失效 -> 触发免责自愈: 扣 0 次并拉黑故障资源
             tokenPoolMapper.markTokenFaultStatus(tokenId, "FAULT_BLACK");
             if (assignmentId != null) assignmentService.replaceFault(assignmentId);
-            log.error("底层官方 Token 故障拉黑免责触发: tokenId={}, user={}, error={}", tokenId, userPhone, dto.getErrorMessage());
-            execStatus = "TOKEN_FAIL";
-        } else if ("FAIL_NETWORK".equals(dto.getStatus())) {
-            execStatus = "NET_TIMEOUT";
-        } else {
-            execStatus = "PARAM_ERROR";
+            log.error("业务资源故障拉黑免责触发: tokenId={}, user={}, error={}", tokenId, userPhone, dto.getErrorMessage());
         }
 
-        if (!"FAIL_ACCOUNT_BANNED".equals(dto.getStatus())) {
+        if (!decision.blacklistResource()) {
             tokenPoolMapper.update(null, new LambdaUpdateWrapper<TokenPool>()
                     .eq(TokenPool::getId, tokenId)
                     .eq(TokenPool::getHealthStatus, "BUSY")

@@ -2,15 +2,13 @@ package com.pdk.domain.dto;
 
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
-import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Positive;
 import lombok.Data;
 
 @Data
 public class AcquireTokenRequestDTO {
     @NotBlank(message = "业务动作类型不能为空")
-    @Pattern(regexp = "GOODS_COLLECT|ORDER_PULL|DETAIL_QUERY", message = "业务动作类型不合法")
-    private String actionType; // GOODS_COLLECT, ORDER_PULL, DETAIL_QUERY
+    private String actionType; // 允许值由当前 bizCode 的 BusinessHandler 校验
 
     private String goodsId;
 

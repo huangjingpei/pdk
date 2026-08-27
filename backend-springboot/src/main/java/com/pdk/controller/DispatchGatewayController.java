@@ -14,13 +14,13 @@ import org.springframework.web.bind.annotation.*;
 @RestController
 @RequestMapping("/api/v1/dispatch")
 @RequiredArgsConstructor
-@Tag(name = "网关调度模块", description = "短效 Token 加密下发与业务上报扣费")
+@Tag(name = "网关调度模块", description = "业务资源短效加密下发与结果上报扣费")
 public class DispatchGatewayController {
 
     private final IDispatchGatewayService gatewayService;
 
     @PostMapping("/acquire-token")
-    @Operation(summary = "申请短效加密 Token", description = "分配健康底层拼多多槽位并使用 AES-GCM + 字节翻转加密下发")
+    @Operation(summary = "申请短效加密资源", description = "由当前业务 Handler 校验并构造凭证，平台统一加密下发")
     public CommonResult<EncryptedTokenPayloadVO> acquireToken(
             @Valid @RequestBody AcquireTokenRequestDTO dto,
             @RequestHeader("X-PDK-Phone") String userPhone,
@@ -31,7 +31,7 @@ public class DispatchGatewayController {
     }
 
     @PostMapping("/report-result")
-    @Operation(summary = "异步上报业务执行结果", description = "成功扣 1 次；若底层官方 Token 故障免责扣 0 次并触发自愈拉黑")
+    @Operation(summary = "异步上报业务执行结果", description = "业务 Handler 分类结果，平台统一执行扣次、免责与资源自愈")
     public CommonResult<String> reportResult(
             @Valid @RequestBody ReportResultDTO dto,
             @RequestHeader("X-PDK-Phone") String userPhone) {

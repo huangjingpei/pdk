@@ -3,6 +3,8 @@ package com.pdk.service;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.pdk.common.exception.BusinessException;
+import com.pdk.business.pdd.PddBusinessHandler;
+import com.pdk.business.spi.BusinessHandlerRegistry;
 import com.pdk.domain.dto.AcquireTokenRequestDTO;
 import com.pdk.domain.dto.ReportResultDTO;
 import com.pdk.domain.entity.PdkDispatchLog;
@@ -26,6 +28,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -51,6 +54,11 @@ class DispatchGatewayServiceImplTest {
         TableInfoHelper.initTableInfo(new MapperBuilderAssistant(new MybatisConfiguration(), ""), TokenPool.class);
         TableInfoHelper.initTableInfo(new MapperBuilderAssistant(new MybatisConfiguration(), ""), PdkDispatchLog.class);
         ReflectionTestUtils.setField(service, "leaseSeconds", 300L);
+        ReflectionTestUtils.setField(service, "businessRegistry",
+                new BusinessHandlerRegistry(List.of(new PddBusinessHandler(
+                        new com.pdk.business.pdd.PddActionValidator(),
+                        new com.pdk.business.pdd.PddCredentialCodec(),
+                        new com.pdk.business.pdd.PddFailureClassifier()))));
 
         user = new User();
         user.setId(1L);
