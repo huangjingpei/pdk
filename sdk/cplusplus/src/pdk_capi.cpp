@@ -251,4 +251,10 @@ PDK_CAPI void pdk_set_public_key_pin(PdkHandle h, const char* fingerprint) {
     inst->client.setPublicKeyPin(fingerprint ? fingerprint : "");
 }
 
+PDK_CAPI void pdk_set_pin_store_path(PdkHandle h, const char* path) {
+    auto* inst = asInst(h);
+    if (!inst) return;
+    inst->client.setPinStorePath(path ? path : "");
+}
+
 } // extern "C"

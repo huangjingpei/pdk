@@ -140,3 +140,7 @@
 .DLL命令 pdk_set_public_key_pin, , "pdk_capi.dll", "pdk_set_public_key_pin", 公开
     .参数 h, 整数型, , 句柄
     .参数 fingerprint, 文本型, , 期望公钥指纹（SHA-256 hex 前 32 字符，如 "a1b2c3..."）；留空则不校验
+
+.DLL命令 pdk_set_pin_store_path, , "pdk_capi.dll", "pdk_set_pin_store_path", 公开
+    .参数 h, 整数型, , 句柄
+    .参数 path, 文本型, , 钉扎指纹本地持久化文件路径（JSON: {"pin":"..."}）；未显式 set_public_key_pin 时，首次成功会写入该文件（TOFU），后续比对

@@ -293,8 +293,12 @@ struct Client::Impl {
     // 协议信封加密配置（启用后请求加密、响应自动解密）
     std::string envelopePubKey_;
     std::string envelopeKid_ = "v1";
+    // 跨请求会话密钥缓存（供 GET 等无 body 响应解密，对应服务端方案 A）
+    std::vector<unsigned char> envelopeSessionKey_;
     // P0 公钥指纹钉扎：非空时 refreshCryptoConfig 拉到公钥后强制比对
     std::string publicKeyPin_;
+    // 钉扎指纹本地持久化路径（TOFU 用），空则不持久化
+    std::string pinStorePath_;
 };
 
 /* ============================================================================
@@ -362,16 +366,18 @@ ApiResponse Client::request(const std::string& method,
                             bool authenticated,
                             const std::string& bodyJson,
                             const std::string& query,
-                            const std::string& expectation) {
+                            const std::string& expectation,
+                            bool retried) {
     std::map<std::string, std::string> hdrs;
     if (authenticated) {
         if (!impl_->tokenValue.empty())
             hdrs[impl_->tokenName] = impl_->tokenValue;
         if (!impl_->phone.empty())
             hdrs["X-PDK-Phone"] = impl_->phone;
-        if (!impl_->deviceId.empty())
-            hdrs["X-PDK-Device-ID"] = impl_->deviceId;
     }
+    // 协议加密需要稳定身份（设备ID）做跨请求会话映射，始终携带（非敏感）
+    if (!impl_->deviceId.empty())
+        hdrs["X-PDK-Device-ID"] = impl_->deviceId;
 
     // —— 协议信封加密：启用后，有 body 的请求先用服务端公钥加密，响应自动解密 ——
     std::string sendBody = bodyJson;
@@ -381,6 +387,7 @@ ApiResponse Client::request(const std::string& method,
         try {
             sendBody = build_envelope(bodyJson, impl_->envelopePubKey_, impl_->envelopeKid_, sessionKey);
             didEnvelope = true;
+            impl_->envelopeSessionKey_ = sessionKey; // 缓存，供后续 GET 响应解密（方案 A）
             emitLog("[信封] 已用服务端公钥加密请求体（会话密钥 AES-256-GCM）");
         } catch (const PdkException& e) {
             emitLog("[信封] 加密失败，降级为明文发送: " + std::string(e.what()));
@@ -417,9 +424,9 @@ ApiResponse Client::request(const std::string& method,
 
     try {
         std::string toParse = hr.body;
-        if (didEnvelope && !sessionKey.empty() && is_envelope_cpp(hr.body)) {
+        if (!impl_->envelopeSessionKey_.empty() && is_envelope_cpp(hr.body)) {
             try {
-                toParse = decrypt_response_envelope(hr.body, sessionKey);
+                toParse = decrypt_response_envelope(hr.body, impl_->envelopeSessionKey_);
                 emitLog("[信封] 已用会话密钥解密响应");
             } catch (const PdkException& e) {
                 resp.code = ResultCode::NETWORK_ERROR;
@@ -448,6 +455,13 @@ ApiResponse Client::request(const std::string& method,
     emitLog("[响应] HTTP " + std::to_string(hr.httpStatus) +
             " | code=" + std::to_string(resp.code) + " | " + resp.message +
             " | data=" + resp.dataJson);
+
+    // 密钥版本不匹配(42901)/解密失败(42904)：自动重拉公钥并重试一次（防循环）
+    if (!retried && (resp.code == 42901 || resp.code == 42904) && isEnvelopeEnabled()) {
+        emitLog("[信封] 收到密钥错误，自动重拉公钥并重试");
+        refreshCryptoConfig();
+        return request(method, path, authenticated, bodyJson, query, expectation, true);
+    }
 
     // 设备互踢
     if (resp.code == ResultCode::DEVICE_KICK_OUT) {
@@ -963,6 +977,27 @@ static std::string to_lower(std::string s) {
     return s;
 }
 
+// 钉扎指纹本地持久化（TOFU）：JSON 文件 {"pin":"..."}
+static std::string read_pin_from_store(const std::string& path) {
+    std::ifstream f(path);
+    if (!f) return "";
+    try {
+        json j;
+        f >> j;
+        return j.value("pin", "");
+    } catch (...) {
+        return "";
+    }
+}
+
+static void write_pin_to_store(const std::string& path, const std::string& pin) {
+    try {
+        std::ofstream f(path);
+        if (f) f << json{{"pin", pin}}.dump(2);
+    } catch (...) {
+    }
+}
+
 void Client::enableEnvelope(const std::string& publicKeyPem, const std::string& kid) {
     impl_->envelopePubKey_ = publicKeyPem;
     impl_->envelopeKid_ = kid.empty() ? "v1" : kid;
@@ -981,12 +1016,19 @@ ApiResponse Client::refreshCryptoConfig() {
             std::string pub  = d.value("publicKey", "");
             std::string kid  = d.value("kid", "v1");
             if (mode != "off" && !pub.empty()) {
-                // P0 公钥指纹钉扎：设置期望指纹时强制比对，不符拒绝启用
-                if (!impl_->publicKeyPin_.empty()) {
-                    std::string actual = compute_public_key_fingerprint(pub);
-                    if (to_lower(actual) != impl_->publicKeyPin_) {
+                // P0 公钥指纹钉扎 / TOFU
+                std::string actual = compute_public_key_fingerprint(pub);
+                std::string expected = impl_->publicKeyPin_;  // 显式预置优先
+                bool tofu = false;
+                if (expected.empty() && !impl_->pinStorePath_.empty()) {
+                    std::string stored = read_pin_from_store(impl_->pinStorePath_);
+                    if (!stored.empty()) expected = stored;
+                    else tofu = true;  // 首次：信任并持久化
+                }
+                if (!expected.empty()) {
+                    if (to_lower(actual) != to_lower(expected)) {
                         r.code = ResultCode::NETWORK_ERROR;
-                        r.message = "公钥指纹钉扎失败：期望 " + impl_->publicKeyPin_ +
+                        r.message = "公钥指纹钉扎失败：期望 " + expected +
                                     "，实际 " + actual + "，疑似 MITM 替换公钥";
                         r.dataJson = "null";
                         emitLog("[信封] 🚨 " + r.message);
@@ -994,6 +1036,9 @@ ApiResponse Client::refreshCryptoConfig() {
                         return r;
                     }
                     emitLog("[信封] 公钥指纹钉扎校验通过");
+                } else if (tofu) {
+                    write_pin_to_store(impl_->pinStorePath_, actual);
+                    emitLog("[信封] 首次信任并钉扎公钥指纹(TOFU): " + actual);
                 }
                 enableEnvelope(pub, kid);
                 emitLog("[信封] 已从服务端拉取公钥并启用协议加密（mode=" + mode + ", kid=" + kid + "）");
@@ -1012,6 +1057,10 @@ void Client::setPublicKeyPin(const std::string& fingerprint) {
     if (!impl_->publicKeyPin_.empty()) {
         emitLog("[信封] 已设置公钥指纹钉扎，后续拉取公钥将强制校验");
     }
+}
+
+void Client::setPinStorePath(const std::string& path) {
+    impl_->pinStorePath_ = path;
 }
 
 void enable_utf8_console() {

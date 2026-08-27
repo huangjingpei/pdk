@@ -33,10 +33,14 @@
     .如果结束
 
     ' —— 1.5) 启用协议信封加密（防抓包：所有 body 自动 RSA+AES 加密）——
-    '   P0 公钥指纹钉扎：先设置期望指纹（通过独立可信渠道获取，这里示例用占位串），
-    '   之后 pdk_refresh_crypto_config 拉到的公钥会强制比对指纹，不符拒绝启用（防 MITM 替换公钥）。
+    '   P0 公钥指纹钉扎（防 MITM 替换公钥，二选一）：
+    '   方案 A（生产推荐）：显式预置期望指纹（通过独立可信渠道获取，这里示例用占位串），
+    '       之后 pdk_refresh_crypto_config 拉到的公钥会强制比对指纹，不符拒绝启用。
     pdk_set_public_key_pin (h, "a1b2c3d4e5f6...")  ' 替换为真实指纹（32 位 hex）
-    '   一行即可：拉取服务端公钥并按 encryptionMode 自动启用；mode=off 时保持明文（灰度）。
+    '   方案 B（便捷/弱）：不预置指纹时，设置本地钉扎存储路径，首次成功会信任并写入（TOFU），
+    '       后续拉取比对；仅防后续替换，首次仍可能被骗，生产不建议单独使用。
+    '   pdk_set_pin_store_path (h, "C:\pdk_client\pin.json")
+    '   然后一行即可：拉取服务端公钥并按 encryptionMode 自动启用；mode=off 时保持明文（灰度）。
     '   启用后 pdk_login / pdk_acquire_token 等带 body 的请求会自动加密，响应自动解密，
     '   业务代码完全不用改。可选：用 pdk_is_envelope_enabled(h) 确认是否已启用。
     返回JSON ＝ pdk_refresh_crypto_config (h)

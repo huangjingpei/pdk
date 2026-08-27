@@ -30,7 +30,9 @@ public class ClientConfigController {
         data.put("encryptionMode",
                 configService.getValue(ConfigKeys.SECURITY_ENCRYPTION_MODE, ConfigKeys.DEFAULT_SECURITY_ENCRYPTION_MODE));
         data.put("publicKey", keyService.getPublicKeyPem());
-        data.put("kid", keyService.getKid());
+        data.put("kid", keyService.getActiveKid());
+        data.put("supportedKids", keyService.getKids());
+        data.put("publicKeyFingerprint", keyService.getPublicKeyFingerprint());
         return CommonResult.success(data);
     }
 }

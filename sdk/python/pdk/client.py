@@ -21,7 +21,8 @@ import requests
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from .crypto import (decrypt_payload, derive_key, encrypt_envelope,
-                     decrypt_response, fetch_public_config_pinned, is_envelope,
+                     decrypt_response, fetch_public_config, fetch_public_config_pinned,
+                     compute_public_key_fingerprint, is_envelope,
                      PublicKeyPinMismatchError, ROOT_SALT)
 from .enums import Event, ResultCode, State
 
@@ -125,6 +126,9 @@ class PdkApiClient:
         # 协议信封加密（RSA-OAEP + AES-256-GCM）：默认关闭，需拉取公钥后启用
         self.envelope_public_key: str = ""
         self.envelope_kid: str = "v1"
+        # 跨请求会话密钥缓存：保存最近一次信封会话 AES 密钥，供后续 GET 等无 body
+        # 响应解密（对应服务端「方案 A：会话级加密判定」）。
+        self.envelope_session_key = None
         # P0 公钥指纹钉扎：非空时拉取公钥后强制比对指纹，不符拒绝启用
         self.public_key_pin: str = (public_key_pin or "").strip().lower()
 
@@ -164,16 +168,17 @@ class PdkApiClient:
     # ---------------------------------------------------------------- 通用请求
     def request(self, method, path, *, authenticated=False, include_phone=True,
                 include_device=True, override_device_id=None,  headers=None,
-                json_body=None, params=None):
+                json_body=None, params=None, _retried: bool = False):
         hdrs: dict = {"Accept": "application/json"}
         if authenticated:
             if self.session.token_value:
                 hdrs[self.session.token_name] = self.session.token_value
             if include_phone and self.session.phone:
                 hdrs["X-PDK-Phone"] = self.session.phone
-            dev = override_device_id if override_device_id is not None else self.session.device_id
-            if include_device and dev:
-                hdrs["X-PDK-Device-ID"] = dev
+        # 协议加密需要稳定身份（设备ID）做跨请求会话映射，始终携带（非敏感）
+        dev = override_device_id if override_device_id is not None else self.session.device_id
+        if include_device and dev:
+            hdrs.setdefault("X-PDK-Device-ID", dev)
         if headers:
             hdrs.update(headers)
 
@@ -186,6 +191,8 @@ class PdkApiClient:
             envelope, session_key = encrypt_envelope(
                 json.dumps(json_body, ensure_ascii=False),
                 self.envelope_public_key, self.envelope_kid)
+            # 缓存会话密钥，供后续 GET 等无 body 响应解密（方案 A）
+            self.envelope_session_key = session_key
             hdrs["Content-Type"] = "application/json"
             send_data = envelope
 
@@ -202,10 +209,10 @@ class PdkApiClient:
                 resp = self.http.request(method, full_url, headers=hdrs, json=json_body,
                                          params=params, timeout=20)
             body_text = resp.text
-            # 若本次请求已加密，则解密响应信封（服务端复用同一会话密钥加密响应）
-            if session_key is not None and is_envelope(body_text):
+            # 若持有会话密钥且响应是信封，则解密（本次请求加密 或 之前的会话仍有效均适用）
+            if self.envelope_session_key is not None and is_envelope(body_text):
                 try:
-                    body_text = decrypt_response(body_text, session_key)
+                    body_text = decrypt_response(body_text, self.envelope_session_key)
                 except Exception:
                     self._emit_log("⚠️ 响应信封解密失败，退回原始响应")
             try:
@@ -217,6 +224,17 @@ class PdkApiClient:
             body = {"code": 0, "message": f"网络请求失败: {exc}", "data": None}
             http_status = 0
 
+        # 密钥版本不匹配(42901)/解密失败(42904)：自动重拉公钥并重试一次（防循环）
+        if (not _retried) and body.get("code") in (42901, 42904) and self.envelope_public_key:
+            try:
+                self._emit_log("🔄 收到密钥错误，自动重拉公钥配置并重试")
+                self.refresh_crypto_config()
+                return self.request(method, path, authenticated=authenticated, include_phone=include_phone,
+                                    include_device=include_device, override_device_id=override_device_id,
+                                    headers=headers, json_body=json_body, params=params, _retried=True)
+            except Exception as exc:
+                self._emit_log(f"⚠️ 重拉公钥失败：{exc}")
+
         self._emit_event(Event.ResponseReceived,
                          f"HTTP {http_status} code={(body or {}).get('code')}")
         self._emit_log(f"◀ 响应: HTTP {http_status} | code={body.get('code')} | "
@@ -224,24 +242,74 @@ class PdkApiClient:
         self._emit_record(method, full_url, params, json_body, http_status, body)
         return body
 
+    # ---------------------------------------------------------------- 公钥指纹钉扎 / TOFU
+    def _pin_store_path(self) -> str:
+        return os.path.join(os.path.expanduser("~"), ".pdk_client", "pin.json")
+
+    def _load_pin_store(self) -> str:
+        try:
+            p = self._pin_store_path()
+            if os.path.exists(p):
+                with open(p, "r", encoding="utf-8") as f:
+                    return (json.load(f).get("pin") or "").strip().lower()
+        except Exception:
+            pass
+        return ""
+
+    def _save_pin_store(self, fp: str) -> None:
+        try:
+            p = self._pin_store_path()
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            with open(p, "w", encoding="utf-8") as f:
+                json.dump({"pin": fp}, f)
+        except Exception:
+            pass
+
     def refresh_crypto_config(self) -> bool:
-        """从服务端拉取协议加密配置（加密模式 / 公钥 / kid）。
+        """从服务端拉取协议加密配置（加密模式 / 公钥 / kid / 指纹）。
 
         成功后启用信封加密（灰度 optional：服务端接受明文与密文，客户端可渐进切换）。
         返回 True 表示已启用。
 
-        若设置了 ``public_key_pin``，会先做指纹钉扎校验，不符才启用；不符抛
-        :class:`PublicKeyPinMismatchError` 并拒绝启用，以防 MITM 替换公钥。
+        公钥指纹钉扎（P0，防 MITM 替换公钥）按以下优先级校验：
+        1. 显式 ``public_key_pin``（生产推荐：编译期内置 / 配置文件预置）；
+        2. 本地钉扎存储文件（首次成功后写入，后续比对）；
+        3. 首次且无任何预置指纹时采用 TOFU：信任并持久化当前指纹（弱于预置，仅防后续替换）。
+        任一处指纹不符抛 :class:`PublicKeyPinMismatchError` 并拒绝启用。
         """
         try:
-            cfg = fetch_public_config_pinned(self.base_url, self.public_key_pin)
-        except PublicKeyPinMismatchError as exc:
-            self._emit_log(f"🚨 {exc}")
+            cfg = fetch_public_config(self.base_url)
+        except Exception as exc:
+            self._emit_log(f"⚠️ 拉取公钥配置失败：{exc}")
             self._emit_state(State.Error, str(exc))
             raise
         data = cfg.get("data") or cfg
-        mode = data.get("encryptionMode") or data.get("encryptionMode")
         pub = data.get("publicKey") or data.get("publicKey")
+
+        # 公钥指纹钉扎 / TOFU
+        if pub:
+            actual = compute_public_key_fingerprint(pub)
+            expected = self.public_key_pin          # 显式预置优先
+            tofu = False
+            if not expected:
+                stored = self._load_pin_store()
+                if stored:
+                    expected = stored
+                else:
+                    tofu = True                       # 首次：信任并持久化
+            if expected:
+                if actual.lower() != expected.lower():
+                    msg = (f"公钥指纹钉扎失败：期望 {expected}，实际 {actual}，"
+                           f"疑似 MITM 替换公钥")
+                    self._emit_log(f"🚨 {msg}")
+                    self._emit_state(State.Error, msg)
+                    raise PublicKeyPinMismatchError(msg)
+                self._emit_log("🔒 公钥指纹钉扎校验通过")
+            elif tofu:
+                self._save_pin_store(actual)
+                self._emit_log(f"🔒 首次信任并钉扎公钥指纹(TOFU)：{actual}")
+
+        mode = data.get("encryptionMode") or data.get("encryptionMode")
         kid = data.get("kid") or data.get("kid") or "v1"
         if mode and mode != "off" and pub:
             self.envelope_public_key = pub

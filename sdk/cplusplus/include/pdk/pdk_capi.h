@@ -102,6 +102,11 @@ PDK_CAPI char* pdk_refresh_crypto_config(PdkHandle h);
  * 指纹需通过独立可信渠道获取（编译期内置 / 配置文件 / 运维下发），勿从同一接口动态取。 */
 PDK_CAPI void pdk_set_public_key_pin(PdkHandle h, const char* fingerprint);
 
+/* 设置钉扎指纹的本地持久化文件路径（JSON: {"pin":"..."}）。
+ * 未显式 pdk_set_public_key_pin 时，首次拉取成功会把指纹写入该文件（TOFU），
+ * 后续拉取比对；生产仍推荐用 pdk_set_public_key_pin 预置指纹。 */
+PDK_CAPI void pdk_set_pin_store_path(PdkHandle h, const char* path);
+
 #ifdef __cplusplus
 }
 #endif

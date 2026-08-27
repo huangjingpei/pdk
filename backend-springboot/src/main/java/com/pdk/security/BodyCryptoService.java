@@ -2,7 +2,12 @@ package com.pdk.security;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.pdk.common.exception.BusinessException;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
+import java.security.PrivateKey;
+import java.time.Duration;
 
 import javax.crypto.Cipher;
 import javax.crypto.spec.SecretKeySpec;
@@ -44,13 +49,48 @@ public class BodyCryptoService {
     private static final int IV_BYTES = 12;
     private static final int AES_KEY_BYTES = 32;
 
-    /** 已用随机串缓存（rnd -> 过期时间戳）。单机内存实现；多实例部署应替换为 Redis。 */
-    private final ConcurrentHashMap<String, Long> usedNonces = new ConcurrentHashMap<>();
     private final SecureRandom random = new SecureRandom();
+    private final ReplayCache replayCache;
 
-    public BodyCryptoService(SecurityKeyService keyService, ObjectMapper objectMapper) {
+    @Autowired
+    public BodyCryptoService(SecurityKeyService keyService, ObjectMapper objectMapper,
+                             @Autowired(required = false) StringRedisTemplate redisTemplate,
+                             @Value("${pdk.crypto.replay.redis.enabled:false}") boolean redisReplayEnabled) {
         this.keyService = keyService;
         this.objectMapper = objectMapper;
+        if (redisReplayEnabled && redisTemplate != null) {
+            this.replayCache = new RedisReplayCache(redisTemplate);
+        } else {
+            this.replayCache = new MemoryReplayCache();
+        }
+    }
+
+    /** 防重放随机串缓存抽象：首次占用返回 true，重复返回 false。 */
+    private interface ReplayCache {
+        boolean tryAcquire(String rnd);
+    }
+
+    /** 单机内存实现（默认）。rnd -> 过期时间戳，惰性清理。 */
+    private static final class MemoryReplayCache implements ReplayCache {
+        private final ConcurrentHashMap<String, Long> used = new ConcurrentHashMap<>();
+        @Override
+        public boolean tryAcquire(String rnd) {
+            long now = System.currentTimeMillis();
+            used.entrySet().removeIf(e -> e.getValue() < now);
+            return used.putIfAbsent(rnd, now + REPLAY_WINDOW_MS) == null;
+        }
+    }
+
+    /** Redis 实现（多实例部署）。SET rnd NX EX 300，原子去重 + 自动过期。 */
+    private static final class RedisReplayCache implements ReplayCache {
+        private final StringRedisTemplate redis;
+        RedisReplayCache(StringRedisTemplate redis) { this.redis = redis; }
+        @Override
+        public boolean tryAcquire(String rnd) {
+            Boolean ok = redis.opsForValue().setIfAbsent(
+                    "pdk:replay:" + rnd, "1", Duration.ofMillis(REPLAY_WINDOW_MS));
+            return Boolean.TRUE.equals(ok);
+        }
     }
 
     /** 判断一段字符串是否是加密信封（用于区分明文请求）。 */
@@ -72,8 +112,9 @@ public class BodyCryptoService {
         try {
             Map<String, Object> env = objectMapper.readValue(envelopeJson, Map.class);
             String kid = (String) env.get("kid");
-            if (!keyService.getKid().equals(kid)) {
-                throw new BusinessException(42901, "协议密钥版本不匹配，请重新拉取公钥配置");
+            PrivateKey priv = keyService.getPrivateKey(kid);
+            if (priv == null) {
+                throw new BusinessException(42901, "协议密钥版本不支持，请重新拉取公钥配置");
             }
             byte[] encKey = Base64.getDecoder().decode((String) env.get("enc"));
             byte[] iv = Base64.getDecoder().decode((String) env.get("iv"));
@@ -83,7 +124,7 @@ public class BodyCryptoService {
 
             // 1) RSA-OAEP 解包出一次性 AES 密钥
             Cipher rsa = Cipher.getInstance("RSA/ECB/OAEPWithSHA-256AndMGF1Padding");
-            rsa.init(Cipher.DECRYPT_MODE, keyService.getPrivateKey());
+            rsa.init(Cipher.DECRYPT_MODE, priv);
             byte[] aesKeyBytes = rsa.doFinal(encKey);
 
             // 2) AES-256-GCM 解密 body（data 尾部已含 16 字节认证标签）
@@ -98,10 +139,9 @@ public class BodyCryptoService {
             if (Math.abs(now - ts) > REPLAY_WINDOW_MS) {
                 throw new BusinessException(42902, "请求时间戳过期，可能存在重放攻击");
             }
-            if (rnd == null || usedNonces.putIfAbsent(rnd, now + REPLAY_WINDOW_MS) != null) {
+            if (rnd == null || !replayCache.tryAcquire(rnd)) {
                 throw new BusinessException(42903, "请求随机串重复，疑似重放攻击");
             }
-            cleanupExpiredNonces(now);
 
             return new DecryptResult(new String(plain, StandardCharsets.UTF_8),
                     new SecretKeySpec(aesKeyBytes, "AES"));
@@ -122,7 +162,7 @@ public class BodyCryptoService {
             byte[] data = aes.doFinal(plainJson.getBytes(StandardCharsets.UTF_8));
 
             Map<String, Object> env = new java.util.LinkedHashMap<>();
-            env.put("kid", keyService.getKid());
+            env.put("kid", keyService.getActiveKid());
             env.put("enc", Base64.getEncoder().encodeToString(aesKey.getEncoded()));
             env.put("iv", Base64.getEncoder().encodeToString(iv));
             env.put("data", Base64.getEncoder().encodeToString(data));
@@ -132,10 +172,6 @@ public class BodyCryptoService {
         } catch (Exception e) {
             throw new BusinessException(42905, "报文加密失败");
         }
-    }
-
-    private void cleanupExpiredNonces(long now) {
-        usedNonces.entrySet().removeIf(e -> e.getValue() < now);
     }
 
     /** 解密结果：明文 JSON 与本次会话 AES 密钥。 */

@@ -23,6 +23,8 @@ import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 客户端协议加密拦截：对 /api/v1/client 与 /api/v1/dispatch 下的接口，
@@ -38,6 +40,22 @@ public class ClientCryptoAdvice implements RequestBodyAdvice, ResponseBodyAdvice
     private static final ThreadLocal<Boolean> REQUEST_ENCRYPTED = new ThreadLocal<>();
     /** 请求线程内共享：本次会话 AES 密钥（响应复用，避免再做 RSA）。 */
     private static final ThreadLocal<javax.crypto.spec.SecretKeySpec> SESSION_KEY = new ThreadLocal<>();
+
+    /** 跨请求会话密钥缓存：按稳定身份（设备ID）存最近一次信封会话密钥，带 TTL。
+     *  用于让无 body 的 GET 响应也能被加密（方案 A：会话级加密判定）。 */
+    private static final ConcurrentHashMap<String, SessionKeyEntry> SESSION_KEYS = new ConcurrentHashMap<>();
+    private static final long SESSION_TTL_MS = 30L * 60 * 1000;
+
+    /** 会话密钥缓存条目（带过期时间）。 */
+    private static final class SessionKeyEntry {
+        final javax.crypto.spec.SecretKeySpec key;
+        final long expireAt;
+        SessionKeyEntry(javax.crypto.spec.SecretKeySpec k) {
+            this.key = k;
+            this.expireAt = System.currentTimeMillis() + SESSION_TTL_MS;
+        }
+        boolean expired() { return System.currentTimeMillis() > expireAt; }
+    }
 
     @Autowired
     public ClientCryptoAdvice(BodyCryptoService bodyCrypto, SystemConfigService configService) {
@@ -86,6 +104,8 @@ public class ClientCryptoAdvice implements RequestBodyAdvice, ResponseBodyAdvice
             BodyCryptoService.DecryptResult result = bodyCrypto.decryptEnvelope(rawStr);
             REQUEST_ENCRYPTED.set(true);
             SESSION_KEY.set(result.aesKey);
+            // 方案 A：把本次会话密钥按身份存入跨请求缓存，供后续 GET 响应加密使用
+            SESSION_KEYS.put(resolveIdentity(req), new SessionKeyEntry(result.aesKey));
             return wrap(result.plainText, inputMessage.getHeaders());
         } else {
             if ("force".equals(mode)) {
@@ -109,13 +129,31 @@ public class ClientCryptoAdvice implements RequestBodyAdvice, ResponseBodyAdvice
         REQUEST_ENCRYPTED.remove();
         javax.crypto.spec.SecretKeySpec sessionKey = SESSION_KEY.get();
         SESSION_KEY.remove();
-        if (!isProtectedPath(uri) || !Boolean.TRUE.equals(encrypted) || sessionKey == null) {
+        if (!isProtectedPath(uri)) {
+            return body;
+        }
+        javax.crypto.spec.SecretKeySpec responseKey = null;
+        if (Boolean.TRUE.equals(encrypted) && sessionKey != null) {
+            responseKey = sessionKey; // 本次请求即信封：用本次会话密钥加密响应
+        } else {
+            // 方案 A：查跨请求会话密钥缓存（GET / 无 body 请求也据此加密响应）
+            HttpServletRequest cur = currentRequest();
+            if (cur != null) {
+                String id = resolveIdentity(cur);
+                SessionKeyEntry entry = SESSION_KEYS.get(id);
+                if (entry != null) {
+                    if (entry.expired()) SESSION_KEYS.remove(id);
+                    else responseKey = entry.key;
+                }
+            }
+        }
+        if (responseKey == null) {
             return body;
         }
         try {
             String json = body instanceof String ? (String) body
                     : new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(body);
-            String envelope = bodyCrypto.encryptResponse(json, sessionKey);
+            String envelope = bodyCrypto.encryptResponse(json, responseKey);
             response.getHeaders().setContentType(MediaType.APPLICATION_JSON);
             return envelope;
         } catch (Exception e) {
@@ -137,6 +175,27 @@ public class ClientCryptoAdvice implements RequestBodyAdvice, ResponseBodyAdvice
                 return headers;
             }
         };
+    }
+
+    private static HttpServletRequest currentRequest() {
+        org.springframework.web.context.request.RequestAttributes attrs =
+                RequestContextHolder.getRequestAttributes();
+        if (attrs instanceof ServletRequestAttributes) {
+            return ((ServletRequestAttributes) attrs).getRequest();
+        }
+        return null;
+    }
+
+    private static String resolveIdentity(HttpServletRequest req) {
+        String dev = req.getHeader("X-PDK-Device-ID");
+        if (dev != null && !dev.isBlank()) return "dev:" + dev.trim();
+        try {
+            Object id = cn.dev33.satoken.stp.StpUtil.getLoginIdDefaultNull();
+            if (id != null) return "uid:" + id;
+        } catch (Exception ignored) {
+            // Sa-Token 未启用或请求未登录时忽略，退化为 IP
+        }
+        return "ip:" + req.getRemoteAddr();
     }
 
     private boolean isProtectedPath(String uri) {

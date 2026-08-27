@@ -215,6 +215,11 @@ public:
     // 留空则不校验；设置后 refreshCryptoConfig 拉到的公钥指纹不符会拒绝启用加密。
     void setPublicKeyPin(const std::string& fingerprint);
 
+    // 设置钉扎指纹的本地持久化文件路径（JSON: {"pin":"..."}）。
+    // 未显式 setPublicKeyPin 时，首次拉取成功会把指纹写入该文件（TOFU），
+    // 后续拉取比对；生产仍推荐用 setPublicKeyPin 预置指纹。
+    void setPinStorePath(const std::string& path);
+
 private:
     struct Impl;                 // PImpl：隐藏 libcurl / OpenSSL 细节
     std::unique_ptr<Impl> impl_;
@@ -228,12 +233,14 @@ private:
     void emitLog(const std::string& line);
 
     // 统一请求封装：发请求 -> 解析 CommonResult 信封 -> 触发请求/响应事件与调试日志
+    // retried 为内部重试标记（密钥错误自动重拉公钥后重试一次，防循环）。
     ApiResponse request(const std::string& method,
                         const std::string& path,
                         bool authenticated,
                         const std::string& bodyJson,
                         const std::string& query,
-                        const std::string& expectation);
+                        const std::string& expectation,
+                        bool retried = false);
 
     // 最近一次状态（便于无回调时轮询）
     State       lastState_ = State::Uninitialized;
