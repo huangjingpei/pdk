@@ -28,6 +28,8 @@ import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import com.pdk.platform.business.BusinessService;
+import com.pdk.platform.business.BusinessContext;
 
 @RestController
 @RequestMapping("/api/v1/admin/token")
@@ -35,6 +37,7 @@ import java.io.IOException;
 public class AdminTokenController {
     private final TokenPoolMapper tokenPoolMapper;
     private final AdminAuditService adminAuditService;
+    private final BusinessService businessService;
 
     @GetMapping("/list")
     @RequirePermission(RolePermissions.TOKEN_VIEW)
@@ -42,8 +45,12 @@ public class AdminTokenController {
                                                @RequestParam(defaultValue = "20") int size,
                                                @RequestParam(required = false) String status,
                                                @RequestParam(required = false) String keyword,
-                                               @RequestParam(required = false) Integer discarded) {
+                                               @RequestParam(required = false) Integer discarded,
+                                               @RequestParam(required = false) Long bizId,
+                                               @RequestParam(required = false) Long appId) {
         LambdaQueryWrapper<TokenPool> query = new LambdaQueryWrapper<>();
+        if (appId != null) bizId = businessService.requireByAppId(appId).getId();
+        if (bizId != null) query.eq(TokenPool::getBizId, bizId);
         if (status != null && !status.isBlank()) {
             query.eq(TokenPool::getHealthStatus, status);
         }
@@ -64,16 +71,20 @@ public class AdminTokenController {
     @RequirePermission(RolePermissions.TOKEN_EDIT)
     @Transactional(rollbackFor = Exception.class)
     public CommonResult<TokenPool> create(@Valid @RequestBody TokenResourceDTO dto, HttpServletRequest request) {
+        BusinessContext business = businessService.requireAvailableByAppId(dto.getAppId());
         TokenPool token = new TokenPool();
+        token.setBizId(business.bizId());
         token.setAccountAlias(dto.getAccountAlias());
         token.setTokenVal(dto.getTokenVal());
+        token.setCredentialType(dto.getCredentialType());
+        token.setCredentialPayload(dto.getTokenVal());
         token.setHealthStatus("HEALTHY");
         token.setDailyCallsCount(0);
         token.setDailyMaxCapacity(dto.getDailyMaxCapacity());
         token.setRiskScore(0);
         tokenPoolMapper.insert(token);
         AdminPrincipal admin = (AdminPrincipal) request.getAttribute("pdkAdminPrincipal");
-        adminAuditService.record(admin, "CREATE_TOKEN_RESOURCE", "ACCOUNT", token.getId().toString(), null,
+        adminAuditService.record(admin, token.getBizId(), "CREATE_TOKEN_RESOURCE", "ACCOUNT", token.getId().toString(), null,
                 "{\"alias\":\"" + token.getAccountAlias() + "\",\"capacity\":" + token.getDailyMaxCapacity() + "}",
                 "录入小号资源", request);
         maskSecret(token);
@@ -100,7 +111,7 @@ public class AdminTokenController {
         }
         tokenPoolMapper.updateById(token);
         AdminPrincipal admin = (AdminPrincipal) request.getAttribute("pdkAdminPrincipal");
-        adminAuditService.record(admin, "CHANGE_TOKEN_STATUS", "ACCOUNT", id.toString(),
+        adminAuditService.record(admin, token.getBizId(), "CHANGE_TOKEN_STATUS", "ACCOUNT", id.toString(),
                 "{\"status\":\"" + beforeStatus + "\"}", "{\"status\":\"" + status + "\"}",
                 "调整小号资源状态", request);
         return CommonResult.success("资源状态已更新");
@@ -110,8 +121,10 @@ public class AdminTokenController {
     @RequirePermission(RolePermissions.TOKEN_EDIT)
     @Transactional(rollbackFor = Exception.class)
     public CommonResult<Map<String, Object>> importTokens(@RequestParam("file") MultipartFile file,
+                                                          @RequestParam Long appId,
                                                           @RequestParam(defaultValue = "500") int dailyMaxCapacity,
                                                           HttpServletRequest request) throws IOException {
+        BusinessContext business = businessService.requireAvailableByAppId(appId);
         if (file.isEmpty()) {
             throw new BusinessException(40032, "上传文件为空");
         }
@@ -133,8 +146,11 @@ public class AdminTokenController {
                     skipped++; continue;
                 }
                 TokenPool t = new TokenPool();
+                t.setBizId(business.bizId());
                 t.setAccountAlias(alias);
                 t.setTokenVal(token);
+                t.setCredentialType("TOKEN");
+                t.setCredentialPayload(token);
                 t.setHealthStatus("HEALTHY");
                 t.setDailyCallsCount(0);
                 t.setDailyMaxCapacity(dailyMaxCapacity);
@@ -149,7 +165,7 @@ public class AdminTokenController {
         }
         tokenPoolMapper.batchInsert(list);
         AdminPrincipal admin = (AdminPrincipal) request.getAttribute("pdkAdminPrincipal");
-        adminAuditService.record(admin, "IMPORT_TOKEN_RESOURCE", "ACCOUNT", "batch",
+        adminAuditService.record(admin, business.bizId(), "IMPORT_TOKEN_RESOURCE", "ACCOUNT", "batch",
                 null, "{\"imported\":" + list.size() + ",\"skipped\":" + skipped + "}", "批量导入底层小号", request);
         Map<String, Object> result = new HashMap<>();
         result.put("imported", list.size());
@@ -180,7 +196,7 @@ public class AdminTokenController {
         token.setIsDiscarded(1);
         tokenPoolMapper.updateById(token);
         AdminPrincipal admin = (AdminPrincipal) request.getAttribute("pdkAdminPrincipal");
-        adminAuditService.record(admin, "DISCARD_TOKEN_RESOURCE", "ACCOUNT", id.toString(),
+        adminAuditService.record(admin, token.getBizId(), "DISCARD_TOKEN_RESOURCE", "ACCOUNT", id.toString(),
                 null, "{\"discarded\":1}", "逻辑废弃小号", request);
         return CommonResult.success("已逻辑废弃该小号（记录保留，不再参与调度）");
     }
@@ -193,7 +209,7 @@ public class AdminTokenController {
         token.setIsDiscarded(0);
         tokenPoolMapper.updateById(token);
         AdminPrincipal admin = (AdminPrincipal) request.getAttribute("pdkAdminPrincipal");
-        adminAuditService.record(admin, "RESTORE_TOKEN_RESOURCE", "ACCOUNT", id.toString(),
+        adminAuditService.record(admin, token.getBizId(), "RESTORE_TOKEN_RESOURCE", "ACCOUNT", id.toString(),
                 null, "{\"discarded\":0}", "恢复废弃小号", request);
         return CommonResult.success("已恢复该小号为可用状态");
     }
@@ -202,8 +218,10 @@ public class AdminTokenController {
         String value = token.getTokenVal();
         if (value == null || value.length() < 9) {
             token.setTokenVal("********");
+            token.setCredentialPayload("********");
             return;
         }
         token.setTokenVal(value.substring(0, 4) + "****" + value.substring(value.length() - 4));
+        token.setCredentialPayload("********");
     }
 }

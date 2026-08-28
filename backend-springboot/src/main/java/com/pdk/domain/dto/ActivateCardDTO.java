@@ -2,12 +2,16 @@ package com.pdk.domain.dto;
 
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
+import jakarta.validation.constraints.Positive;
 import lombok.Data;
 import java.math.BigDecimal;
 import jakarta.validation.constraints.DecimalMin;
 
 @Data
 public class ActivateCardDTO {
+
+    @Positive(message = "appId 必须为正整数")
+    private Long appId;
 
     @NotBlank(message = "卡密序列号不能为空")
     @Pattern(regexp = "^PDK-[A-Za-z0-9]{4}-[A-Za-z0-9]{4}-[A-Za-z0-9]{4}$", message = "卡密格式不合规 (正确示例: PDK-8891-2041-9982)")

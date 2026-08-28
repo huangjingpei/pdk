@@ -33,7 +33,13 @@ public class AdminAuditService {
 
     public void record(AdminPrincipal admin, String actionType, String targetType, String targetId,
                        String beforeState, String afterState, String reason, HttpServletRequest request) {
+        record(admin, null, actionType, targetType, targetId, beforeState, afterState, reason, request);
+    }
+
+    public void record(AdminPrincipal admin, Long bizId, String actionType, String targetType, String targetId,
+                       String beforeState, String afterState, String reason, HttpServletRequest request) {
         PdkAdminAuditLog log = new PdkAdminAuditLog();
+        log.setBizId(bizId);
         log.setAdminName(admin.username());
         log.setAdminRole(admin.roleCode());
         log.setActionType(actionType);

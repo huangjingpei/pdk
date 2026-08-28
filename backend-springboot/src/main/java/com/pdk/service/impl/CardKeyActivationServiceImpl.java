@@ -5,7 +5,6 @@ import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.pdk.common.exception.BusinessException;
 import com.pdk.domain.dto.ActivateCardDTO;
 import com.pdk.domain.dto.CreateCardBatchDTO;
-import com.pdk.domain.dto.TrialRegisterDTO;
 import com.pdk.domain.entity.*;
 import com.pdk.domain.vo.ActivationResultVO;
 import com.pdk.mapper.*;
@@ -13,7 +12,6 @@ import com.pdk.service.ICardKeyActivationService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -23,14 +21,13 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import com.pdk.platform.business.BusinessContext;
+import com.pdk.security.AdminPrincipal;
 
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class CardKeyActivationServiceImpl implements ICardKeyActivationService {
-
-    @Value("${pdk.security.trial-sms-code:888888}")
-    private String trialSmsCode;
 
     private final CardKeyMapper cardKeyMapper;
     private final FinancialIncomeMapper financialIncomeMapper;
@@ -41,11 +38,11 @@ public class CardKeyActivationServiceImpl implements ICardKeyActivationService {
 
     @Override
     @Transactional(rollbackFor = Exception.class, isolation = Isolation.READ_COMMITTED, propagation = Propagation.REQUIRED)
-    public ActivationResultVO activateCardKeyAtomic(ActivateCardDTO dto) {
+    public ActivationResultVO activateCardKeyAtomic(ActivateCardDTO dto, BusinessContext business) {
         log.info("开始处理卡密核销原子事务: cardKey={}, phone={}, deviceId={}", dto.getCardKey(), dto.getUserPhone(), dto.getDeviceId());
 
         // 1. 悲观行锁锁定卡密记录
-        CardKey cardKey = cardKeyMapper.selectOneForUpdate(dto.getCardKey());
+        CardKey cardKey = cardKeyMapper.selectOneForUpdate(business.bizId(), dto.getCardKey());
         if (cardKey == null) {
             throw new BusinessException(40001, "卡密不存在或输入有误");
         }
@@ -55,7 +52,7 @@ public class CardKeyActivationServiceImpl implements ICardKeyActivationService {
 
         // 2. 查询套餐模版
         PackagePlan pkg = packagePlanMapper.selectById(cardKey.getPackageId());
-        if (pkg == null) {
+        if (pkg == null || !business.bizIdEquals(pkg.getBizId())) {
             throw new BusinessException(40003, "卡密绑定的套餐模版不存在");
         }
         if (!"ACTIVE".equals(pkg.getStatus())) {
@@ -69,26 +66,17 @@ public class CardKeyActivationServiceImpl implements ICardKeyActivationService {
         }
 
         // 3. 查询或初始化用户
-        User user = userMapper.selectOne(new LambdaQueryWrapper<User>().eq(User::getPhone, dto.getUserPhone()));
+        User user = userMapper.selectOne(new LambdaQueryWrapper<User>()
+                .eq(User::getBizId, business.bizId()).eq(User::getPhone, dto.getUserPhone()));
         long activatedCardCount = cardKeyMapper.selectCount(new LambdaQueryWrapper<CardKey>()
+                .eq(CardKey::getBizId, business.bizId())
                 .eq(CardKey::getActivatedByPhone, dto.getUserPhone())
                 .eq(CardKey::getStatus, "ACTIVATED"));
         if (activatedCardCount > 0) {
             throw new BusinessException(40007, "该用户已有生效卡密；续费必须由代理在后台对原卡密办理");
         }
         if (user == null) {
-            user = new User();
-            user.setPhone(dto.getUserPhone());
-            user.setStatus("ACTIVE");
-            user.setDeviceId(dto.getDeviceId());
-            user.setCurrentPackageId(pkg.getId());
-            user.setCurrentPackageName(pkg.getName());
-            user.setExpireTime(LocalDateTime.now().plusHours(pkg.getDurationHours()));
-            user.setRemainingCalls(pkg.getAccountCount() * pkg.getCallsPerAccount());
-            user.setDailyCallsLimit(pkg.getAccountCount() * pkg.getCallsPerAccount());
-            user.setMaxAccounts(pkg.getAccountCount());
-            user.setIsTrialClaimed(0);
-            userMapper.insert(user);
+            throw new BusinessException(40100, "账号不存在；请先注册，或使用管理员提供的账号登录后再激活");
         } else {
             // 检查单设备绑定
             if (user.getDeviceId() != null && !user.getDeviceId().equals(dto.getDeviceId())) {
@@ -121,6 +109,7 @@ public class CardKeyActivationServiceImpl implements ICardKeyActivationService {
                 .eq(CardKey::getStatus, "UNUSED")
                 .set(CardKey::getStatus, "ACTIVATED")
                 .set(CardKey::getActivatedByPhone, dto.getUserPhone())
+                .set(CardKey::getActivatedByUserId, user.getId())
                 .set(CardKey::getActivatedDeviceId, dto.getDeviceId())
                 .set(CardKey::getActivatedAt, LocalDateTime.now()));
 
@@ -134,6 +123,8 @@ public class CardKeyActivationServiceImpl implements ICardKeyActivationService {
         BigDecimal discount = pkg.getListPrice().subtract(actualAmount).max(BigDecimal.ZERO);
 
         FinancialIncome income = new FinancialIncome();
+        income.setBizId(business.bizId());
+        income.setUserId(user.getId());
         income.setIncomeOrderNo(incomeOrderNo);
         income.setCardKeyId(cardKey.getId());
         income.setCardKey(cardKey.getCardKey());
@@ -153,6 +144,7 @@ public class CardKeyActivationServiceImpl implements ICardKeyActivationService {
 
         // 6. 写入审计日志
         PdkAdminAuditLog auditLog = new PdkAdminAuditLog();
+        auditLog.setBizId(business.bizId());
         auditLog.setAdminName(cardKey.getGeneratedByAdmin());
         auditLog.setAdminRole("AGENT");
         auditLog.setActionType("ACTIVATE_CARD");
@@ -182,59 +174,7 @@ public class CardKeyActivationServiceImpl implements ICardKeyActivationService {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public ActivationResultVO registerTrialAccount(TrialRegisterDTO dto) {
-        if (!trialSmsCode.equals(dto.getSmsCode())) {
-            throw new BusinessException(40011, "短信验证码错误或已失效");
-        }
-        User existUser = userMapper.selectOne(new LambdaQueryWrapper<User>().eq(User::getPhone, dto.getPhone()));
-        if (existUser != null && existUser.getIsTrialClaimed() != null && existUser.getIsTrialClaimed() == 1) {
-            throw new BusinessException(40010, "该手机号已领取过新人1天20次试用体验，不可重复领取");
-        }
-
-        if (existUser == null) {
-            existUser = new User();
-            existUser.setPhone(dto.getPhone());
-            existUser.setStatus("TRIAL");
-            existUser.setDeviceId(dto.getDeviceId());
-            existUser.setCurrentPackageId(0);
-            existUser.setCurrentPackageName("新人1天体验版 (1账号×20次/天)");
-            existUser.setExpireTime(LocalDateTime.now().plusDays(1));
-            existUser.setRemainingCalls(20);
-            existUser.setDailyCallsLimit(20);
-            existUser.setMaxAccounts(1);
-            existUser.setIsTrialClaimed(1);
-            userMapper.insert(existUser);
-        } else {
-            if (existUser.getDeviceId() != null && !existUser.getDeviceId().equals(dto.getDeviceId())) {
-                throw new BusinessException(40103, "账号已绑定其他电脑，请先解绑后再领取试用");
-            }
-            existUser.setStatus("TRIAL");
-            if (existUser.getDeviceId() == null) {
-                existUser.setDeviceId(dto.getDeviceId());
-            }
-            existUser.setCurrentPackageName("新人1天体验版 (1账号×20次/天)");
-            existUser.setExpireTime(LocalDateTime.now().plusDays(1));
-            existUser.setRemainingCalls(20);
-            existUser.setDailyCallsLimit(20);
-            existUser.setMaxAccounts(1);
-            existUser.setIsTrialClaimed(1);
-            userMapper.updateById(existUser);
-        }
-
-        return ActivationResultVO.builder()
-                .userPhone(dto.getPhone())
-                .packageName("新人1天体验版 (1账号×20次/天)")
-                .newExpireTime(existUser.getExpireTime())
-                .extendedDays(1)
-                .totalRemainingCalls(20)
-                .totalAddedCalls(20)
-                .queueActionType("TRIAL_CLAIMED")
-                .build();
-    }
-
-    @Override
-    @Transactional(rollbackFor = Exception.class)
-    public List<String> createCardKeyBatch(CreateCardBatchDTO dto, String operatorAdmin) {
+    public List<String> createCardKeyBatch(CreateCardBatchDTO dto, AdminPrincipal operator) {
         List<String> keys = new ArrayList<>();
         PackagePlan pkg = packagePlanMapper.selectById(dto.getPackageId());
         if (pkg == null) {
@@ -243,11 +183,12 @@ public class CardKeyActivationServiceImpl implements ICardKeyActivationService {
         if (!"ACTIVE".equals(pkg.getStatus())) {
             throw new BusinessException(40021, "套餐模版已停用");
         }
-        if (pkg.getOwnerUserId() != null) {
-            User owner = userMapper.selectOne(new LambdaQueryWrapper<User>().eq(User::getPhone, operatorAdmin));
-            if (owner == null || !pkg.getOwnerUserId().equals(owner.getId())) {
-                throw new BusinessException(40310, "不能使用其他代理创建的套餐制卡");
-            }
+        if (!operator.isSuperAdmin() && !pkg.getBizId().equals(operator.bizId())) {
+            throw new BusinessException(40311, "代理不能为其他业务制卡");
+        }
+        if (!operator.isSuperAdmin() && pkg.getOwnerUserId() != null
+                && !pkg.getOwnerUserId().equals(operator.id())) {
+            throw new BusinessException(40310, "不能使用其他代理创建的套餐制卡");
         }
 
         for (int i = 0; i < dto.getCount(); i++) {
@@ -255,10 +196,11 @@ public class CardKeyActivationServiceImpl implements ICardKeyActivationService {
             String formattedKey = randomKey.substring(0, 8) + "-" + randomKey.substring(8, 12) + "-" + randomKey.substring(12, 16);
 
             CardKey ck = new CardKey();
+            ck.setBizId(pkg.getBizId());
             ck.setCardKey(formattedKey);
             ck.setPackageId(dto.getPackageId());
             ck.setStatus("UNUSED");
-            ck.setGeneratedByAdmin(operatorAdmin);
+            ck.setGeneratedByAdmin(operator.username());
             cardKeyMapper.insert(ck);
             keys.add(formattedKey);
         }

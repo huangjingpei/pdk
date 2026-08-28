@@ -66,17 +66,19 @@ sdk/
 tokenName: tokenValue          # 例如 satoken: xxxxx
 X-PDK-Phone: 13800138000
 X-PDK-Device-ID: CPP-xxxxxxxx  # 设备标识（方案A）
+X-PDK-App-ID: 1                # 公开业务标识；PDD=1
 ```
 
 ### 3.4 接口清单
 
 | 方法 | 接口 | 说明 |
 | :-- | :-- | :-- |
+| GET  | `/api/v1/client/business/by-app/{appId}` | 登录前业务名称、注册策略、状态和支持动作 |
 | POST | `/api/v1/client/auth/sms/send` | 发短信验证码 |
 | POST | `/api/v1/client/auth/register` | 注册（试用 1 天） |
 | POST | `/api/v1/client/auth/login` | 登录（含设备校验） |
 | POST | `/api/v1/client/auth/logout` | 注销 |
-| POST | `/api/v1/client/auth/unbind-device` | 解绑会话（保留 deviceId） |
+| POST | `/api/v1/client/auth/unbind-device` | 解绑电脑（清空服务端 deviceId，可换新电脑） |
 | POST | `/api/v1/client/auth/change-password` | 改密 |
 | POST | `/api/v1/card/activate` | 卡密核销（开放） |
 | POST | `/api/v1/dispatch/acquire-token` | 申请加密短效 Token |

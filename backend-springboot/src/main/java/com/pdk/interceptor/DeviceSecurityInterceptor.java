@@ -4,6 +4,8 @@ import cn.dev33.satoken.stp.StpLogic;
 import com.pdk.common.exception.BusinessException;
 import com.pdk.domain.entity.User;
 import com.pdk.mapper.UserMapper;
+import com.pdk.platform.business.BusinessRequestResolver;
+import com.pdk.platform.business.BusinessContext;
 import com.pdk.service.DeviceBindingService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -22,6 +24,7 @@ public class DeviceSecurityInterceptor implements HandlerInterceptor {
     private final StpLogic clientStpLogic;
     private final UserMapper userMapper;
     private final DeviceBindingService deviceBindingService;
+    private final BusinessRequestResolver businessRequestResolver;
 
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) {
@@ -29,11 +32,16 @@ public class DeviceSecurityInterceptor implements HandlerInterceptor {
             return true;
         }
 
+        BusinessContext business = businessRequestResolver.resolveContextAndBind(request, null);
         clientStpLogic.checkLogin();
         User user = userMapper.selectById(clientStpLogic.getLoginIdAsLong());
         if (user == null || "FROZEN".equals(user.getStatus())) {
             clientStpLogic.logout();
             throw new BusinessException(40100, "客户端账号不存在或已冻结");
+        }
+        if (!business.bizIdEquals(user.getBizId())) {
+            clientStpLogic.logout();
+            throw new BusinessException(40106, "登录会话不属于当前 appId 对应业务");
         }
 
         String userPhone = request.getHeader("X-PDK-Phone");
@@ -47,14 +55,14 @@ public class DeviceSecurityInterceptor implements HandlerInterceptor {
             throw new BusinessException(40102, "登录会话与请求手机号不一致");
         }
         String persistedDeviceId = user.getDeviceId();
-        String cachedDeviceId = deviceBindingService.get(userPhone);
+        String cachedDeviceId = deviceBindingService.get(user.getBizId(), user.getId());
         String activeDeviceId = cachedDeviceId != null ? cachedDeviceId : persistedDeviceId;
         if (activeDeviceId == null || !activeDeviceId.equals(currentDeviceId)) {
             log.warn("单设备互踢触发: phone={}, active={}, incoming={}", userPhone, activeDeviceId, currentDeviceId);
             throw new BusinessException(40103, "ERR_DEVICE_KICK_OUT: 账号已在其他电脑登录，本设备已被迫下线");
         }
 
-        deviceBindingService.bind(userPhone, currentDeviceId);
+        deviceBindingService.bind(user.getBizId(), user.getId(), currentDeviceId);
         request.setAttribute("pdkClientUser", user);
         return true;
     }

@@ -1,4 +1,4 @@
-# 拼多多采集与分发云控商业化平台 - 客户端对接开发指南 (V1.0 Enterprise)
+# 多业务云控商业化平台 - 客户端对接开发指南 (V2.0)
 
 本文档面向 **桌面采集客户端 / 机器人脚本 / 第三方集成开发者**，详细阐述客户端如何接入拼多多云控商业化平台，完成卡密核销、单设备安全认证、AES-128-GCM 加密调度、短效 Token 租借与免责自愈上报。
 
@@ -30,7 +30,7 @@
 | 服务端: 卡密与财务核心系统  | ------------> | MySQL (pdk_card_key + 独立财务表)   |
 +-----------------------------+               +-------------------------------------+
         |
-        | (2) 携带 X-PDK-Phone + X-PDK-Device-ID 申请短效 Token
+        | (2) 携带 X-PDK-App-ID + X-PDK-Phone + X-PDK-Device-ID 申请短效 Token
         v
 +-----------------------------+               +-------------------------------------+
 | 服务端: 安全网关调度中心    | ------------> | Redis (单机互踢 / 5分钟租约 / 槽位) |
@@ -67,14 +67,25 @@
 
 服务端基础路径：`http://api.yourdomain.com` (本地调试: `http://localhost:8080`)
 
+### 3.0 启动时读取业务能力
+
+- **接口路径**：`GET /api/v1/client/business/by-app/{appId}`
+- **说明**：登录前读取业务名称、描述、`registrationMode`、`effectiveStatus` 和 `supportedActions`。
+- `SELF_SERVICE`：客户端可显示短信注册；`ADMIN_ONLY`：隐藏/禁用短信注册，只显示管理员交付账号的登录入口。
+- 生产客户端从构建配置固定 appId；URL 不按业务拆分。调试客户端才允许切换 appId。
+
+所有请求发送 `X-PDK-App-ID`。有请求体的认证/卡密接口还要在 body 中发送同一个 `appId`，服务端会拒绝 Header/Body 不一致。
+
 ### 3.1 新人 1 天体验试用注册
 - **接口路径**: `POST /api/v1/client/auth/register`
-- **说明**: 手机号新用户领取 1 天体验版（系统规格：1 个买家账号，20 次/天）。
-- **前置条件**: 注册前需先调用 `POST /api/v1/client/auth/sms/send`（body: `{"phone":"13800138000","purpose":"REGISTER"}`）获取短信验证码 `smsCode`。
+- **业务标识**: Header `X-PDK-App-ID: 1`，请求体同时包含 `"appId": 1`；兼容期缺省按 PDD=1。
+- **说明**: 仅 `SELF_SERVICE` 业务可用；试用时长、账号数和次数由对应业务后台配置，不再硬编码 1 天/20 次。
+- **前置条件**: 注册前需先调用 `POST /api/v1/client/auth/sms/send`（body: `{"appId":1,"phone":"13800138000","purpose":"REGISTER"}`）获取短信验证码 `smsCode`。
 
 **请求报文 (Request Body):**
 ```json
 {
+  "appId": 1,
   "phone": "13800138000",
   "password": "您的登录密码",
   "smsCode": "882103",
@@ -86,15 +97,20 @@
 ```json
 {
   "code": 200,
-  "message": "新人1天体验权益已激活",
+  "message": "注册成功，免费试用已开通",
   "data": {
-    "userPhone": "13800138000",
-    "packageName": "新人1天体验版 (1账号×20次/天)",
-    "newExpireTime": "2026-08-16 15:00:00",
-    "extendedDays": 1,
-    "totalRemainingCalls": 20,
-    "totalAddedCalls": 20,
-    "queueActionType": "TRIAL_CLAIMED"
+    "bizId": 1,
+    "appId": 1,
+    "bizCode": "PDD",
+    "businessName": "拼多多业务",
+    "tokenName": "satoken",
+    "tokenValue": "...",
+    "phone": "13800138000",
+    "deviceId": "MAC-00-1B-44-11-3A-B7",
+    "status": "TRIAL",
+    "remainingCalls": 20,
+    "resourceAllocated": true,
+    "mustChangePassword": false
   },
   "timestamp": 1771120019283
 }
@@ -109,6 +125,7 @@
 **请求报文 (Request Body):**
 ```json
 {
+  "appId": 1,
   "cardKey": "PDK-8891-2041-9982",
   "userPhone": "13800138000",
   "deviceId": "MAC-00-1B-44-11-3A-B7",
@@ -145,6 +162,7 @@
 - **请求头 (Headers - 必须携带)**:
   - `X-PDK-Phone`: 用户手机号 (例如: `13800138000`)
   - `X-PDK-Device-ID`: 物理机 UUID (例如: `MAC-00-1B-44-11-3A-B7`)
+  - `X-PDK-App-ID`: 客户端固定业务标识（PDD 为 `1`）
 
 **请求报文 (Request Body):**
 ```json

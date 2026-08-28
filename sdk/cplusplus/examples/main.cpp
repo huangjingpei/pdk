@@ -25,6 +25,7 @@ int main(int argc, char** argv) {
     std::string smsCode  = argc > 4 ? argv[4] : "123456";
 
     Config cfg;
+    cfg.appId  = 1; // PDD 客户端固定 appId=1
     cfg.baseUrl        = baseUrl;
     cfg.enableDebugLog = true;   // 打开后会在 log 回调里看到 [请求]/[响应]/[期待]
 
@@ -45,10 +46,16 @@ int main(int argc, char** argv) {
         std::cout << "[调试] " << line << "\n";
     });
 
+    auto r = client.businessInfo();
+    if (!r.ok()) {
+        std::cout << "当前业务不可用: code=" << r.code << " msg=" << r.message << "\n";
+        return 1;
+    }
+
     //std::cout << "== 设备ID: " << client.deviceId() << " ==\n";
 
     // —— 发送短信验证码 ——
-    auto r = client.sendSms(phone, "REGISTER");
+    r = client.sendSms(phone, "REGISTER");
     if (!r.ok()) {
         std::cout << "发送短信失败: code=" << r.code << " msg=" << r.message << "\n";
         return 1;

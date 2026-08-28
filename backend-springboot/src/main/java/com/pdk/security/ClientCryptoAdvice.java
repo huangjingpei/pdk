@@ -27,7 +27,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * 客户端协议加密拦截：对 /api/v1/client 与 /api/v1/dispatch 下的接口，
+ * 客户端协议加密拦截：对 /api/v1/client、/api/v1/dispatch 与 /api/v1/card 下的接口，
  * 在请求侧解密信封、响应侧按"请求是否加密"决定是否加密返回。对业务 Controller 零侵入。
  */
 @RestControllerAdvice
@@ -41,7 +41,7 @@ public class ClientCryptoAdvice implements RequestBodyAdvice, ResponseBodyAdvice
     /** 请求线程内共享：本次会话 AES 密钥（响应复用，避免再做 RSA）。 */
     private static final ThreadLocal<javax.crypto.spec.SecretKeySpec> SESSION_KEY = new ThreadLocal<>();
 
-    /** 跨请求会话密钥缓存：按稳定身份（设备ID）存最近一次信封会话密钥，带 TTL。
+    /** 跨请求会话密钥缓存：按 appId + 稳定身份（设备ID）存最近一次信封会话密钥，带 TTL。
      *  用于让无 body 的 GET 响应也能被加密（方案 A：会话级加密判定）。 */
     private static final ConcurrentHashMap<String, SessionKeyEntry> SESSION_KEYS = new ConcurrentHashMap<>();
     private static final long SESSION_TTL_MS = 30L * 60 * 1000;
@@ -187,19 +187,23 @@ public class ClientCryptoAdvice implements RequestBodyAdvice, ResponseBodyAdvice
     }
 
     private static String resolveIdentity(HttpServletRequest req) {
+        String appId = req.getHeader("X-PDK-App-ID");
+        String appScope = (appId == null || appId.isBlank()) ? "1" : appId.trim();
         String dev = req.getHeader("X-PDK-Device-ID");
-        if (dev != null && !dev.isBlank()) return "dev:" + dev.trim();
+        if (dev != null && !dev.isBlank()) return "app:" + appScope + ":dev:" + dev.trim();
         try {
             Object id = cn.dev33.satoken.stp.StpUtil.getLoginIdDefaultNull();
-            if (id != null) return "uid:" + id;
+            if (id != null) return "app:" + appScope + ":uid:" + id;
         } catch (Exception ignored) {
             // Sa-Token 未启用或请求未登录时忽略，退化为 IP
         }
-        return "ip:" + req.getRemoteAddr();
+        return "app:" + appScope + ":ip:" + req.getRemoteAddr();
     }
 
     private boolean isProtectedPath(String uri) {
-        return uri != null && (uri.startsWith("/api/v1/client") || uri.startsWith("/api/v1/dispatch"));
+        return uri != null && (uri.startsWith("/api/v1/client")
+                || uri.startsWith("/api/v1/dispatch")
+                || uri.startsWith("/api/v1/card"));
     }
 
     @Override

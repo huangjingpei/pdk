@@ -17,6 +17,8 @@ import org.springframework.web.bind.annotation.*;
 @RequiredArgsConstructor
 public class AdminSalesController {
     private final FinancialIncomeMapper incomeMapper;
+    private final com.pdk.platform.business.BusinessService businessService;
+    private final com.pdk.security.AdminBusinessScope businessScope;
 
     @GetMapping("/list")
     @RequirePermission(RolePermissions.SALES_VIEW)
@@ -25,9 +27,14 @@ public class AdminSalesController {
             @RequestParam(defaultValue = "10") int size,
             @RequestParam(required = false) String orderType,
             @RequestParam(required = false) String searchKey,
+            @RequestParam(required = false) Long bizId,
+            @RequestParam(required = false) Long appId,
             HttpServletRequest request) {
         AdminPrincipal principal = (AdminPrincipal) request.getAttribute("pdkAdminPrincipal");
         LambdaQueryWrapper<FinancialIncome> query = new LambdaQueryWrapper<>();
+        if (appId != null) bizId = businessService.requireByAppId(appId).getId();
+        bizId = businessScope.enforce(principal, bizId);
+        if (bizId != null) query.eq(FinancialIncome::getBizId, bizId);
         if (!principal.isSuperAdmin()) query.eq(FinancialIncome::getAuditAdmin, principal.username());
         if (orderType != null && !orderType.isBlank()) query.eq(FinancialIncome::getOrderType, orderType);
         if (searchKey != null && !searchKey.isBlank()) {

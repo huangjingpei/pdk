@@ -27,25 +27,29 @@ class ResourceLeaseServiceTest {
         when(redisTemplate.opsForHash()).thenReturn(hashOperations);
         ResourceLeaseService service = service();
 
-        service.create("TRACE-1", new ResourceLeaseService.LeaseInfo(9L, "13800138000", "slot-9", "DETAIL_QUERY"));
+        service.create("TRACE-1", new ResourceLeaseService.LeaseInfo(
+                2L, 7L, 9L, "13800138000", "slot-9", "DETAIL_QUERY", 11L, 1));
 
-        verify(hashOperations).putAll(eq("pdk:lease:TRACE-1"), any(Map.class));
-        verify(redisTemplate).expire("pdk:lease:TRACE-1", Duration.ofSeconds(300));
+        verify(hashOperations).putAll(eq("pdk:lease:2:TRACE-1"), any(Map.class));
+        verify(redisTemplate).expire("pdk:lease:2:TRACE-1", Duration.ofSeconds(300));
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})
     @Test
     void consumeParsesAtomicLuaResultAndMissingLease() {
         when(redisTemplate.execute(any(RedisScript.class), anyList(), any(Object[].class)))
-                .thenReturn(List.of("tokenId", "9", "phone", "13800138000", "accountAlias", "slot-9", "actionType", "DETAIL_QUERY"))
+                .thenReturn(List.of("bizId", "2", "userId", "7", "tokenId", "9", "phone", "13800138000",
+                        "accountAlias", "slot-9", "actionType", "DETAIL_QUERY", "assignmentId", "11", "slotIndex", "1"))
                 .thenReturn(List.of());
         ResourceLeaseService service = service();
 
-        ResourceLeaseService.LeaseInfo lease = service.consume("TRACE-1", "13800138000");
+        ResourceLeaseService.LeaseInfo lease = service.consume(2L, "TRACE-1", 7L);
         assertNotNull(lease);
         assertEquals(9L, lease.tokenId());
         assertEquals("slot-9", lease.accountAlias());
-        assertNull(service.consume("TRACE-MISSING", "13800138000"));
+        assertEquals(2L, lease.bizId());
+        assertEquals(7L, lease.userId());
+        assertNull(service.consume(2L, "TRACE-MISSING", 7L));
     }
 
     private ResourceLeaseService service() {

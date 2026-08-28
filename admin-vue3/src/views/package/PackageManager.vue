@@ -1,7 +1,8 @@
 <template>
   <div>
-    <div class="header"><div><h2>套餐版本中心</h2><p>任一价格、折扣、时间、账号数或次数变化，都创建新版本；历史版本只能停用。</p></div><el-button type="primary" @click="dialog=true">创建套餐版本</el-button></div>
+    <div class="header"><div><h2>套餐版本中心</h2><p>任一价格、折扣、时间、账号数或次数变化，都创建新版本；历史版本只能停用。</p></div><div><el-select v-model="bizId" clearable placeholder="全部业务" style="width:180px;margin-right:8px" @change="load"><el-option v-for="b in businesses" :key="b.bizId" :label="`${b.businessName} (${b.appId})`" :value="b.bizId" /></el-select><el-button type="primary" @click="openCreate">创建套餐版本</el-button></div></div>
     <el-table :data="rows" border stripe>
+      <el-table-column label="业务" width="140"><template #default="s">{{ businessName(s.row.bizId) }}</template></el-table-column>
       <el-table-column prop="name" label="套餐" />
       <el-table-column prop="versionNo" label="版本" width="80" />
       <el-table-column prop="listPrice" label="原价" width="90" />
@@ -15,6 +16,7 @@
     </el-table>
     <el-dialog v-model="dialog" title="创建新的不可变套餐版本" width="520px">
       <el-form :model="form" label-width="110px">
+        <el-form-item label="所属业务"><el-select v-model="form.appId" style="width:100%"><el-option v-for="b in availableBusinesses" :key="b.appId" :label="`${b.businessName} (appId=${b.appId})`" :value="b.appId" /></el-select></el-form-item>
         <el-form-item label="名称"><el-input v-model="form.name" /></el-form-item>
         <el-form-item label="原价"><el-input-number v-model="form.listPrice" :min="0.01" :precision="2" /></el-form-item>
         <el-form-item label="折扣百分比"><el-input-number v-model="form.discountRate" :min="0.01" :max="100" :precision="2" /></el-form-item>
@@ -28,15 +30,19 @@
   </div>
 </template>
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue';
+import { computed, onMounted, reactive, ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import { api, type ApiResult } from '../../api';
-interface Plan { id:number; name:string; versionNo:number; listPrice:number; discountRate:number; salePrice:number; durationHours:number; accountCount:number; callsPerAccount:number; status:string }
+import type { BusinessRuntime } from '../../types';
+interface Plan { id:number; bizId:number; name:string; versionNo:number; listPrice:number; discountRate:number; salePrice:number; durationHours:number; accountCount:number; callsPerAccount:number; status:string }
 const rows=ref<Plan[]>([]); const dialog=ref(false);
-const form=reactive({name:'月度套餐',listPrice:200,discountRate:100,durationHours:720,accountCount:1,callsPerAccount:100,description:''});
-async function load(){try{const r=await api.get<ApiResult<Plan[]>>('/api/v1/admin/package/list');rows.value=r.data.data}catch(e){ElMessage.error(e instanceof Error?e.message:'加载失败')}}
+const businesses=ref<BusinessRuntime[]>([]); const bizId=ref<number|''>(''); const availableBusinesses=computed(()=>businesses.value.filter(b=>b.effectiveStatus==='AVAILABLE'));
+const form=reactive({appId:1,name:'月度套餐',listPrice:200,discountRate:100,durationHours:720,accountCount:1,callsPerAccount:100,description:''});
+async function load(){try{const r=await api.get<ApiResult<Plan[]>>('/api/v1/admin/package/list',{params:{bizId:bizId.value||undefined}});rows.value=r.data.data}catch(e){ElMessage.error(e instanceof Error?e.message:'加载失败')}}
+function businessName(id:number){return businesses.value.find(b=>b.bizId===id)?.businessName||`业务#${id}`}
+function openCreate(){form.appId=availableBusinesses.value[0]?.appId||1;dialog.value=true}
 async function create(){try{await api.post('/api/v1/admin/package',form);dialog.value=false;ElMessage.success('套餐版本已创建');await load()}catch(e){ElMessage.error(e instanceof Error?e.message:'创建失败')}}
 async function disable(id:number){try{await api.put(`/api/v1/admin/package/${id}/disable`);await load()}catch(e){ElMessage.error(e instanceof Error?e.message:'停用失败')}}
-onMounted(load);
+onMounted(async()=>{const b=await api.get<ApiResult<BusinessRuntime[]>>('/api/v1/admin/business/list');businesses.value=b.data.data;await load()});
 </script>
 <style scoped>.header{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}h2{margin:0}p{color:#64748b;font-size:13px}</style>

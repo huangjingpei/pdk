@@ -22,6 +22,9 @@
           <el-option label="试用 (TRIAL)" value="TRIAL" />
           <el-option label="冻结 (FROZEN)" value="FROZEN" />
         </el-select>
+        <el-select v-model="businessFilter" placeholder="全部业务" clearable style="width: 180px" @change="onSearch">
+          <el-option v-for="b in businesses" :key="b.bizId" :label="`${b.businessName} (${b.appId})`" :value="b.bizId" />
+        </el-select>
         <el-button type="primary" :icon="Search" @click="onSearch">搜索</el-button>
         <el-button :icon="RefreshLeft" @click="resetFilter">重置</el-button>
         <span class="text-xs text-slate-400 ml-auto">共 {{ total }} 条</span>
@@ -30,6 +33,9 @@
 
     <el-card shadow="never" class="border-slate-200">
       <el-table v-loading="loading" :data="rows" border stripe style="width: 100%">
+        <el-table-column label="业务" width="180">
+          <template #default="scope"><div>{{ scope.row.businessName }} <el-tag size="small">appId={{ scope.row.appId }}</el-tag></div><div class="biz-desc">{{ scope.row.businessDescription || '-' }}</div></template>
+        </el-table-column>
         <el-table-column prop="phone" label="手机号" width="130" />
         <el-table-column prop="status" label="状态" width="100">
           <template #default="scope">
@@ -39,6 +45,8 @@
           </template>
         </el-table-column>
         <el-table-column prop="roleCode" label="身份" width="100" />
+        <el-table-column label="账号来源" width="105"><template #default="s">{{ s.row.accountSource === 'ADMIN_CREATED' ? '管理员创建' : '自助注册' }}</template></el-table-column>
+        <el-table-column label="首次改密" width="90"><template #default="s"><el-tag :type="s.row.mustChangePassword ? 'warning' : 'success'" size="small">{{ s.row.mustChangePassword ? '待修改' : '已完成' }}</el-tag></template></el-table-column>
         <el-table-column prop="invitationCode" label="代理邀请码" width="130" />
         <el-table-column prop="invitedByPhone" label="邀请代理" width="130" />
         <el-table-column prop="currentPackageName" label="套餐" min-width="170" />
@@ -75,11 +83,14 @@
     <!-- 新增用户对话框 -->
     <el-dialog v-model="createVisible" title="新增客户端用户" width="460px">
       <el-form :model="createForm" label-width="96px">
+        <el-form-item label="所属业务" required>
+          <el-select v-model="createForm.appId" style="width:100%"><el-option v-for="b in availableBusinesses" :key="b.appId" :label="`${b.businessName} (${b.bizCode}, appId=${b.appId})`" :value="b.appId" /></el-select>
+        </el-form-item>
         <el-form-item label="手机号" required>
           <el-input v-model="createForm.phone" placeholder="11 位手机号" maxlength="11" />
         </el-form-item>
         <el-form-item label="初始密码" required>
-          <el-input v-model="createForm.password" type="password" show-password placeholder="6-32 位" />
+          <el-input v-model="createForm.password" type="password" show-password placeholder="8-64 位" />
         </el-form-item>
         <el-form-item label="预绑设备ID">
           <el-input v-model="createForm.deviceId" placeholder="可选，留空则登录时绑定" />
@@ -180,7 +191,7 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import { Plus, Search, Refresh, RefreshLeft } from '@element-plus/icons-vue';
 import { api, type ApiResult, type PageResult } from '../../api';
 import { hasPermission, authState } from '../../auth';
-import type { ClientUser, PackagePlanLite, UserAssignmentDetail } from '../../types';
+import type { ClientUser, PackagePlanLite, UserAssignmentDetail, BusinessRuntime } from '../../types';
 
 const rows = ref<ClientUser[]>([]);
 const loading = ref(false);
@@ -189,6 +200,9 @@ const page = ref(1);
 const pageSize = ref(20);
 const keyword = ref('');
 const statusFilter = ref('');
+const businessFilter = ref<number | ''>('');
+const businesses = ref<BusinessRuntime[]>([]);
+const availableBusinesses = computed(() => businesses.value.filter(b => b.effectiveStatus === 'AVAILABLE'));
 
 const canEdit = computed(() => hasPermission('user:edit'));
 const canUnbind = computed(() => hasPermission('user:unbind'));
@@ -203,6 +217,7 @@ async function load(p = 1): Promise<void> {
     const params: Record<string, unknown> = { page: p, size: pageSize.value };
     if (keyword.value.trim()) params.keyword = keyword.value.trim();
     if (statusFilter.value) params.status = statusFilter.value;
+    if (businessFilter.value) params.bizId = businessFilter.value;
     const response = await api.get<ApiResult<PageResult<ClientUser>>>('/api/v1/admin/user/list', { params });
     rows.value = response.data.data.records;
     total.value = response.data.data.total;
@@ -214,17 +229,17 @@ async function load(p = 1): Promise<void> {
 }
 
 function onSearch(): void { load(1); }
-function resetFilter(): void { keyword.value = ''; statusFilter.value = ''; load(1); }
+function resetFilter(): void { keyword.value = ''; statusFilter.value = ''; businessFilter.value = ''; load(1); }
 const onPageChange = (p: number) => load(p);
 const onSizeChange = (s: number) => { pageSize.value = s; load(1); };
 
 // ---- 新增用户 ----
 const createVisible = ref(false);
 const creating = ref(false);
-const createForm = ref({ phone: '', password: '', deviceId: '' });
+const createForm = ref({ appId: 1, phone: '', password: '', deviceId: '' });
 
 function openCreate(): void {
-  createForm.value = { phone: '', password: '', deviceId: '' };
+  createForm.value = { appId: availableBusinesses.value[0]?.appId || 1, phone: '', password: '', deviceId: '' };
   createVisible.value = true;
 }
 
@@ -233,8 +248,8 @@ async function submitCreate(): Promise<void> {
     ElMessage.error('请输入正确的 11 位手机号');
     return;
   }
-  if (createForm.value.password.length < 6) {
-    ElMessage.error('初始密码至少 6 位');
+  if (createForm.value.password.length < 8) {
+    ElMessage.error('初始密码至少 8 位');
     return;
   }
   creating.value = true;
@@ -280,7 +295,7 @@ async function openAdjust(row: ClientUser): Promise<void> {
   adjustTarget.value = row;
   adjustForm.value = { id: row.id, packagePlanId: null, extraCalls: 0, extendDays: 0 };
   try {
-    const res = await api.get<ApiResult<PackagePlanLite[]>>('/api/v1/admin/package/list?status=ACTIVE');
+    const res = await api.get<ApiResult<PackagePlanLite[]>>('/api/v1/admin/package/list', { params: { status: 'ACTIVE', bizId: row.bizId } });
     plans.value = res.data.data;
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '加载套餐列表失败');
@@ -357,7 +372,8 @@ async function changeRole(id: number, role: string): Promise<void> {
   }
 }
 
-onMounted(load);
+async function loadBusinesses(): Promise<void> { const r=await api.get<ApiResult<BusinessRuntime[]>>('/api/v1/admin/business/list'); businesses.value=r.data.data; }
+onMounted(async()=>{ await loadBusinesses(); await load(); });
 </script>
 
 <style scoped>
@@ -366,4 +382,5 @@ h2 { margin: 0; color: #1e293b; }
 p { margin: 6px 0 0; color: #64748b; font-size: 13px; max-width: 720px; }
 .action-cell { display: flex; flex-wrap: nowrap; gap: 5px; }
 .action-cell .el-button { flex: 1 1 0; min-width: 0; padding: 0 4px; margin: 0; }
+.biz-desc { color:#64748b; font-size:11px; margin-top:3px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 </style>

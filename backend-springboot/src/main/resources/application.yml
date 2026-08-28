@@ -37,6 +37,10 @@ spring:
       port: 6379
       database: 0
       timeout: 3000ms
+      # 当前项目使用 StringRedisTemplate，不使用 Spring Data Redis Repository。
+      # 关闭无用扫描，避免启动时出现“0 Redis repository interfaces”的干扰日志。
+      repositories:
+        enabled: false
 
 mybatis-plus:
   mapper-locations: classpath*:/mapper/**/*.xml
@@ -49,7 +53,13 @@ mybatis-plus:
   configuration:
     map-underscore-to-camel-case: true
     cache-enabled: false
-    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+    # 通过 SLF4J 控制 SQL 日志；需要调试 SQL 时设置 PDK_MAPPER_LOG_LEVEL=DEBUG。
+    # 不再使用 StdOutImpl，避免定时任务每分钟直接向控制台打印 SqlSession/JDBC 细节。
+    log-impl: org.apache.ibatis.logging.slf4j.Slf4jImpl
+
+logging:
+  level:
+    com.pdk.mapper: ${PDK_MAPPER_LOG_LEVEL:WARN}
 
 # Sa-Token 配置
 sa-token:
@@ -62,10 +72,14 @@ sa-token:
 
 # 业务安全配置
 pdk:
-  trial:
-    duration-hours: ${PDK_TRIAL_DURATION_HOURS:24}
-    account-count: ${PDK_TRIAL_ACCOUNT_COUNT:1}
-    calls-per-account: ${PDK_TRIAL_CALLS_PER_ACCOUNT:20}
+  business:
+    # 单体部署可用逗号分隔启用多个业务；ZHIBO 聚合别名会展开为 ZHIBO_AI,ZHIBO_LIVE。
+    # 数据库 ACTIVE 只是管理开关，只有同时位于此部署白名单且 Handler 健康才真正可用。
+    enabled-codes: ${PDK_ENABLED_BIZ_CODES:PDD}
+    legacy-default-app-id: ${PDK_LEGACY_DEFAULT_APP_ID:1}
+    allow-legacy-missing-app-id: ${PDK_ALLOW_LEGACY_MISSING_APP_ID:true}
+    # 部分业务部署允许数据库中其他 ACTIVE 业务呈现 NOT_IN_DEPLOYMENT；allowlist 自身缺 Handler 仍必定启动失败。
+    fail-fast-active-unsupported: ${PDK_FAIL_FAST_ACTIVE_UNSUPPORTED:false}
   sms:
     provider: ${PDK_SMS_PROVIDER:local}
     code-expire-minutes: 5
@@ -84,7 +98,6 @@ pdk:
     lease-recovery-interval-ms: 60000
     daily-counter-reset-cron: "0 0 0 * * *"
     scheduler-zone: Asia/Shanghai
-    trial-sms-code: ${PDK_TRIAL_SMS_CODE:888888}
     admin-password-pepper: ${PDK_ADMIN_PASSWORD_PEPPER:PDK_ADMIN_2026}
 
 management:

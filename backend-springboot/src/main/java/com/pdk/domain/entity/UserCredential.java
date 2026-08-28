@@ -13,6 +13,7 @@ public class UserCredential {
     private String passwordHash;
     private String roleCode;
     private String status;
+    private Integer mustChangePassword;
     @TableField(fill = FieldFill.INSERT)
     private LocalDateTime createdAt;
     @TableField(fill = FieldFill.INSERT_UPDATE)

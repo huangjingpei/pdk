@@ -27,10 +27,14 @@ from .crypto import (decrypt_payload, derive_key, encrypt_envelope,
 from .enums import Event, ResultCode, State
 
 DEFAULT_BASE_URL = os.getenv("PDK_API_BASE", "http://localhost:8080")
+DEFAULT_APP_ID = int(os.getenv("PDK_APP_ID", "1"))
 
 # 向后兼容：保留 on_request 钩子（client-pyqt 调试面板用）
 ApiError = RuntimeError
-_SENSITIVE_KEYS = ("password", "newPassword", "oldPassword", "tokenValue", "token")
+_SENSITIVE_KEYS = (
+    "password", "newPassword", "oldPassword", "smsCode", "cardKey",
+    "invitationCode", "paymentTxnNo", "tokenValue", "token",
+)
 
 
 def redact_sensitive(payload: Any) -> Any:
@@ -103,8 +107,12 @@ class PdkApiClient:
                  root_salt: str = ROOT_SALT,
                  device_id: str = "",
                  auto_envelope: bool = False,
-                 public_key_pin: str = "") -> None:
+                 public_key_pin: str = "",
+                 app_id: int = DEFAULT_APP_ID) -> None:
+        if int(app_id) <= 0:
+            raise ValueError("app_id 必须为正整数")
         self.base_url = base_url.rstrip("/")
+        self._app_id = int(app_id)
         self.root_salt = root_salt
         self.session = ClientSession()
         self.session.device_id = device_id or default_device_id()
@@ -141,6 +149,24 @@ class PdkApiClient:
             except Exception:
                 self._emit_log("⚠️ 自动拉取协议加密配置失败，将使用明文请求")
 
+    @property
+    def app_id(self) -> int:
+        return self._app_id
+
+    @app_id.setter
+    def app_id(self, value: int) -> None:
+        value = int(value)
+        if value <= 0:
+            raise ValueError("app_id 必须为正整数")
+        if value == self._app_id:
+            return
+        self._app_id = value
+        # 登录态归属具体业务；调试时切换业务必须清除旧业务会话。
+        self.session.token_value = ""
+        self.session.phone = ""
+        self.session.password = ""
+        self._emit_state(State.Ready, f"业务已切换，旧登录态已清除，appId={value}")
+
     # ---------------------------------------------------------------- 回调
     def _emit_state(self, s: State, detail: str) -> None:
         self.last_state = s
@@ -169,7 +195,10 @@ class PdkApiClient:
     def request(self, method, path, *, authenticated=False, include_phone=True,
                 include_device=True, override_device_id=None,  headers=None,
                 json_body=None, params=None, _retried: bool = False):
-        hdrs: dict = {"Accept": "application/json"}
+        hdrs: dict = {
+            "Accept": "application/json",
+            "X-PDK-App-ID": str(self.app_id),
+        }
         if authenticated:
             if self.session.token_value:
                 hdrs[self.session.token_name] = self.session.token_value
@@ -197,7 +226,8 @@ class PdkApiClient:
             send_data = envelope
 
         self._emit_event(Event.RequestSent, f"{method} {path}")
-        self._emit_log(f"▶ 请求: {method} {full_url}" + (f"\n   body: {json_body}" if json_body else ""))
+        safe_request = redact_sensitive(json_body)
+        self._emit_log(f"▶ 请求: {method} {full_url}" + (f"\n   body: {safe_request}" if json_body else ""))
         if self.expectation:
             self._emit_log(f"🎯 期待: {self.expectation}")
 
@@ -278,7 +308,7 @@ class PdkApiClient:
         任一处指纹不符抛 :class:`PublicKeyPinMismatchError` 并拒绝启用。
         """
         try:
-            cfg = fetch_public_config(self.base_url)
+            cfg = fetch_public_config(self.base_url, app_id=self.app_id)
         except Exception as exc:
             self._emit_log(f"⚠️ 拉取公钥配置失败：{exc}")
             self._emit_state(State.Error, str(exc))
@@ -322,10 +352,11 @@ class PdkApiClient:
     def _emit_record(self, method, url, params, req_json, http_status, body):
         rec = {
             "ts": time.strftime("%H:%M:%S"),
-            "method": method, "url": url, "params": params, "request_json": req_json,
+            "method": method, "url": url, "params": params,
+            "request_json": redact_sensitive(req_json),
             "http_status": http_status,
             "code": int((body or {}).get("code", 0) or 0),
-            "msg": str((body or {}).get("message", "")), "body": body,
+            "msg": str((body or {}).get("message", "")), "body": redact_sensitive(body),
             "expected": self.expectation if self.expectation else "",
         }
         self.last_request_record = rec
@@ -340,10 +371,14 @@ class PdkApiClient:
         return body.get("code") == 200
 
     # ---------------------------------------------------------------- 鉴权
+    def business_info(self):
+        """登录前读取当前 appId 的公开业务元数据和注册策略。"""
+        return self.request("GET", f"/api/v1/client/business/by-app/{self.app_id}")
+
     def send_sms(self, phone, purpose="REGISTER"):
         self._emit_state(State.Ready, f"正在发送验证码到 {phone}")
         body = self.request("POST", "/api/v1/client/auth/sms/send",
-                            json={"phone": phone, "purpose": purpose})
+                            json_body={"appId": self.app_id, "phone": phone, "purpose": purpose})
         if self.is_ok(body):
             self._emit_state(State.SmsSent, f"验证码已发送（{phone}）")
         elif body.get("code") == 42901:
@@ -352,8 +387,8 @@ class PdkApiClient:
 
     def register(self, phone, password, sms_code, invitation_code=""):
         self._emit_state(State.Registering, f"正在注册 {phone}")
-        body = self.request("POST", "/api/v1/client/auth/register", json={
-            "phone": phone, "password": password,
+        body = self.request("POST", "/api/v1/client/auth/register", json_body={
+            "appId": self.app_id, "phone": phone, "password": password,
             "deviceId": self.session.device_id, "smsCode": sms_code,
             "invitationCode": invitation_code or None,
         })
@@ -366,8 +401,8 @@ class PdkApiClient:
 
     def login(self, phone, password):
         self._emit_state(State.LoggingIn, f"正在登录 {phone}")
-        body = self.request("POST", "/api/v1/client/auth/login", json={
-            "phone": phone, "password": password,
+        body = self.request("POST", "/api/v1/client/auth/login", json_body={
+            "appId": self.app_id, "phone": phone, "password": password,
             "deviceId": self.session.device_id,
         })
         if self.is_ok(body):
@@ -409,8 +444,9 @@ class PdkApiClient:
         return body
 
     def change_password(self, phone, old_password, new_password):
-        body = self.request("POST", "/api/v1/client/auth/change-password", json={
-            "phone": phone, "oldPassword": old_password, "newPassword": new_password,
+        body = self.request("POST", "/api/v1/client/auth/change-password", json_body={
+            "appId": self.app_id, "phone": phone,
+            "oldPassword": old_password, "newPassword": new_password,
         })
         if not self.is_ok(body):
             self._emit_state(State.Error, body.get("message", ""))
@@ -419,6 +455,7 @@ class PdkApiClient:
     # ---------------------------------------------------------------- 卡密
     def activate_card(self, card_key, user_phone, payment_channel="OFFLINE", actual_amount=0.0):
         payload: dict = {
+            "appId": self.app_id,
             "cardKey": card_key.strip(),
             "userPhone": user_phone,
             "deviceId": self.session.device_id,
@@ -427,7 +464,7 @@ class PdkApiClient:
         }
         if actual_amount and actual_amount > 0:
             payload["actualAmount"] = actual_amount
-        body = self.request("POST", "/api/v1/card/activate", json=payload)
+        body = self.request("POST", "/api/v1/card/activate", json_body=payload)
         if not self.is_ok(body):
             self._emit_state(State.Error, body.get("message", ""))
         return body
@@ -435,7 +472,7 @@ class PdkApiClient:
     # ---------------------------------------------------------------- 调度
     def acquire_token(self, action_type, goods_id):
         self._emit_state(State.TokenAcquiring, f"正在申请短效 Token（{action_type}）")
-        body = self.request("POST", "/api/v1/dispatch/acquire-token", authenticated=True, json={
+        body = self.request("POST", "/api/v1/dispatch/acquire-token", authenticated=True, json_body={
             "actionType": action_type, "goodsId": goods_id,
             "timestamp": int(time.time() * 1000),
         })
@@ -471,7 +508,7 @@ class PdkApiClient:
 
     def report_result(self, lease_trace_id, status, duration_ms=None, error_message=""):
         self._emit_state(State.ResultReporting, f"正在上报业务结果（{status}）")
-        body = self.request("POST", "/api/v1/dispatch/report-result", authenticated=True, json={
+        body = self.request("POST", "/api/v1/dispatch/report-result", authenticated=True, json_body={
             "leaseTraceId": lease_trace_id, "status": status,
             "responseDurationMs": duration_ms if duration_ms is not None else 1000,
             "errorMessage": error_message,

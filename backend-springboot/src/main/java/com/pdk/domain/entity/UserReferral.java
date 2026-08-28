@@ -8,6 +8,7 @@ import java.time.LocalDateTime;
 @TableName("pdk_user_referral")
 public class UserReferral {
     @TableId(type = IdType.AUTO) private Long id;
+    private Long bizId;
     private Long userId;
     private Long invitationCodeId;
     private Long partnerUserId;

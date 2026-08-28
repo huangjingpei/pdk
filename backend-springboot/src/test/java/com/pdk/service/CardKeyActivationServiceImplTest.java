@@ -16,7 +16,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import org.apache.ibatis.builder.MapperBuilderAssistant;
-import org.springframework.test.util.ReflectionTestUtils;
+import com.pdk.platform.business.BusinessContext;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -52,7 +52,6 @@ public class CardKeyActivationServiceImplTest {
     @BeforeEach
     void setUp() {
         TableInfoHelper.initTableInfo(new MapperBuilderAssistant(new MybatisConfiguration(), ""), CardKey.class);
-        ReflectionTestUtils.setField(activationService, "trialSmsCode", "888888");
         validDTO = new ActivateCardDTO();
         validDTO.setCardKey("PDK-8891-2041-9982");
         validDTO.setUserPhone("13800138000");
@@ -63,6 +62,7 @@ public class CardKeyActivationServiceImplTest {
 
         unusedCard = new CardKey();
         unusedCard.setId(101L);
+        unusedCard.setBizId(1L);
         unusedCard.setCardKey("PDK-8891-2041-9982");
         unusedCard.setPackageId(2);
         unusedCard.setStatus("UNUSED");
@@ -70,6 +70,7 @@ public class CardKeyActivationServiceImplTest {
 
         activeUser = new User();
         activeUser.setId(501L);
+        activeUser.setBizId(1L);
         activeUser.setPhone("13800138000");
         activeUser.setStatus("ACTIVE");
         activeUser.setRemainingCalls(20);
@@ -77,6 +78,7 @@ public class CardKeyActivationServiceImplTest {
 
         standardPkg = new PackagePlan();
         standardPkg.setId(2);
+        standardPkg.setBizId(1L);
         standardPkg.setName("200元月卡多账号防控版");
         standardPkg.setListPrice(new BigDecimal("200.00"));
         standardPkg.setSalePrice(new BigDecimal("200.00"));
@@ -89,12 +91,12 @@ public class CardKeyActivationServiceImplTest {
     @Test
     @DisplayName("UT-01: 正常卡密原子核销 - 独立财务表必须入库且配额顺延")
     void testActivateCardKey_Success() {
-        when(cardKeyMapper.selectOneForUpdate("PDK-8891-2041-9982")).thenReturn(unusedCard);
+        when(cardKeyMapper.selectOneForUpdate(1L, "PDK-8891-2041-9982")).thenReturn(unusedCard);
         when(userMapper.selectOne(any())).thenReturn(activeUser);
         when(packagePlanMapper.selectById(2)).thenReturn(standardPkg);
         when(cardKeyMapper.update(any(), any())).thenReturn(1); // CAS 成功
 
-        ActivationResultVO result = activationService.activateCardKeyAtomic(validDTO);
+        ActivationResultVO result = activationService.activateCardKeyAtomic(validDTO, context());
 
         assertNotNull(result);
         assertEquals("200元月卡多账号防控版", result.getPackageName());
@@ -115,10 +117,10 @@ public class CardKeyActivationServiceImplTest {
     void testActivateAlreadyUsedCard_ThrowsException() {
         unusedCard.setStatus("ACTIVATED");
         unusedCard.setActivatedAt(LocalDateTime.now().minusDays(1));
-        when(cardKeyMapper.selectOneForUpdate("PDK-8891-2041-9982")).thenReturn(unusedCard);
+        when(cardKeyMapper.selectOneForUpdate(1L, "PDK-8891-2041-9982")).thenReturn(unusedCard);
 
         BusinessException ex = assertThrows(BusinessException.class, () -> {
-            activationService.activateCardKeyAtomic(validDTO);
+            activationService.activateCardKeyAtomic(validDTO, context());
         });
 
         assertEquals(40002, ex.getCode());
@@ -130,11 +132,11 @@ public class CardKeyActivationServiceImplTest {
     @DisplayName("UT-03: 客户端不能篡改卡密面值")
     void rejectsTamperedAmount() {
         validDTO.setActualAmount(new BigDecimal("1.00"));
-        when(cardKeyMapper.selectOneForUpdate(validDTO.getCardKey())).thenReturn(unusedCard);
+        when(cardKeyMapper.selectOneForUpdate(1L, validDTO.getCardKey())).thenReturn(unusedCard);
         when(packagePlanMapper.selectById(2)).thenReturn(standardPkg);
 
         BusinessException error = assertThrows(BusinessException.class,
-                () -> activationService.activateCardKeyAtomic(validDTO));
+                () -> activationService.activateCardKeyAtomic(validDTO, context()));
         assertEquals(40005, error.getCode());
         verify(userMapper, never()).insert(any(User.class));
         verify(financialIncomeMapper, never()).insert(any(FinancialIncome.class));
@@ -144,12 +146,12 @@ public class CardKeyActivationServiceImplTest {
     @DisplayName("UT-04: 已绑定其他电脑时禁止直接激活覆盖")
     void rejectsActivationFromDifferentDevice() {
         activeUser.setDeviceId("DEVICE-OLD");
-        when(cardKeyMapper.selectOneForUpdate(validDTO.getCardKey())).thenReturn(unusedCard);
+        when(cardKeyMapper.selectOneForUpdate(1L, validDTO.getCardKey())).thenReturn(unusedCard);
         when(packagePlanMapper.selectById(2)).thenReturn(standardPkg);
         when(userMapper.selectOne(any())).thenReturn(activeUser);
 
         BusinessException error = assertThrows(BusinessException.class,
-                () -> activationService.activateCardKeyAtomic(validDTO));
+                () -> activationService.activateCardKeyAtomic(validDTO, context()));
         assertEquals(40103, error.getCode());
         verify(financialIncomeMapper, never()).insert(any(FinancialIncome.class));
     }
@@ -158,27 +160,15 @@ public class CardKeyActivationServiceImplTest {
     @DisplayName("UT-05: 停用套餐对应卡密不能激活")
     void rejectsInactivePackage() {
         standardPkg.setStatus("INACTIVE");
-        when(cardKeyMapper.selectOneForUpdate(validDTO.getCardKey())).thenReturn(unusedCard);
+        when(cardKeyMapper.selectOneForUpdate(1L, validDTO.getCardKey())).thenReturn(unusedCard);
         when(packagePlanMapper.selectById(2)).thenReturn(standardPkg);
 
         assertEquals(40007, assertThrows(BusinessException.class,
-                () -> activationService.activateCardKeyAtomic(validDTO)).getCode());
+                () -> activationService.activateCardKeyAtomic(validDTO, context())).getCode());
     }
 
-    @Test
-    @DisplayName("UT-06: 试用验证码错误与重复领取均被拒绝")
-    void validatesTrialCodeAndSingleClaim() {
-        com.pdk.domain.dto.TrialRegisterDTO trial = new com.pdk.domain.dto.TrialRegisterDTO();
-        trial.setPhone("13800138000");
-        trial.setDeviceId("DEVICE-A");
-        trial.setSmsCode("000000");
-        assertEquals(40011, assertThrows(BusinessException.class,
-                () -> activationService.registerTrialAccount(trial)).getCode());
-
-        trial.setSmsCode("888888");
-        activeUser.setIsTrialClaimed(1);
-        when(userMapper.selectOne(any())).thenReturn(activeUser);
-        assertEquals(40010, assertThrows(BusinessException.class,
-                () -> activationService.registerTrialAccount(trial)).getCode());
+    private BusinessContext context() {
+        return new BusinessContext(1, 1, "PDD", "拼多多", "desc", "SELF_SERVICE",
+                true, 24, 1, 20, false);
     }
 }

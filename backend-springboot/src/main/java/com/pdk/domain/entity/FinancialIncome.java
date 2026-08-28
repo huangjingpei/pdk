@@ -11,6 +11,8 @@ import java.time.LocalDateTime;
 public class FinancialIncome implements Serializable {
     @TableId(type = IdType.AUTO)
     private Long id;
+    private Long bizId;
+    private Long userId;
     private String incomeOrderNo;
     private Long cardKeyId;
     private String cardKey;

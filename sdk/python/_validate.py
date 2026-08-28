@@ -40,7 +40,44 @@ def main():
     c.on_event = lambda e, m: seen.append(("event", e, m))
     c.on_log = lambda line: seen.append(("log", line))
     assert c.last_state == State.Ready, "初始化状态应为 Ready"
+    assert c.app_id == 1, "旧调用必须默认使用 PDD appId=1"
     print("[OK] 回调接线 / 初始状态 Ready 正常")
+
+    # 2.5) appId 必须同时进入请求头和公开接口请求体
+    captured = {}
+
+    class FakeResponse:
+        status_code = 200
+        text = '{"code":200,"message":"ok","data":{}}'
+
+        @staticmethod
+        def json():
+            return {"code": 200, "message": "ok", "data": {}}
+
+    client_app2 = PdkApiClient(base_url="http://example.invalid", app_id=2)
+    safe_logs = []
+    client_app2.on_log = safe_logs.append
+
+    def fake_request(method, url, **kwargs):
+        captured.update({"method": method, "url": url, **kwargs})
+        return FakeResponse()
+
+    client_app2.http.request = fake_request
+    client_app2.send_sms("13800138000")
+    assert captured["headers"]["X-PDK-App-ID"] == "2"
+    assert captured["json"]["appId"] == 2
+    client_app2.register("13800138000", "Secret123", "123456", "ABCDEF")
+    client_app2.login("13800138000", "Secret123")
+    client_app2.change_password("13800138000", "Secret123", "Secret456")
+    client_app2.activate_card("PDK-AAAA-BBBB-CCCC", "13800138000")
+    client_app2.acquire_token("GOODS_COLLECT", "10001")
+    client_app2.report_result("TRACE-1", "SUCCESS")
+    assert captured["headers"]["X-PDK-App-ID"] == "2"
+    assert "Secret123" not in "\n".join(safe_logs)
+    assert "123456" not in "\n".join(safe_logs)
+    assert "PDK-AAAA-BBBB-CCCC" not in "\n".join(safe_logs)
+    print("[OK] appId 已同时写入 X-PDK-App-ID 与公开接口请求体")
+    print("[OK] Python SDK 全部 POST 方法可调用，调试日志已脱敏")
 
     # 3) 加密->解密 往返（验证与后端算法对称）
     plain_obj = {"pddSession": "sess-abc-123", "cookie": "xxx"}
@@ -60,7 +97,7 @@ def main():
     assert json.loads(client.decrypt_token(cipher2)) == {"t": 1}
     print("[OK] ±1 时间窗容错解密正常")
 
-    print("\n全部校验通过 ✅")
+    print("\n全部校验通过")
 
 
 if __name__ == "__main__":

@@ -54,6 +54,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="PDK 全链路校验器")
     parser.add_argument("-u", "--base-url", default=os.getenv("PDK_API_BASE", "http://localhost:8080"))
     parser.add_argument("-d", "--device-id", default=default_device_id())
+    parser.add_argument("--app-id", type=int, default=int(os.getenv("PDK_APP_ID", "1")))
     parser.add_argument("--only", choices=["scenarios", "boundary", "all"], default="all")
     parser.add_argument("--phone", default="", help="指定注册/登录手机号（默认自动生成新号注册）")
     parser.add_argument("--password", default="", help="指定登录密码（默认自动生成）")
@@ -63,11 +64,12 @@ def main(argv: Optional[list[str]] = None) -> int:
     print(f"{BOLD}PDK 全链路校验器{RESET}")
     print(f"后端地址 : {args.base_url}")
     print(f"设备标识 : {args.device_id}")
+    print(f"业务AppID: {args.app_id}")
     print(f"测试手机 : {args.phone or '自动生成'}")
     print(f"短信验证 : {'手输' if args.sms_code else 'debugCode 回显 / 环境变量'}")
     print(f"激活码   : {'已配置' if os.getenv('PDK_TEST_CARD_KEY') else '未配置（S3 将跳过）'}")
 
-    runner = TestRunner(base_url=args.base_url, device_id=args.device_id)
+    runner = TestRunner(base_url=args.base_url, device_id=args.device_id, app_id=args.app_id)
     runner.manual_phone = args.phone.strip()
     runner.manual_password = args.password
     runner.manual_sms_code = args.sms_code.strip()

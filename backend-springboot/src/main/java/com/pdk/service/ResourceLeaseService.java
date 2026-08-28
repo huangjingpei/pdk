@@ -15,8 +15,9 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class ResourceLeaseService {
     private static final DefaultRedisScript<List> CONSUME_SCRIPT = new DefaultRedisScript<>(
-            "local owner = redis.call('HGET', KEYS[1], 'phone'); " +
-                    "if not owner or owner ~= ARGV[1] then return {}; end; " +
+            "local biz = redis.call('HGET', KEYS[1], 'bizId'); " +
+                    "local owner = redis.call('HGET', KEYS[1], 'userId'); " +
+                    "if not biz or biz ~= ARGV[1] or not owner or owner ~= ARGV[2] then return {}; end; " +
                     "local values = redis.call('HGETALL', KEYS[1]); " +
                     "if #values > 0 then redis.call('DEL', KEYS[1]); end; return values;",
             List.class
@@ -28,8 +29,10 @@ public class ResourceLeaseService {
     private long leaseSeconds;
 
     public void create(String traceId, LeaseInfo lease) {
-        String key = key(traceId);
+        String key = key(lease.bizId(), traceId);
         Map<String, String> values = new HashMap<>();
+        values.put("bizId", lease.bizId().toString());
+        values.put("userId", lease.userId().toString());
         values.put("tokenId", lease.tokenId().toString());
         values.put("phone", lease.phone());
         values.put("accountAlias", lease.accountAlias());
@@ -41,8 +44,9 @@ public class ResourceLeaseService {
     }
 
     /** 原子地读取并删除租约，保证同一 traceId 最多只有一个上报者进入扣次流程。 */
-    public LeaseInfo consume(String traceId, String expectedPhone) {
-        List<?> values = redisTemplate.execute(CONSUME_SCRIPT, List.of(key(traceId)), expectedPhone);
+    public LeaseInfo consume(Long bizId, String traceId, Long expectedUserId) {
+        List<?> values = redisTemplate.execute(CONSUME_SCRIPT, List.of(key(bizId, traceId)),
+                bizId.toString(), expectedUserId.toString());
         if (values == null || values.isEmpty()) {
             return null;
         }
@@ -51,6 +55,8 @@ public class ResourceLeaseService {
             fields.put(String.valueOf(values.get(i)), String.valueOf(values.get(i + 1)));
         }
         return new LeaseInfo(
+                Long.valueOf(fields.get("bizId")),
+                Long.valueOf(fields.get("userId")),
                 Long.valueOf(fields.get("tokenId")),
                 fields.get("phone"),
                 fields.get("accountAlias"),
@@ -60,14 +66,10 @@ public class ResourceLeaseService {
         );
     }
 
-    private String key(String traceId) {
-        return "pdk:lease:" + traceId;
+    private String key(Long bizId, String traceId) {
+        return "pdk:lease:" + bizId + ":" + traceId;
     }
 
-    public record LeaseInfo(Long tokenId, String phone, String accountAlias, String actionType,
-                            Long assignmentId, Integer slotIndex) {
-        public LeaseInfo(Long tokenId, String phone, String accountAlias, String actionType) {
-            this(tokenId, phone, accountAlias, actionType, null, 1);
-        }
-    }
+    public record LeaseInfo(Long bizId, Long userId, Long tokenId, String phone, String accountAlias,
+                            String actionType, Long assignmentId, Integer slotIndex) {}
 }

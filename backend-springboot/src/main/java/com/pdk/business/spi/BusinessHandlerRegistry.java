@@ -16,14 +16,19 @@ public class BusinessHandlerRegistry {
     public BusinessHandlerRegistry(List<BusinessHandler> discoveredHandlers) {
         Map<String, BusinessHandler> registered = new LinkedHashMap<>();
         for (BusinessHandler handler : discoveredHandlers) {
-            String code = normalize(handler.bizCode());
-            if (code.isBlank()) {
-                throw new IllegalStateException("BusinessHandler.bizCode 不能为空: " + handler.getClass().getName());
+            if (handler.supportedBizCodes() == null || handler.supportedBizCodes().isEmpty()) {
+                throw new IllegalStateException("BusinessHandler.supportedBizCodes 不能为空: " + handler.getClass().getName());
             }
-            BusinessHandler previous = registered.putIfAbsent(code, handler);
-            if (previous != null) {
-                throw new IllegalStateException("重复的业务 Handler: " + code + " -> "
-                        + previous.getClass().getName() + ", " + handler.getClass().getName());
+            for (String declaredCode : handler.supportedBizCodes()) {
+                String code = normalize(declaredCode);
+                if (code.isBlank()) {
+                    throw new IllegalStateException("BusinessHandler.bizCode 不能为空: " + handler.getClass().getName());
+                }
+                BusinessHandler previous = registered.putIfAbsent(code, handler);
+                if (previous != null) {
+                    throw new IllegalStateException("重复的业务 Handler: " + code + " -> "
+                            + previous.getClass().getName() + ", " + handler.getClass().getName());
+                }
             }
         }
         this.handlers = Collections.unmodifiableMap(registered);

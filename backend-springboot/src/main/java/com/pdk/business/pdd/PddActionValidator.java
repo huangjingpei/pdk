@@ -10,6 +10,10 @@ import java.util.Set;
 public class PddActionValidator {
     private static final Set<String> ACTIONS = Set.of("GOODS_COLLECT", "ORDER_PULL", "DETAIL_QUERY");
 
+    public Set<String> supportedActions() {
+        return ACTIONS;
+    }
+
     public void validate(AcquireTokenRequestDTO request) {
         if (request == null || request.getActionType() == null || !ACTIONS.contains(request.getActionType())) {
             throw new BusinessException(40001, "业务动作类型不合法");

@@ -15,7 +15,7 @@ pip install -e .          # 或：pip install requests cryptography
 ```python
 from pdk import PdkApiClient, State, Event
 
-client = PdkApiClient(base_url="http://localhost:8080")
+client = PdkApiClient(base_url="http://localhost:8080", app_id=1)  # PDD 固定为 1
 
 # 三类回调（实时告诉“现在是什么状态”）
 client.on_state  = lambda s, d: print(f"[状态] {s.name} —— {d}")
@@ -36,6 +36,10 @@ if client.is_ok(body) and plain:
 ```
 
 完整示例见 `examples/demo.py`。
+
+SDK 保持所有 URL 不变，并自动为每次请求添加 `X-PDK-App-ID`。短信、注册、登录、改密和
+卡密激活的 JSON 请求体也会携带同一个 `appId`。旧代码不传 `app_id` 时默认使用 1；也可通过
+环境变量 `PDK_APP_ID` 设置默认值。运行期间修改 `client.app_id` 会清除旧业务登录态，避免跨业务复用 Token。
 
 ## API 一览
 

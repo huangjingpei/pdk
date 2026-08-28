@@ -10,7 +10,9 @@ import java.time.LocalDateTime;
 public class User implements Serializable {
     @TableId(type = IdType.AUTO)
     private Long id;
+    private Long bizId;
     private String phone;
+    private String accountSource;
     private String status; // ACTIVE, TRIAL, FROZEN
     private String deviceId;
     private Integer currentPackageId;
@@ -27,6 +29,14 @@ public class User implements Serializable {
     private String invitationCode;
     @TableField(exist = false)
     private String invitedByPhone;
+    @TableField(exist = false)
+    private Long appId;
+    @TableField(exist = false)
+    private String businessName;
+    @TableField(exist = false)
+    private String businessDescription;
+    @TableField(exist = false)
+    private Boolean mustChangePassword;
 
     @TableField(fill = FieldFill.INSERT)
     private LocalDateTime createdAt;

@@ -17,6 +17,9 @@ public class PdkAdminAuditLog {
     @TableId(type = IdType.AUTO)
     private Long id;
 
+    /** 为空表示平台级操作，否则用于业务审计隔离。 */
+    private Long bizId;
+
     /** 操作管理员账号 */
     private String adminName;
 

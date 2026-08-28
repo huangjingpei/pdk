@@ -21,6 +21,7 @@
             <el-tag :type="roleTag(scope.row.roleCode).type">{{ roleTag(scope.row.roleCode).text }}</el-tag>
           </template>
         </el-table-column>
+        <el-table-column label="所属业务" width="160"><template #default="s">{{ s.row.roleCode === 'SUPER_ADMIN' ? '全部业务' : businessName(s.row.bizId) }}</template></el-table-column>
         <el-table-column label="状态" width="100">
           <template #default="scope">
             <el-tag :type="statusTag(scope.row.status).type">{{ statusTag(scope.row.status).text }}</el-tag>
@@ -57,6 +58,7 @@
             <el-option v-for="r in roleOptions" :key="r.value" :label="r.label" :value="r.value" />
           </el-select>
         </el-form-item>
+        <el-form-item v-if="createForm.roleCode === 'PARTNER'" label="所属业务" required><el-select v-model="createForm.bizId" style="width:100%"><el-option v-for="b in businesses" :key="b.bizId" :label="`${b.businessName} (${b.bizCode})`" :value="b.bizId" /></el-select></el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="createVisible = false">取消</el-button>
@@ -74,6 +76,7 @@
             <el-option v-for="r in roleOptions" :key="r.value" :label="r.label" :value="r.value" />
           </el-select>
         </el-form-item>
+        <el-form-item v-if="roleForm.roleCode === 'PARTNER'" label="所属业务" required><el-select v-model="roleForm.bizId" style="width:100%"><el-option v-for="b in businesses" :key="b.bizId" :label="`${b.businessName} (${b.bizCode})`" :value="b.bizId" /></el-select></el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="roleVisible = false">取消</el-button>
@@ -88,10 +91,11 @@ import { onMounted, ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Plus, Refresh } from '@element-plus/icons-vue';
 import { api, type ApiResult } from '../../api';
-import type { AdminAccount } from '../../types';
+import type { AdminAccount, BusinessRuntime } from '../../types';
 
 const rows = ref<AdminAccount[]>([]);
 const loading = ref(false);
+const businesses=ref<BusinessRuntime[]>([]); const businessName=(id?:number)=>businesses.value.find(b=>b.bizId===id)?.businessName||'未绑定';
 
 const roleOptions = [
   { value: 'SUPER_ADMIN', label: '超级管理员（全部权限）' },
@@ -125,10 +129,10 @@ async function load(): Promise<void> {
 // ---- 新增账号 ----
 const createVisible = ref(false);
 const creating = ref(false);
-const createForm = ref({ username: '', password: '', displayName: '', roleCode: 'PARTNER' });
+const createForm = ref({ username: '', password: '', displayName: '', roleCode: 'PARTNER', bizId: undefined as number|undefined });
 
 function openCreate(): void {
-  createForm.value = { username: '', password: '', displayName: '', roleCode: 'PARTNER' };
+  createForm.value = { username: '', password: '', displayName: '', roleCode: 'PARTNER', bizId: businesses.value[0]?.bizId };
   createVisible.value = true;
 }
 
@@ -158,11 +162,11 @@ async function submitCreate(): Promise<void> {
 const roleVisible = ref(false);
 const adjusting = ref(false);
 const roleTarget = ref<AdminAccount | null>(null);
-const roleForm = ref({ id: 0, roleCode: 'PARTNER' });
+const roleForm = ref({ id: 0, roleCode: 'PARTNER', bizId: undefined as number|undefined });
 
 function openRole(row: AdminAccount): void {
   roleTarget.value = row;
-  roleForm.value = { id: row.id, roleCode: row.roleCode };
+  roleForm.value = { id: row.id, roleCode: row.roleCode, bizId: row.bizId || businesses.value[0]?.bizId };
   roleVisible.value = true;
 }
 
@@ -170,7 +174,7 @@ async function submitRole(): Promise<void> {
   adjusting.value = true;
   try {
     await api.put(`/api/v1/admin/admins/${roleForm.value.id}/role`, null,
-      { params: { role: roleForm.value.roleCode } });
+      { params: { role: roleForm.value.roleCode, bizId: roleForm.value.roleCode === 'PARTNER' ? roleForm.value.bizId : undefined } });
     ElMessage.success('身份已更新');
     roleVisible.value = false;
     await load();
@@ -199,7 +203,7 @@ async function toggleStatus(row: AdminAccount): Promise<void> {
   }
 }
 
-onMounted(load);
+onMounted(async()=>{const b=await api.get<ApiResult<BusinessRuntime[]>>('/api/v1/admin/business/list');businesses.value=b.data.data;await load()});
 </script>
 
 <style scoped>

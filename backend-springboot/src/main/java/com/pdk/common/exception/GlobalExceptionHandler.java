@@ -8,6 +8,7 @@ import org.springframework.validation.BindException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.dao.DuplicateKeyException;
 
 @Slf4j
 @RestControllerAdvice
@@ -35,6 +36,12 @@ public class GlobalExceptionHandler {
     public CommonResult<Void> handleBindException(BindException e) {
         String defaultMessage = e.getBindingResult().getAllErrors().get(0).getDefaultMessage();
         return CommonResult.failed(40001, defaultMessage);
+    }
+
+    @ExceptionHandler(DuplicateKeyException.class)
+    public CommonResult<Void> handleDuplicateKey(DuplicateKeyException e, HttpServletRequest request) {
+        log.warn("唯一约束冲突 [{}]: {}", request.getRequestURI(), e.getMostSpecificCause().getMessage());
+        return CommonResult.failed(40901, "数据已被其他请求创建或占用，请刷新后重试");
     }
 
     @ExceptionHandler(Exception.class)

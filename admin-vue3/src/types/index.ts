@@ -1,5 +1,6 @@
 export interface FinancialIncome {
   id: number;
+  bizId: number;
   incomeOrderNo: string;
   cardKeyId: number;
   cardKey: string;
@@ -33,6 +34,7 @@ export interface CompanyExpense {
 
 export interface CardKeyItem {
   id: number;
+  bizId: number;
   cardKey: string;
   packageId: number;
   status: 'UNUSED' | 'ACTIVATED' | 'VOID';
@@ -46,6 +48,7 @@ export interface CardKeyItem {
 
 export interface TokenPoolItem {
   id: number;
+  bizId: number;
   tokenVal: string;
   accountAlias: string;
   healthStatus: 'HEALTHY' | 'BUSY' | 'FAULT_BLACK' | 'EXPIRED';
@@ -73,6 +76,12 @@ export interface FinanceSummary {
 
 export interface ClientUser {
   id: number;
+  bizId: number;
+  appId: number;
+  businessName: string;
+  businessDescription?: string;
+  accountSource?: 'SELF_REGISTER' | 'ADMIN_CREATED';
+  mustChangePassword?: boolean;
   phone: string;
   status: 'ACTIVE' | 'TRIAL' | 'FROZEN';
   roleCode: string;
@@ -90,6 +99,7 @@ export interface ClientUser {
 
 export interface PackagePlanLite {
   id: number;
+  bizId: number;
   name: string;
   status: 'ACTIVE' | 'INACTIVE';
   durationHours: number;
@@ -125,6 +135,7 @@ export interface AssignmentItem {
 
 export interface AdminAccount {
   id: number;
+  bizId?: number;
   username: string;
   displayName: string;
   roleCode: 'SUPER_ADMIN' | 'PARTNER';
@@ -133,3 +144,27 @@ export interface AdminAccount {
   createdAt?: string;
 }
 
+export interface BusinessRuntime {
+  bizId: number;
+  appId: number;
+  bizCode: string;
+  businessName: string;
+  businessDescription?: string;
+  registrationMode: 'SELF_SERVICE' | 'ADMIN_ONLY';
+  trialEnabled: boolean;
+  trialDurationHours: number;
+  trialAccountCount: number;
+  trialCallsPerAccount: number;
+  forceInitialPasswordChange: boolean;
+  configuredStatus: 'ACTIVE' | 'DISABLED';
+  deploymentEnabled: boolean;
+  handlerRegistered: boolean;
+    handlerHealth: 'UP' | 'DOWN';
+    supportedActions: string[];
+  effectiveStatus: string;
+  unavailableReason?: string;
+  userCount?: number;
+  packageCount?: number;
+  resourceCount?: number;
+  availableResourceCount?: number;
+}

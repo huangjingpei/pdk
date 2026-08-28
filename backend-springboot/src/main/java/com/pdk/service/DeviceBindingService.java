@@ -13,30 +13,30 @@ import java.time.Duration;
 public class DeviceBindingService {
     private final StringRedisTemplate redisTemplate;
 
-    private String key(String phone) {
-        return "pdk:device:bind:" + phone;
+    private String key(Long bizId, Long userId) {
+        return "pdk:device:bind:" + bizId + ":" + userId;
     }
 
-    public String get(String phone) {
+    public String get(Long bizId, Long userId) {
         try {
-            return redisTemplate.opsForValue().get(key(phone));
+            return redisTemplate.opsForValue().get(key(bizId, userId));
         } catch (RuntimeException e) {
             log.warn("Redis 暂不可用，设备校验回退到 MySQL: {}", e.getMessage());
             return null;
         }
     }
 
-    public void bind(String phone, String deviceId) {
+    public void bind(Long bizId, Long userId, String deviceId) {
         try {
-            redisTemplate.opsForValue().set(key(phone), deviceId, Duration.ofMinutes(30));
+            redisTemplate.opsForValue().set(key(bizId, userId), deviceId, Duration.ofMinutes(30));
         } catch (RuntimeException e) {
             log.warn("Redis 暂不可用，设备绑定仅保存在 MySQL: {}", e.getMessage());
         }
     }
 
-    public void unbind(String phone) {
+    public void unbind(Long bizId, Long userId) {
         try {
-            redisTemplate.delete(key(phone));
+            redisTemplate.delete(key(bizId, userId));
         } catch (RuntimeException e) {
             log.warn("Redis 暂不可用，已完成 MySQL 解绑: {}", e.getMessage());
         }

@@ -35,6 +35,7 @@ from PyQt6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QComboBox,
     QScrollArea,
     QTabWidget,
     QTableWidget,
@@ -132,7 +133,7 @@ ENDPOINTS: list[EndpointDef] = [
         name="解绑设备",
         method="POST",
         path="/api/v1/client/auth/unbind-device",
-        expects="code=200；deviceId 清空并注销会话",
+        expects="code=200；服务端 deviceId 清空并注销会话，可在新电脑重新绑定",
         requires_auth=True,
         scenario_id="S8",
         scenario_name="解绑设备",
@@ -382,7 +383,10 @@ class EndpointCard(QWidget):
         base = self.main.base_url.text().strip().rstrip("/") or "http://localhost:8080"
         url = base + self.endpoint.path
 
-        headers: dict[str, str] = {"Accept": "application/json"}
+        headers: dict[str, str] = {
+            "Accept": "application/json",
+            "X-PDK-App-ID": str(self.main.current_app_id()),
+        }
         if self.endpoint.requires_auth:
             sess = self.runner.client.session
             if sess.token_value:
@@ -406,6 +410,8 @@ class EndpointCard(QWidget):
             # 去掉空可选字段，避免发送空字符串
             optional = {fdef.name for fdef in self.endpoint.fields if not fdef.required}
             body = {k: v for k, v in body.items() if v or k not in optional}
+            if self.endpoint.eid in {"sms_send", "register", "login", "change_password", "activate_card"}:
+                body["appId"] = self.main.current_app_id()
 
         preview = {
             "method": self.endpoint.method,
@@ -657,6 +663,25 @@ class MainWindow(QMainWindow):
         box = QGroupBox("连接与客户端身份")
         grid = QGridLayout(box)
         self.base_url = QLineEdit(self.runner.client.base_url)
+        self.app_id = QComboBox()
+        self.app_id.addItem("拼多多 / PDD (1)", 1)
+        self.app_id.addItem("zhibo-ai (2)", 2)
+        self.app_id.addItem("zhibo-live (3)", 3)
+        configured_app_id = int(self.runner.build_config["appId"])
+        if self.app_id.findData(configured_app_id) < 0:
+            self.app_id.addItem(
+                f"{self.runner.build_config.get('displayName', '自定义业务')} ({configured_app_id})",
+                configured_app_id,
+            )
+        initial_app_index = self.app_id.findData(self.runner.client.app_id)
+        self.app_id.setCurrentIndex(max(initial_app_index, 0))
+        build_config = self.runner.build_config
+        if not bool(build_config.get("productionEditable", True)):
+            self.app_id.setEnabled(False)
+            self.app_id.setToolTip(
+                f"生产构建已由 {build_config.get('configPath', '构建配置')} 固定 appId={build_config['appId']}"
+            )
+        self.app_id.currentIndexChanged.connect(self._on_app_id_changed)
         self.phone = QLineEdit("")
         self.password = QLineEdit("")
         self.password.setEchoMode(QLineEdit.EchoMode.Password)
@@ -665,6 +690,10 @@ class MainWindow(QMainWindow):
         self.sms_code.setPlaceholderText("注册用验证码；fixed-code 模式点「发送验证码」自动回填")
         self.login_state = QLabel("未登录")
         self.login_state.setStyleSheet("color:#dc2626;font-weight:600")
+        self.business_state = QLabel("业务信息待加载")
+        self.business_state.setWordWrap(True)
+        self.business_state.setStyleSheet("color:#475569;font-size:12px")
+        self.business_worker: Optional[Worker] = None
 
         login = QPushButton("登录")
         login.clicked.connect(self.do_login)
@@ -679,23 +708,27 @@ class MainWindow(QMainWindow):
 
         grid.addWidget(QLabel("服务地址"), 0, 0)
         grid.addWidget(self.base_url, 0, 1)
-        grid.addWidget(QLabel("手机号"), 0, 2)
-        grid.addWidget(self.phone, 0, 3)
-        grid.addWidget(QLabel("登录密码"), 1, 0)
-        grid.addWidget(self.password, 1, 1)
-        grid.addWidget(QLabel("设备ID"), 1, 2)
-        grid.addWidget(self.device_id, 1, 3)
-        grid.addWidget(QLabel("短信验证码"), 2, 0)
-        grid.addWidget(self.sms_code, 2, 1)
-        grid.addWidget(self.send_sms_btn, 2, 2)
-        grid.addWidget(slots_btn, 2, 3)
+        grid.addWidget(QLabel("业务/AppID"), 0, 2)
+        grid.addWidget(self.app_id, 0, 3)
+        grid.addWidget(QLabel("手机号"), 1, 0)
+        grid.addWidget(self.phone, 1, 1)
+        grid.addWidget(QLabel("登录密码"), 1, 2)
+        grid.addWidget(self.password, 1, 3)
+        grid.addWidget(QLabel("设备ID"), 2, 0)
+        grid.addWidget(self.device_id, 2, 1)
+        grid.addWidget(QLabel("短信验证码"), 2, 2)
+        grid.addWidget(self.sms_code, 2, 3)
+        grid.addWidget(self.send_sms_btn, 3, 0)
+        grid.addWidget(slots_btn, 3, 1)
         btn_row = QHBoxLayout()
         btn_row.addWidget(login)
         btn_row.addWidget(logout)
         btn_row.addWidget(unbind)
         btn_row.addWidget(self.login_state)
         btn_row.addStretch()
-        grid.addLayout(btn_row, 3, 0, 1, 4)
+        grid.addLayout(btn_row, 4, 0, 1, 4)
+        grid.addWidget(self.business_state, 5, 0, 1, 4)
+        QTimer.singleShot(0, self._refresh_business_info)
         return box
 
     def _endpoints_tab(self) -> QWidget:
@@ -805,7 +838,46 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------ 动作
     def _sync_config(self) -> None:
         self.runner.client.base_url = self.base_url.text().strip().rstrip("/")
+        self.runner.client.app_id = self.current_app_id()
         self.runner.device_id = self.device_id.text().strip()
+
+    def current_app_id(self) -> int:
+        return int(self.app_id.currentData() or 1)
+
+    def _on_app_id_changed(self, _index: int) -> None:
+        self.runner.client.app_id = self.current_app_id()
+        self.reload_endpoint_defaults()
+        self.refresh_login_state()
+        self._refresh_business_info()
+
+    def _refresh_business_info(self) -> None:
+        self._sync_config()
+        self.business_state.setText(f"正在读取 appId={self.current_app_id()} 的公开业务信息…")
+        self.business_worker = Worker(self.runner.client.business_info)
+        self.business_worker.finished.connect(self._render_business_info)
+        self.business_worker.start()
+
+    def _render_business_info(self, payload: object) -> None:
+        body = payload if isinstance(payload, dict) else {}
+        if body.get("code") != 200:
+            self.business_state.setText(f"业务不可用：{body.get('message', '请求失败')}")
+            self.business_state.setStyleSheet("color:#dc2626;font-size:12px")
+            return
+        data = body.get("data") or {}
+        mode = "支持手机短信自助注册" if data.get("registrationMode") == "SELF_SERVICE" else "仅管理员预置账号"
+        actions = ", ".join(data.get("supportedActions") or []) or "未声明"
+        self.business_state.setText(
+            f"{data.get('businessName', data.get('bizCode', '未知业务'))} / {data.get('bizCode')} · {mode} · "
+            f"状态={data.get('effectiveStatus')}\n{data.get('businessDescription') or '暂无业务说明'}\n支持动作：{actions}"
+        )
+        self.send_sms_btn.setEnabled(data.get("registrationMode") == "SELF_SERVICE")
+        for card in self.endpoint_cards:
+            if card.endpoint.eid in {"sms_send", "register"}:
+                enabled = data.get("registrationMode") == "SELF_SERVICE"
+                card.send_btn.setEnabled(enabled)
+                card.setToolTip("" if enabled else "该业务仅允许管理员预置账号，客户端不能自助注册")
+        color = "#047857" if data.get("effectiveStatus") == "AVAILABLE" else "#d97706"
+        self.business_state.setStyleSheet(f"color:{color};font-size:12px")
 
     def _sync_manual(self) -> None:
         """把界面手输的身份信息同步给 TestRunner（手机号/密码/短信验证码）。"""

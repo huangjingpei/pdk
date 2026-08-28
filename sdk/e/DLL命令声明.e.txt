@@ -12,6 +12,12 @@
     .参数 device_id, 文本型, , 设备ID，留空自动生成（建议留空）
     .参数 root_salt, 文本型, , 根密钥，留空用默认
 
+.DLL命令 pdk_create_ex, 整数型, "pdk_capi.dll", "pdk_create_ex", 公开
+    .参数 base_url, 文本型, , 服务端地址
+    .参数 device_id, 文本型, , 设备ID，留空自动生成
+    .参数 root_salt, 文本型, , 根密钥，留空用默认
+    .参数 app_id, 整数型, , 客户端固定业务标识：PDD=1、zhibo-ai=2、zhibo-live=3
+
 .DLL命令 pdk_destroy, , "pdk_capi.dll", "pdk_destroy", 公开
     .参数 h, 整数型, , pdk_create 返回的句柄
 
@@ -45,6 +51,16 @@
 
 .DLL命令 pdk_get_token_value, 文本型, "pdk_capi.dll", "pdk_get_token_value", 公开, UTF-8
     .参数 h, 整数型, , 句柄
+
+.DLL命令 pdk_get_app_id, 整数型, "pdk_capi.dll", "pdk_get_app_id", 公开
+    .参数 h, 整数型, , 句柄
+
+.DLL命令 pdk_set_app_id, 整数型, "pdk_capi.dll", "pdk_set_app_id", 公开
+    .参数 h, 整数型, , 句柄
+    .参数 app_id, 整数型, , 正整数；切换业务会自动清除旧业务登录态
+
+.DLL命令 pdk_business_info, 文本型, "pdk_capi.dll", "pdk_business_info", 公开, UTF-8
+    .参数 h, 整数型, , 句柄；登录前返回业务名称、描述、注册模式、有效状态和支持动作
 
 .DLL命令 pdk_send_sms, 文本型, "pdk_capi.dll", "pdk_send_sms", 公开, UTF-8
     .参数 h, 整数型, , 句柄

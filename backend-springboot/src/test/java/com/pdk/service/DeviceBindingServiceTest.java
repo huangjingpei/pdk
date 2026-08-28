@@ -20,15 +20,15 @@ class DeviceBindingServiceTest {
     @Test
     void readsAndWritesDeviceBinding() {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(valueOperations.get("pdk:device:bind:13800138000")).thenReturn("DEVICE-A");
+        when(valueOperations.get("pdk:device:bind:2:9")).thenReturn("DEVICE-A");
         DeviceBindingService service = new DeviceBindingService(redisTemplate);
 
-        assertEquals("DEVICE-A", service.get("13800138000"));
-        service.bind("13800138000", "DEVICE-A");
-        service.unbind("13800138000");
+        assertEquals("DEVICE-A", service.get(2L, 9L));
+        service.bind(2L, 9L, "DEVICE-A");
+        service.unbind(2L, 9L);
 
-        verify(valueOperations).set(eq("pdk:device:bind:13800138000"), eq("DEVICE-A"), any(java.time.Duration.class));
-        verify(redisTemplate).delete("pdk:device:bind:13800138000");
+        verify(valueOperations).set(eq("pdk:device:bind:2:9"), eq("DEVICE-A"), any(java.time.Duration.class));
+        verify(redisTemplate).delete("pdk:device:bind:2:9");
     }
 
     @Test
@@ -36,9 +36,9 @@ class DeviceBindingServiceTest {
         when(redisTemplate.opsForValue()).thenThrow(new RedisConnectionFailureException("down"));
         DeviceBindingService service = new DeviceBindingService(redisTemplate);
 
-        assertNull(service.get("13800138000"));
-        assertDoesNotThrow(() -> service.bind("13800138000", "DEVICE-A"));
+        assertNull(service.get(2L, 9L));
+        assertDoesNotThrow(() -> service.bind(2L, 9L, "DEVICE-A"));
         when(redisTemplate.delete(anyString())).thenThrow(new RedisConnectionFailureException("down"));
-        assertDoesNotThrow(() -> service.unbind("13800138000"));
+        assertDoesNotThrow(() -> service.unbind(2L, 9L));
     }
 }

@@ -30,8 +30,17 @@ public class FinancialServiceImpl implements IFinancialService {
 
     @Override
     public FinanceSummaryVO getFinanceSummary() {
-        List<FinancialIncome> allIncomes = incomeMapper.selectList(null);
-        List<CompanyExpense> allExpenses = expenseMapper.selectList(null);
+        return getFinanceSummary(null);
+    }
+
+    @Override
+    public FinanceSummaryVO getFinanceSummary(Long bizId) {
+        List<FinancialIncome> allIncomes = bizId == null ? incomeMapper.selectList(null)
+                : incomeMapper.selectList(new LambdaQueryWrapper<FinancialIncome>()
+                .eq(FinancialIncome::getBizId, bizId));
+        List<CompanyExpense> allExpenses = bizId == null ? expenseMapper.selectList(null)
+                : expenseMapper.selectList(new LambdaQueryWrapper<CompanyExpense>()
+                .eq(CompanyExpense::getBizId, bizId));
 
         BigDecimal totalIncome = BigDecimal.ZERO;
         BigDecimal normalSaleIncome = BigDecimal.ZERO;
@@ -61,7 +70,9 @@ public class FinancialServiceImpl implements IFinancialService {
             marginRate = netProfit.divide(totalIncome, 4, RoundingMode.HALF_UP).multiply(new BigDecimal("100"));
         }
 
-        Long healthyTokenCount = tokenPoolMapper.selectCount(new LambdaQueryWrapper<TokenPool>().eq(TokenPool::getHealthStatus, "HEALTHY"));
+        Long healthyTokenCount = tokenPoolMapper.selectCount(new LambdaQueryWrapper<TokenPool>()
+                .eq(bizId != null, TokenPool::getBizId, bizId)
+                .eq(TokenPool::getHealthStatus, "HEALTHY"));
 
         return FinanceSummaryVO.builder()
                 .totalIncome(totalIncome)
@@ -77,9 +88,10 @@ public class FinancialServiceImpl implements IFinancialService {
     }
 
     @Override
-    public Page<FinancialIncome> pageIncomes(int page, int size, String orderType, String searchKey) {
+    public Page<FinancialIncome> pageIncomes(int page, int size, String orderType, String searchKey, Long bizId) {
         Page<FinancialIncome> pageParam = new Page<>(page, size);
         LambdaQueryWrapper<FinancialIncome> wrapper = new LambdaQueryWrapper<>();
+        if (bizId != null) wrapper.eq(FinancialIncome::getBizId, bizId);
         if (orderType != null && !orderType.isEmpty()) {
             wrapper.eq(FinancialIncome::getOrderType, orderType);
         }
@@ -93,9 +105,10 @@ public class FinancialServiceImpl implements IFinancialService {
     }
 
     @Override
-    public Page<CompanyExpense> pageExpenses(int page, int size) {
+    public Page<CompanyExpense> pageExpenses(int page, int size, Long bizId) {
         Page<CompanyExpense> pageParam = new Page<>(page, size);
         LambdaQueryWrapper<CompanyExpense> wrapper = new LambdaQueryWrapper<>();
+        if (bizId != null) wrapper.eq(CompanyExpense::getBizId, bizId);
         wrapper.orderByDesc(CompanyExpense::getPurchasedAt);
         return expenseMapper.selectPage(pageParam, wrapper);
     }

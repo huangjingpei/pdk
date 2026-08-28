@@ -17,6 +17,12 @@ public class PdkDispatchLog {
     @TableId(type = IdType.AUTO)
     private Long id;
 
+    /** 业务主键；所有幂等与消费查询必须包含该维度。 */
+    private Long bizId;
+
+    /** 调用用户主键，手机号只作为快照展示。 */
+    private Long userId;
+
     /** 客户端请求幂等唯一UUID (防重试重复扣费) */
     private String reqUuid;
 

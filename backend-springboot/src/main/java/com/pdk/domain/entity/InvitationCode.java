@@ -8,6 +8,7 @@ import java.time.LocalDateTime;
 @TableName("pdk_invitation_code")
 public class InvitationCode {
     @TableId(type = IdType.AUTO) private Long id;
+    private Long bizId;
     private String code;
     private Long ownerUserId;
     private String status;

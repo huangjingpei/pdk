@@ -7,7 +7,8 @@ import org.springframework.stereotype.Component;
 @Component
 public class PddCredentialCodec {
     public String encode(TokenPool resource, String leaseTraceId, long leaseSeconds) {
-        return "{\"token\":\"" + escape(resource.getTokenVal()) + "\",\"leaseId\":\""
+        String credential = resource.getCredentialPayload() == null ? resource.getTokenVal() : resource.getCredentialPayload();
+        return "{\"token\":\"" + escape(credential) + "\",\"leaseId\":\""
                 + escape(leaseTraceId) + "\",\"expire\":" + leaseSeconds + "}";
     }
 

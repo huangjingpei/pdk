@@ -28,8 +28,9 @@ public class SmsCodeService {
     @Value("${pdk.sms.local.fixed-code:}") private String fixedCode;
 
     @Transactional
-    public String send(String phone, String purpose) {
+    public String send(Long bizId, String phone, String purpose) {
         SmsVerification latest = verificationMapper.selectOne(new LambdaQueryWrapper<SmsVerification>()
+                .eq(SmsVerification::getBizId, bizId)
                 .eq(SmsVerification::getPhone, phone)
                 .eq(SmsVerification::getPurpose, purpose)
                 .orderByDesc(SmsVerification::getCreatedAt)
@@ -39,9 +40,10 @@ public class SmsCodeService {
         }
         String code = fixedCodeEnabled ? fixedCode : String.format("%06d", secureRandom.nextInt(1_000_000));
         SmsVerification record = new SmsVerification();
+        record.setBizId(bizId);
         record.setPhone(phone);
         record.setPurpose(purpose);
-        record.setCodeHash(hash(phone, purpose, code));
+        record.setCodeHash(hash(bizId, phone, purpose, code));
         record.setStatus("PENDING");
         record.setExpireAt(LocalDateTime.now().plusMinutes(expireMinutes));
         verificationMapper.insert(record);
@@ -50,8 +52,9 @@ public class SmsCodeService {
     }
 
     @Transactional
-    public void verify(String phone, String purpose, String code) {
+    public void verify(Long bizId, String phone, String purpose, String code) {
         SmsVerification record = verificationMapper.selectOne(new LambdaQueryWrapper<SmsVerification>()
+                .eq(SmsVerification::getBizId, bizId)
                 .eq(SmsVerification::getPhone, phone)
                 .eq(SmsVerification::getPurpose, purpose)
                 .eq(SmsVerification::getStatus, "PENDING")
@@ -61,7 +64,7 @@ public class SmsCodeService {
             throw new BusinessException(40011, "短信验证码不存在或已过期");
         }
         if (!MessageDigest.isEqual(record.getCodeHash().getBytes(StandardCharsets.UTF_8),
-                hash(phone, purpose, code).getBytes(StandardCharsets.UTF_8))) {
+                hash(bizId, phone, purpose, code).getBytes(StandardCharsets.UTF_8))) {
             throw new BusinessException(40012, "短信验证码错误");
         }
         record.setStatus("USED");
@@ -69,10 +72,10 @@ public class SmsCodeService {
         verificationMapper.updateById(record);
     }
 
-    private String hash(String phone, String purpose, String code) {
+    private String hash(Long bizId, String phone, String purpose, String code) {
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            return HexFormat.of().formatHex(digest.digest((phone + ":" + purpose + ":" + code).getBytes(StandardCharsets.UTF_8)));
+            return HexFormat.of().formatHex(digest.digest((bizId + ":" + phone + ":" + purpose + ":" + code).getBytes(StandardCharsets.UTF_8)));
         } catch (Exception e) {
             throw new IllegalStateException(e);
         }

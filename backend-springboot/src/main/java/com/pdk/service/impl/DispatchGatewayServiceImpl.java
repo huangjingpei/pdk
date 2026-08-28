@@ -4,7 +4,6 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.pdk.common.exception.BusinessException;
 import com.pdk.common.utils.AesByteFlipUtils;
-import com.pdk.business.pdd.PddBusinessHandler;
 import com.pdk.business.spi.BusinessHandler;
 import com.pdk.business.spi.BusinessHandlerRegistry;
 import com.pdk.business.spi.FailureDecision;
@@ -29,6 +28,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.UUID;
+import com.pdk.platform.business.BusinessContext;
 
 @Slf4j
 @Service
@@ -48,16 +48,14 @@ public class DispatchGatewayServiceImpl implements IDispatchGatewayService {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public EncryptedTokenPayloadVO acquireEncryptedToken(AcquireTokenRequestDTO dto, String userPhone, String deviceId) {
-        // 多业务上下文尚未接入请求协议；兼容阶段 appId=1 固定路由到 PDD Handler。
-        // 后续只需把这里的常量替换为 BusinessContext.bizCode，公共事务流程无需复制。
-        BusinessHandler businessHandler = businessRegistry.require(PddBusinessHandler.BIZ_CODE);
+    public EncryptedTokenPayloadVO acquireEncryptedToken(AcquireTokenRequestDTO dto, BusinessContext business,
+                                                          User user, String deviceId) {
+        BusinessHandler businessHandler = businessRegistry.require(business.bizCode());
         businessHandler.validateAcquire(dto);
         if (Math.abs(System.currentTimeMillis() - dto.getTimestamp()) > 5 * 60 * 1000L) {
             throw new BusinessException(40012, "客户端时间偏差超过5分钟，请校准系统时间");
         }
         // 1. 检查用户状态与额度
-        User user = userMapper.selectOne(new LambdaQueryWrapper<User>().eq(User::getPhone, userPhone));
         if (user == null) {
             throw new BusinessException(40100, "用户不存在");
         }
@@ -69,7 +67,7 @@ public class DispatchGatewayServiceImpl implements IDispatchGatewayService {
         }
 
         // 2. 检查单设备互踢绑定
-        String activeDevice = deviceBindingService.get(userPhone);
+        String activeDevice = deviceBindingService.get(user.getBizId(), user.getId());
         if (activeDevice != null && !activeDevice.equals(deviceId)) {
             throw new BusinessException(40103, "ERR_DEVICE_KICK_OUT: 账号已在其他设备登录，本设备被迫下线");
         }
@@ -77,20 +75,21 @@ public class DispatchGatewayServiceImpl implements IDispatchGatewayService {
         if (user.getDeviceId() == null || !user.getDeviceId().equals(deviceId)) {
             throw new BusinessException(40103, "ERR_DEVICE_KICK_OUT: 当前电脑与账号绑定不一致");
         }
-        deviceBindingService.bind(userPhone, deviceId);
+        deviceBindingService.bind(user.getBizId(), user.getId(), deviceId);
 
         // 3. 只从当前套餐期已独占分配给该用户的小号中轮询，不允许跨客户共享。
         AccountAssignmentService.AssignedResource assigned = assignmentService.acquire(user);
         TokenPool healthyToken = assigned.token();
         healthyToken.setHealthStatus("BUSY");
-        healthyToken.setLeaseClientPhone(userPhone);
+        healthyToken.setLeaseClientPhone(user.getPhone());
         healthyToken.setLeasedAt(LocalDateTime.now());
         tokenPoolMapper.updateById(healthyToken);
 
         // 4. 生成短效租约 TraceId，并暂存 Redis
         String leaseTraceId = "TRACE-" + UUID.randomUUID().toString().replace("-", "").substring(0, 16);
         resourceLeaseService.create(leaseTraceId, new ResourceLeaseService.LeaseInfo(
-                healthyToken.getId(), userPhone, healthyToken.getAccountAlias(), dto.getActionType(),
+                business.bizId(), user.getId(), healthyToken.getId(), user.getPhone(),
+                healthyToken.getAccountAlias(), dto.getActionType(),
                 assigned.assignment().getId(), assigned.assignment().getSlotIndex()));
 
         // 5. 使用 AES-128-GCM + 0x50 0x44 字节倒序翻转混淆
@@ -108,15 +107,17 @@ public class DispatchGatewayServiceImpl implements IDispatchGatewayService {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public void reportAndDeductQuota(ReportResultDTO dto, String userPhone) {
-        BusinessHandler businessHandler = businessRegistry.require(PddBusinessHandler.BIZ_CODE);
+    public void reportAndDeductQuota(ReportResultDTO dto, BusinessContext business, User user) {
+        BusinessHandler businessHandler = businessRegistry.require(business.bizCode());
         Long existing = dispatchLogMapper.selectCount(new LambdaQueryWrapper<PdkDispatchLog>()
+                .eq(PdkDispatchLog::getBizId, business.bizId())
                 .eq(PdkDispatchLog::getReqUuid, dto.getLeaseTraceId()));
         if (existing != null && existing > 0) {
             log.info("重复结果上报命中幂等记录: traceId={}", dto.getLeaseTraceId());
             return;
         }
-        ResourceLeaseService.LeaseInfo leaseInfo = resourceLeaseService.consume(dto.getLeaseTraceId(), userPhone);
+        ResourceLeaseService.LeaseInfo leaseInfo = resourceLeaseService.consume(
+                business.bizId(), dto.getLeaseTraceId(), user.getId());
         if (leaseInfo == null) {
             throw new BusinessException(41001, "租约已过期或不存在，请重新领取资源");
         }
@@ -136,7 +137,8 @@ public class DispatchGatewayServiceImpl implements IDispatchGatewayService {
             } else {
                 // 兜底: 无 assignment 关联时直接递减用户级总池
                 int deducted = userMapper.update(null, new LambdaUpdateWrapper<User>()
-                        .eq(User::getPhone, userPhone)
+                        .eq(User::getBizId, business.bizId())
+                        .eq(User::getId, user.getId())
                         .gt(User::getRemainingCalls, 0)
                         .setSql("remaining_calls = remaining_calls - 1"));
                 if (deducted == 0) {
@@ -148,16 +150,17 @@ public class DispatchGatewayServiceImpl implements IDispatchGatewayService {
                     .eq(TokenPool::getId, tokenId)
                     .setSql("daily_calls_count = daily_calls_count + 1"));
             // 以 assignment 槽位额度为唯一权威重算用户总池，消除双计数错位
-            User user = userMapper.selectOne(new LambdaQueryWrapper<User>().eq(User::getPhone, userPhone));
-            if (user != null) assignmentService.recomputeUserRemainingCalls(user.getId());
+            assignmentService.recomputeUserRemainingCalls(user.getId());
 
-            log.info("业务调用成功上报并扣费: user={}, tokenId={}", userPhone, tokenId);
+            log.info("业务调用成功上报并扣费: biz={}, userId={}, tokenId={}",
+                    business.bizCode(), user.getId(), tokenId);
             deductCount = 1;
         } else if (decision.blacklistResource()) {
             // 当前业务 Handler 判定资源失效 -> 触发免责自愈: 扣 0 次并拉黑故障资源
             tokenPoolMapper.markTokenFaultStatus(tokenId, "FAULT_BLACK");
             if (assignmentId != null) assignmentService.replaceFault(assignmentId);
-            log.error("业务资源故障拉黑免责触发: tokenId={}, user={}, error={}", tokenId, userPhone, dto.getErrorMessage());
+            log.error("业务资源故障拉黑免责触发: biz={}, tokenId={}, userId={}, error={}",
+                    business.bizCode(), tokenId, user.getId(), dto.getErrorMessage());
         }
 
         if (!decision.blacklistResource()) {
@@ -175,8 +178,10 @@ public class DispatchGatewayServiceImpl implements IDispatchGatewayService {
         }
 
         PdkDispatchLog dispatchLog = new PdkDispatchLog();
+        dispatchLog.setBizId(business.bizId());
+        dispatchLog.setUserId(user.getId());
         dispatchLog.setReqUuid(dto.getLeaseTraceId());
-        dispatchLog.setUserPhone(userPhone);
+        dispatchLog.setUserPhone(user.getPhone());
         dispatchLog.setSlotIndex(leaseInfo.slotIndex());
         dispatchLog.setRealPddAccountId(accountAlias);
         dispatchLog.setActionType(actionType);

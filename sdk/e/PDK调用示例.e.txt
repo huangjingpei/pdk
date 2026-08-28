@@ -25,10 +25,19 @@
     手机 ＝ "13800138000"
     密码 ＝ "Pdk12345678"
 
-    ' —— 1) 创建实例（base_url 留空用默认；生产改成你的 https 域名）——
-    h ＝ pdk_create ("http://localhost:8080", "", "")
+    ' —— 1) 创建实例（本示例固定 PDD appId=1；其他客户端使用自己的固定 appId）——
+    h ＝ pdk_create_ex ("http://localhost:8080", "", "", 1)
     .如果 (h ＝ 0)
         信息框 ("创建 PDK 实例失败", 0, , )
+        返回 ()
+    .如果结束
+
+    ' —— 1.2) 登录前读取当前 appId 的业务信息；ADMIN_ONLY 时不要显示短信注册入口 ——
+    返回JSON ＝ pdk_business_info (h)
+    解析.解析 (返回JSON)
+    .如果 (到整数 (解析.取属性 ("code").取数值 ()) ≠ 200)
+        信息框 ("当前业务不可用：" ＋ 解析.取属性 ("message").取文本 (), 0, , )
+        pdk_destroy (h)
         返回 ()
     .如果结束
 

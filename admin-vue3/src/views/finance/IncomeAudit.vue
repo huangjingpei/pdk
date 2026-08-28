@@ -20,6 +20,7 @@
             <el-option label="套餐续费 (RENEWAL)" value="RENEWAL" />
           </el-select>
         </el-form-item>
+        <el-form-item label="业务"><el-select v-model="queryForm.bizId" placeholder="全部业务" clearable style="width:180px"><el-option v-for="b in businesses" :key="b.bizId" :label="`${b.businessName} (${b.appId})`" :value="b.bizId" /></el-select></el-form-item>
 
         <el-form-item label="流水/手机号/卡密">
           <el-input v-model="queryForm.searchKey" placeholder="搜索流水号/卡密/手机号" clearable style="width: 220px" />
@@ -35,6 +36,7 @@
     <!-- 数据表格 -->
     <el-card shadow="never" class="border-slate-200">
       <el-table :data="tableData" stripe border style="width: 100%">
+        <el-table-column label="业务" width="140"><template #default="s">{{ businessName(s.row.bizId) }}</template></el-table-column>
         <el-table-column prop="incomeOrderNo" label="财务流水号" width="180" />
         <el-table-column prop="cardKey" label="卡密序列号" width="170" />
         <el-table-column prop="userPhone" label="充值手机号" width="120" />
@@ -76,7 +78,7 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue';
 import { Search, Refresh } from '@element-plus/icons-vue';
-import type { FinancialIncome } from '../../types';
+import type { FinancialIncome, BusinessRuntime } from '../../types';
 import { api, type ApiResult, type PageResult } from '../../api';
 import { ElMessage } from 'element-plus';
 import { useRoute } from 'vue-router';
@@ -87,13 +89,15 @@ const partnerView = route.path === '/sales';
 const queryForm = reactive({
   orderType: '',
   searchKey: '',
+  bizId: '' as number|'',
 });
+const businesses=ref<BusinessRuntime[]>([]); const businessName=(id:number)=>businesses.value.find(b=>b.bizId===id)?.businessName||`业务#${id}`;
 
 const tableData = ref<FinancialIncome[]>([]);
 
 async function handleSearch(): Promise<void> {
   try {
-    const params = { size: 100, orderType: queryForm.orderType || undefined, searchKey: queryForm.searchKey || undefined };
+    const params = { size: 100, orderType: queryForm.orderType || undefined, searchKey: queryForm.searchKey || undefined, bizId: queryForm.bizId || undefined };
     const endpoint = partnerView ? '/api/v1/admin/sales/list' : '/api/v1/admin/finance/incomes';
     const response = await api.get<ApiResult<PageResult<FinancialIncome>>>(endpoint, { params });
     tableData.value = response.data.data.records;
@@ -103,7 +107,8 @@ async function handleSearch(): Promise<void> {
 const resetSearch = async () => {
   queryForm.orderType = '';
   queryForm.searchKey = '';
+  queryForm.bizId = '';
   await handleSearch();
 };
-onMounted(handleSearch);
+onMounted(async()=>{const b=await api.get<ApiResult<BusinessRuntime[]>>('/api/v1/admin/business/list');businesses.value=b.data.data;await handleSearch()});
 </script>

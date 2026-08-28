@@ -10,6 +10,7 @@ import java.time.LocalDateTime;
 public class PackagePlan {
     @TableId(type = IdType.AUTO)
     private Integer id;
+    private Long bizId;
     private Long ownerUserId;
     private String name;
     private Integer versionNo;

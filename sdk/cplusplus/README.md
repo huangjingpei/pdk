@@ -65,6 +65,7 @@ using namespace pdk;
 
 Config cfg;
 cfg.baseUrl = "http://localhost:8080";   // 生产替换为 https 域名
+cfg.appId = 1;                            // PDD=1，客户端构建时固定
 cfg.enableDebugLog = true;
 
 Client client(cfg);
@@ -93,6 +94,10 @@ if (r.ok()) {
 ```
 
 完整可运行示例见 `examples/main.cpp`。
+
+SDK 自动为所有请求发送 `X-PDK-App-ID`，并在短信、注册、登录、改密和卡密激活请求体中写入
+相同的 `appId`。URL 无需按业务拆分。C ABI 保留旧 `pdk_create()`（默认 appId=1），新客户端可用
+`pdk_create_ex(..., app_id)`；调试时也可调用 `pdk_set_app_id`，切换后旧登录态会自动清除。
 
 ---
 

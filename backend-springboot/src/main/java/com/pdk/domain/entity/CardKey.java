@@ -10,12 +10,14 @@ import java.time.LocalDateTime;
 public class CardKey implements Serializable {
     @TableId(type = IdType.AUTO)
     private Long id;
+    private Long bizId;
     private String cardKey;
     private Integer packageId;
     private String status; // UNUSED, ACTIVATED, VOID
     private String generatedByAdmin;
     private Long agentId;
     private String activatedByPhone;
+    private Long activatedByUserId;
     private LocalDateTime activatedAt;
     private String activatedDeviceId;
 

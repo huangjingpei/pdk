@@ -13,6 +13,8 @@ import com.pdk.domain.entity.User;
 import com.pdk.domain.entity.UserCredential;
 import com.pdk.mapper.UserMapper;
 import com.pdk.mapper.UserCredentialMapper;
+import com.pdk.platform.business.BusinessRequestResolver;
+import com.pdk.platform.business.BusinessContext;
 import com.pdk.service.DeviceBindingService;
 import com.pdk.service.SmsCodeService;
 import com.pdk.service.AccountAssignmentService;
@@ -22,7 +24,6 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.web.bind.annotation.*;
 
@@ -40,17 +41,21 @@ public class ClientAuthController {
     private final PasswordEncoder passwordEncoder;
     private final AccountAssignmentService assignmentService;
     private final InvitationService invitationService;
+    private final BusinessRequestResolver businessRequestResolver;
     @Qualifier("clientStpLogic")
     private final StpLogic clientStpLogic;
 
-    @Value("${pdk.trial.duration-hours:24}") private int trialDurationHours;
-    @Value("${pdk.trial.account-count:1}") private int trialAccountCount;
-    @Value("${pdk.trial.calls-per-account:20}") private int trialCallsPerAccount;
-
     @PostMapping("/sms/send")
-    public CommonResult<Map<String, Object>> sendSms(@Valid @RequestBody SendSmsDTO dto) {
-        String debugCode = smsCodeService.send(dto.getPhone(), dto.getPurpose());
+    public CommonResult<Map<String, Object>> sendSms(@Valid @RequestBody SendSmsDTO dto,
+                                                      HttpServletRequest request) {
+        BusinessContext business = businessRequestResolver.resolveContextAndBind(request, dto.getAppId());
+        if ("REGISTER".equals(dto.getPurpose()) && !"SELF_SERVICE".equals(business.registrationMode())) {
+            throw new BusinessException(40322, "当前业务不开放自助注册，请使用管理员提供的账号登录");
+        }
+        String debugCode = smsCodeService.send(business.bizId(), dto.getPhone(), dto.getPurpose());
         Map<String, Object> data = new LinkedHashMap<>();
+        data.put("appId", business.appId());
+        data.put("bizCode", business.bizCode());
         data.put("expireMinutes", 5);
         if (debugCode != null) {
             data.put("debugCode", debugCode);
@@ -60,24 +65,34 @@ public class ClientAuthController {
 
     @PostMapping("/register")
     @org.springframework.transaction.annotation.Transactional(rollbackFor = Exception.class)
-    public CommonResult<Map<String, Object>> register(@Valid @RequestBody ClientRegisterDTO dto) {
-        if (userMapper.selectCount(new LambdaQueryWrapper<User>().eq(User::getPhone, dto.getPhone())) > 0) {
+    public CommonResult<Map<String, Object>> register(@Valid @RequestBody ClientRegisterDTO dto,
+                                                       HttpServletRequest request) {
+        BusinessContext business = businessRequestResolver.resolveContextAndBind(request, dto.getAppId());
+        if (!"SELF_SERVICE".equals(business.registrationMode())) {
+            throw new BusinessException(40322, "当前业务不开放自助注册，请使用管理员提供的账号登录");
+        }
+        if (userMapper.selectCount(new LambdaQueryWrapper<User>()
+                .eq(User::getBizId, business.bizId()).eq(User::getPhone, dto.getPhone())) > 0) {
             throw new BusinessException(40010, "该手机号已经注册");
         }
-        smsCodeService.verify(dto.getPhone(), "REGISTER", dto.getSmsCode());
-        InvitationCode invitation = invitationService.findUsable(dto.getInvitationCode());
+        smsCodeService.verify(business.bizId(), dto.getPhone(), "REGISTER", dto.getSmsCode());
+        InvitationCode invitation = invitationService.findUsable(business.bizId(), dto.getInvitationCode());
         User user = new User();
+        user.setBizId(business.bizId());
         user.setPhone(dto.getPhone());
-        user.setStatus("TRIAL");
+        user.setAccountSource("SELF_REGISTER");
+        user.setStatus(business.trialEnabled() ? "TRIAL" : "ACTIVE");
         user.setDeviceId(dto.getDeviceId());
         user.setCurrentPackageId(0);
-        user.setCurrentPackageName("新用户免费试用");
-        user.setExpireTime(java.time.LocalDateTime.now().plusHours(trialDurationHours));
-        int trialCalls = trialAccountCount * trialCallsPerAccount;
+        user.setCurrentPackageName(business.trialEnabled() ? "新用户免费试用" : "未开通套餐");
+        user.setExpireTime(business.trialEnabled()
+                ? java.time.LocalDateTime.now().plusHours(business.trialDurationHours()) : null);
+        int trialCalls = business.trialEnabled()
+                ? business.trialAccountCount() * business.trialCallsPerAccount() : 0;
         user.setRemainingCalls(trialCalls);
         user.setDailyCallsLimit(trialCalls);
-        user.setMaxAccounts(trialAccountCount);
-        user.setIsTrialClaimed(1);
+        user.setMaxAccounts(business.trialEnabled() ? business.trialAccountCount() : 1);
+        user.setIsTrialClaimed(business.trialEnabled() ? 1 : 0);
         userMapper.insert(user);
 
         UserCredential credential = new UserCredential();
@@ -85,12 +100,14 @@ public class ClientAuthController {
         credential.setPasswordHash(passwordEncoder.encode(dto.getPassword()));
         credential.setRoleCode("CUSTOMER");
         credential.setStatus("ACTIVE");
+        credential.setMustChangePassword(0);
         credentialMapper.insert(credential);
-        invitationService.bind(user.getId(), invitation);
-        boolean resourceAllocated = assignmentService.allocateTrial(user, trialAccountCount, trialCallsPerAccount);
+        invitationService.bind(business.bizId(), user.getId(), invitation);
+        boolean resourceAllocated = !business.trialEnabled() || assignmentService.allocateTrial(user,
+                business.trialAccountCount(), business.trialCallsPerAccount());
         clientStpLogic.login(user.getId());
-        deviceBindingService.bind(user.getPhone(), user.getDeviceId());
-        Map<String, Object> result = payload(user, credential);
+        deviceBindingService.bind(user.getBizId(), user.getId(), user.getDeviceId());
+        Map<String, Object> result = payload(user, credential, business);
         result.put("resourceAllocated", resourceAllocated);
         result.put("resourceMessage", resourceAllocated
                 ? "试用小号已分配"
@@ -102,8 +119,11 @@ public class ClientAuthController {
     }
 
     @PostMapping("/login")
-    public CommonResult<Map<String, Object>> login(@Valid @RequestBody ClientLoginDTO dto) {
-        User user = userMapper.selectOne(new LambdaQueryWrapper<User>().eq(User::getPhone, dto.getPhone()));
+    public CommonResult<Map<String, Object>> login(@Valid @RequestBody ClientLoginDTO dto,
+                                                    HttpServletRequest request) {
+        BusinessContext business = businessRequestResolver.resolveContextAndBind(request, dto.getAppId());
+        User user = userMapper.selectOne(new LambdaQueryWrapper<User>()
+                .eq(User::getBizId, business.bizId()).eq(User::getPhone, dto.getPhone()));
         if (user == null) {
             throw new BusinessException(40100, "账号不存在，请先领取试用或激活卡密");
         }
@@ -125,14 +145,17 @@ public class ClientAuthController {
         }
 
         clientStpLogic.login(user.getId());
-        deviceBindingService.bind(user.getPhone(), dto.getDeviceId());
-        return CommonResult.success(payload(user, credential), "客户端登录成功");
+        deviceBindingService.bind(user.getBizId(), user.getId(), dto.getDeviceId());
+        return CommonResult.success(payload(user, credential, business), "客户端登录成功");
     }
 
     @PostMapping("/change-password")
     @org.springframework.transaction.annotation.Transactional(rollbackFor = Exception.class)
-    public CommonResult<String> changePassword(@Valid @RequestBody ChangePasswordDTO dto) {
-        User user = userMapper.selectOne(new LambdaQueryWrapper<User>().eq(User::getPhone, dto.getPhone()));
+    public CommonResult<String> changePassword(@Valid @RequestBody ChangePasswordDTO dto,
+                                                HttpServletRequest request) {
+        BusinessContext business = businessRequestResolver.resolveContextAndBind(request, dto.getAppId());
+        User user = userMapper.selectOne(new LambdaQueryWrapper<User>()
+                .eq(User::getBizId, business.bizId()).eq(User::getPhone, dto.getPhone()));
         if (user == null) throw new BusinessException(40105, "手机号或旧密码错误");
         UserCredential credential = credentialMapper.selectOne(new LambdaQueryWrapper<UserCredential>()
                 .eq(UserCredential::getUserId, user.getId()));
@@ -143,6 +166,7 @@ public class ClientAuthController {
             throw new BusinessException(40019, "新密码不能与旧密码相同");
         }
         credential.setPasswordHash(passwordEncoder.encode(dto.getNewPassword()));
+        credential.setMustChangePassword(0);
         credentialMapper.updateById(credential);
         return CommonResult.success("密码修改成功，请使用新密码登录");
     }
@@ -150,7 +174,7 @@ public class ClientAuthController {
     @PostMapping("/logout")
     public CommonResult<String> logout(HttpServletRequest request) {
         User user = (User) request.getAttribute("pdkClientUser");
-        deviceBindingService.unbind(user.getPhone());
+        deviceBindingService.unbind(user.getBizId(), user.getId());
         clientStpLogic.logout();
         return CommonResult.success("已注销当前会话");
     }
@@ -158,15 +182,22 @@ public class ClientAuthController {
     @PostMapping("/unbind-device")
     public CommonResult<String> unbindDevice(HttpServletRequest request) {
         User user = (User) request.getAttribute("pdkClientUser");
-        // 方案A：device_id 作为账号级稳定标识，解绑时【保留】 user.device_id，
-        // 仅释放当前活跃会话（Redis 绑定 + 登录态），后续登录仍复用同一 device_id。
-        deviceBindingService.unbind(user.getPhone());
+        userMapper.update(null, new com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper<User>()
+                .eq("id", user.getId())
+                .eq("biz_id", user.getBizId())
+                .set("device_id", null));
+        deviceBindingService.unbind(user.getBizId(), user.getId());
         clientStpLogic.logout();
-        return CommonResult.success("已解绑当前会话，账号设备标识保持不变");
+        return CommonResult.success("电脑已解绑，可在新电脑使用账号密码重新登录并绑定");
     }
 
-    private Map<String, Object> payload(User user, UserCredential credential) {
+    private Map<String, Object> payload(User user, UserCredential credential, BusinessContext business) {
         Map<String, Object> data = new LinkedHashMap<>();
+        data.put("bizId", business.bizId());
+        data.put("appId", business.appId());
+        data.put("bizCode", business.bizCode());
+        data.put("businessName", business.businessName());
+        data.put("businessDescription", business.businessDescription());
         data.put("tokenName", clientStpLogic.getTokenName());
         data.put("tokenValue", clientStpLogic.getTokenValue());
         data.put("phone", user.getPhone());
@@ -177,6 +208,7 @@ public class ClientAuthController {
         data.put("remainingCalls", user.getRemainingCalls());
         data.put("maxAccounts", user.getMaxAccounts());
         data.put("role", credential.getRoleCode());
+        data.put("mustChangePassword", Integer.valueOf(1).equals(credential.getMustChangePassword()));
         return data;
     }
 }

@@ -10,7 +10,10 @@ import java.time.LocalDateTime;
 public class TokenPool implements Serializable {
     @TableId(type = IdType.AUTO)
     private Long id;
+    private Long bizId;
     private String tokenVal;
+    private String credentialType;
+    private String credentialPayload;
     private String accountAlias;
     private String healthStatus; // HEALTHY, BUSY, FAULT_BLACK, EXPIRED
     private Integer dailyCallsCount;

@@ -9,6 +9,7 @@ import java.time.LocalDateTime;
 public class AccountAssignment {
     @TableId(type = IdType.AUTO)
     private Long id;
+    private Long bizId;
     private Long userId;
     private Long tokenId;
     private Integer packagePlanId;

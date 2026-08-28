@@ -7,6 +7,7 @@ import com.pdk.domain.dto.CreateCardBatchDTO;
 import com.pdk.domain.entity.CardKey;
 import com.pdk.security.AdminPrincipal;
 import com.pdk.mapper.CardKeyMapper;
+import com.pdk.mapper.PackagePlanMapper;
 import com.pdk.service.ICardKeyActivationService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -23,6 +24,7 @@ import com.pdk.domain.entity.FinancialIncome;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import com.pdk.platform.business.BusinessService;
 
 @RestController
 @RequestMapping("/api/v1/admin/card")
@@ -32,8 +34,11 @@ public class AdminCardKeyController {
 
     private final ICardKeyActivationService activationService;
     private final CardKeyMapper cardKeyMapper;
+    private final PackagePlanMapper packagePlanMapper;
     private final AdminAuditService adminAuditService;
     private final CardRenewalService renewalService;
+    private final BusinessService businessService;
+    private final com.pdk.security.AdminBusinessScope businessScope;
 
     @PostMapping("/batch-generate")
     @RequirePermission(RolePermissions.CARD_CREATE)
@@ -43,8 +48,9 @@ public class AdminCardKeyController {
             @Valid @RequestBody CreateCardBatchDTO dto,
             HttpServletRequest request) {
         AdminPrincipal admin = (AdminPrincipal) request.getAttribute("pdkAdminPrincipal");
-        List<String> keys = activationService.createCardKeyBatch(dto, admin.username());
-        adminAuditService.record(admin, "GENERATE_CARD", "CARD", "BATCH-" + keys.get(0),
+        List<String> keys = activationService.createCardKeyBatch(dto, admin);
+        Long bizId = packagePlanMapper.selectById(dto.getPackageId()).getBizId();
+        adminAuditService.record(admin, bizId, "GENERATE_CARD", "CARD", "BATCH-" + keys.get(0),
                 null, "{\"packageId\":" + dto.getPackageId() + ",\"count\":" + keys.size() + "}",
                 dto.getBatchRemark(), request);
         return CommonResult.success(keys, "批量制卡成功");
@@ -57,13 +63,18 @@ public class AdminCardKeyController {
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "10") int size,
             @RequestParam(required = false) String status,
+            @RequestParam(required = false) Long bizId,
+            @RequestParam(required = false) Long appId,
             HttpServletRequest request) {
         Page<CardKey> pageParam = new Page<>(page, size);
         LambdaQueryWrapper<CardKey> wrapper = new LambdaQueryWrapper<>();
+        AdminPrincipal admin = (AdminPrincipal) request.getAttribute("pdkAdminPrincipal");
+        if (appId != null) bizId = businessService.requireByAppId(appId).getId();
+        bizId = businessScope.enforce(admin, bizId);
+        if (bizId != null) wrapper.eq(CardKey::getBizId, bizId);
         if (status != null && !status.isEmpty()) {
             wrapper.eq(CardKey::getStatus, status);
         }
-        AdminPrincipal admin = (AdminPrincipal) request.getAttribute("pdkAdminPrincipal");
         if ("PARTNER".equals(admin.roleCode())) {
             wrapper.eq(CardKey::getGeneratedByAdmin, admin.username());
         }
@@ -77,7 +88,7 @@ public class AdminCardKeyController {
                                                 HttpServletRequest request) {
         AdminPrincipal principal = (AdminPrincipal) request.getAttribute("pdkAdminPrincipal");
         FinancialIncome income = renewalService.renew(cardKey, dto, principal);
-        adminAuditService.record(principal, "RENEW_CARD", "CARD", cardKey, null,
+        adminAuditService.record(principal, income.getBizId(), "RENEW_CARD", "CARD", cardKey, null,
                 "{\"orderNo\":\"" + income.getIncomeOrderNo() + "\"}", "原卡密续费", request);
         return CommonResult.success(income, "续费成功，原卡密保持不变");
     }
@@ -94,10 +105,13 @@ public class AdminCardKeyController {
 
     @PutMapping("/{cardKey}/void")
     @RequirePermission(RolePermissions.CARD_VOID)
-    public CommonResult<String> voidCard(@PathVariable String cardKey, HttpServletRequest request) {
+    public CommonResult<String> voidCard(@PathVariable String cardKey, @RequestParam Long appId,
+                                         HttpServletRequest request) {
         AdminPrincipal principal = (AdminPrincipal) request.getAttribute("pdkAdminPrincipal");
-        renewalService.voidCard(cardKey, principal);
-        adminAuditService.record(principal, "VOID_CARD", "CARD", cardKey, null,
+        Long bizId = businessService.requireByAppId(appId).getId();
+        businessScope.enforce(principal, bizId);
+        renewalService.voidCard(bizId, cardKey, principal);
+        adminAuditService.record(principal, bizId, "VOID_CARD", "CARD", cardKey, null,
                 "{\"status\":\"VOID\"}", "管理员作废卡密", request);
         return CommonResult.success("卡密已作废，相关授权与小号资源已释放");
     }

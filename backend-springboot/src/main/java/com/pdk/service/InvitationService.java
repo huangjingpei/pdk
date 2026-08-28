@@ -22,9 +22,10 @@ public class InvitationService {
     private final UserCredentialMapper credentialMapper;
     private final SecureRandom random = new SecureRandom();
 
-    public InvitationCode findUsable(String rawCode) {
+    public InvitationCode findUsable(Long bizId, String rawCode) {
         if (rawCode == null || rawCode.isBlank()) return null;
         InvitationCode code = codeMapper.selectOne(new LambdaQueryWrapper<InvitationCode>()
+                .eq(InvitationCode::getBizId, bizId)
                 .eq(InvitationCode::getCode, rawCode.trim().toUpperCase()));
         if (code == null || !"ACTIVE".equals(code.getStatus())
                 || (code.getMaxUses() != null && code.getUsedCount() >= code.getMaxUses())) {
@@ -38,9 +39,10 @@ public class InvitationService {
         return code;
     }
 
-    public void bind(Long userId, InvitationCode code) {
+    public void bind(Long bizId, Long userId, InvitationCode code) {
         if (code == null) return;
         UserReferral referral = new UserReferral();
+        referral.setBizId(bizId);
         referral.setUserId(userId);
         referral.setInvitationCodeId(code.getId());
         referral.setPartnerUserId(code.getOwnerUserId());
@@ -49,24 +51,27 @@ public class InvitationService {
         codeMapper.updateById(code);
     }
 
-    public InvitationCode ensurePartnerCode(Long partnerUserId) {
+    public InvitationCode ensurePartnerCode(Long bizId, Long partnerUserId) {
         InvitationCode existing = codeMapper.selectOne(new LambdaQueryWrapper<InvitationCode>()
+                .eq(InvitationCode::getBizId, bizId)
                 .eq(InvitationCode::getOwnerUserId, partnerUserId));
         if (existing != null) return existing;
         InvitationCode code = new InvitationCode();
+        code.setBizId(bizId);
         code.setOwnerUserId(partnerUserId);
-        code.setCode(nextCode());
+        code.setCode(nextCode(bizId));
         code.setStatus("ACTIVE");
         code.setUsedCount(0);
         codeMapper.insert(code);
         return code;
     }
 
-    private String nextCode() {
+    private String nextCode(Long bizId) {
         for (int attempt = 0; attempt < 10; attempt++) {
             StringBuilder value = new StringBuilder("P");
             for (int i = 0; i < 7; i++) value.append(ALPHABET[random.nextInt(ALPHABET.length)]);
             if (codeMapper.selectCount(new LambdaQueryWrapper<InvitationCode>()
+                    .eq(InvitationCode::getBizId, bizId)
                     .eq(InvitationCode::getCode, value.toString())) == 0) return value.toString();
         }
         throw new BusinessException(50018, "邀请码生成失败，请重试");

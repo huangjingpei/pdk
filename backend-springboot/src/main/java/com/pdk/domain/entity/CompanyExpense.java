@@ -11,6 +11,8 @@ import java.time.LocalDateTime;
 public class CompanyExpense implements Serializable {
     @TableId(type = IdType.AUTO)
     private Long id;
+    /** 为空表示公司全局费用，否则归属一个业务。 */
+    private Long bizId;
     private String expenseOrderNo;
     private String category; // TOKEN_PURCHASE, SERVER_PROXY, SMS_GATEWAY
     private String tokenBatchId;

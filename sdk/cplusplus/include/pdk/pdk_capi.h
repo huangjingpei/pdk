@@ -42,6 +42,9 @@ typedef void (*PdkLogCallback)(const char* line, void* userData);
 
 /* 创建 / 销毁实例 */
 PDK_CAPI PdkHandle pdk_create(const char* base_url, const char* device_id, const char* root_salt);
+/* 多业务构造；旧 pdk_create 保持兼容并默认 app_id=1。 */
+PDK_CAPI PdkHandle pdk_create_ex(const char* base_url, const char* device_id,
+                                 const char* root_salt, long app_id);
 PDK_CAPI void      pdk_destroy(PdkHandle h);
 
 /* 释放由本库返回的字符串（务必调用，避免内存泄漏） */
@@ -60,6 +63,9 @@ PDK_CAPI int       pdk_is_logged_in(PdkHandle h);
 PDK_CAPI char*     pdk_get_phone(PdkHandle h);
 PDK_CAPI char*     pdk_get_device_id(PdkHandle h);
 PDK_CAPI char*     pdk_get_token_value(PdkHandle h);
+PDK_CAPI long      pdk_get_app_id(PdkHandle h);
+/* 成功返回1，非法句柄或 app_id<=0 返回0。 */
+PDK_CAPI int       pdk_set_app_id(PdkHandle h, long app_id);
 
 /* 鉴权相关（返回 JSON 字符串，需 pdk_free_string 释放） */
 PDK_CAPI char* pdk_send_sms(PdkHandle h, const char* phone, const char* purpose);
@@ -83,6 +89,7 @@ PDK_CAPI char* pdk_report_result(PdkHandle h, const char* lease_trace_id, const 
                                  long response_duration_ms, const char* error_message);
 
 /* 账号查询 */
+PDK_CAPI char* pdk_business_info(PdkHandle h);
 PDK_CAPI char* pdk_profile(PdkHandle h);
 PDK_CAPI char* pdk_usage(PdkHandle h, int page, int size);
 PDK_CAPI char* pdk_resource_status(PdkHandle h);

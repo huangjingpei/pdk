@@ -13,6 +13,7 @@ import com.pdk.domain.vo.EncryptedTokenPayloadVO;
 import com.pdk.mapper.PdkDispatchLogMapper;
 import com.pdk.mapper.AccountAssignmentMapper;
 import com.pdk.mapper.CardKeyMapper;
+import com.pdk.platform.business.BusinessRequestResolver;
 import com.pdk.service.IDispatchGatewayService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
@@ -35,6 +36,12 @@ public class ClientAccountController {
     public CommonResult<Map<String, Object>> profile(HttpServletRequest request) {
         User user = currentUser(request);
         Map<String, Object> data = new LinkedHashMap<>();
+        var business = BusinessRequestResolver.context(request);
+        data.put("bizId", business.bizId());
+        data.put("appId", business.appId());
+        data.put("bizCode", business.bizCode());
+        data.put("businessName", business.businessName());
+        data.put("businessDescription", business.businessDescription());
         data.put("phone", user.getPhone());
         data.put("status", user.getStatus());
         data.put("deviceId", user.getDeviceId());
@@ -52,15 +59,15 @@ public class ClientAccountController {
                                                    @RequestParam(defaultValue = "20") int size) {
         User user = currentUser(request);
         LambdaQueryWrapper<PdkDispatchLog> base = new LambdaQueryWrapper<PdkDispatchLog>()
-                .eq(PdkDispatchLog::getUserPhone, user.getPhone());
+                .eq(PdkDispatchLog::getBizId, user.getBizId()).eq(PdkDispatchLog::getUserId, user.getId());
         long total = dispatchLogMapper.selectCount(base);
         long successes = dispatchLogMapper.selectCount(new LambdaQueryWrapper<PdkDispatchLog>()
-                .eq(PdkDispatchLog::getUserPhone, user.getPhone())
+                .eq(PdkDispatchLog::getBizId, user.getBizId()).eq(PdkDispatchLog::getUserId, user.getId())
                 .eq(PdkDispatchLog::getExecStatus, "SUCCESS"));
         long failures = total - successes;
         Page<PdkDispatchLog> logs = dispatchLogMapper.selectPage(new Page<>(page, Math.min(size, 100)),
                 new LambdaQueryWrapper<PdkDispatchLog>()
-                        .eq(PdkDispatchLog::getUserPhone, user.getPhone())
+                        .eq(PdkDispatchLog::getBizId, user.getBizId()).eq(PdkDispatchLog::getUserId, user.getId())
                         .orderByDesc(PdkDispatchLog::getCreatedAt));
 
         Map<String, Object> data = new LinkedHashMap<>();
@@ -76,6 +83,7 @@ public class ClientAccountController {
     public CommonResult<Map<String, Object>> resourceStatus(HttpServletRequest request) {
         User user = currentUser(request);
         java.util.List<AccountAssignment> assignments = assignmentMapper.selectList(new LambdaQueryWrapper<AccountAssignment>()
+                .eq(AccountAssignment::getBizId, user.getBizId())
                 .eq(AccountAssignment::getUserId, user.getId())
                 .eq(AccountAssignment::getStatus, "ACTIVE")
                 .orderByAsc(AccountAssignment::getSlotIndex));
@@ -94,7 +102,7 @@ public class ClientAccountController {
     public CommonResult<Map<String, Object>> card(HttpServletRequest request) {
         User user = currentUser(request);
         CardKey card = cardKeyMapper.selectOne(new LambdaQueryWrapper<CardKey>()
-                .eq(CardKey::getActivatedByPhone, user.getPhone())
+                .eq(CardKey::getBizId, user.getBizId()).eq(CardKey::getActivatedByUserId, user.getId())
                 .orderByDesc(CardKey::getActivatedAt)
                 .last("LIMIT 1"));
         Map<String, Object> data = new LinkedHashMap<>();
@@ -104,6 +112,7 @@ public class ClientAccountController {
         data.put("expireTime", user.getExpireTime());
         data.put("remainingCalls", user.getRemainingCalls());
         data.put("assignments", assignmentMapper.selectList(new LambdaQueryWrapper<AccountAssignment>()
+                .eq(AccountAssignment::getBizId, user.getBizId())
                 .eq(AccountAssignment::getUserId, user.getId())
                 .eq(AccountAssignment::getStatus, "ACTIVE")
                 .orderByAsc(AccountAssignment::getSlotIndex)));
@@ -115,17 +124,19 @@ public class ClientAccountController {
                                                           HttpServletRequest request) {
         User user = currentUser(request);
         String deviceId = request.getHeader("X-PDK-Device-ID");
-        return CommonResult.success(gatewayService.acquireEncryptedToken(dto, user.getPhone(), deviceId));
+        return CommonResult.success(gatewayService.acquireEncryptedToken(dto,
+                BusinessRequestResolver.context(request), user, deviceId));
     }
 
     @PostMapping("/resources/report")
     public CommonResult<String> report(@Valid @RequestBody ReportResultDTO dto, HttpServletRequest request) {
         User user = currentUser(request);
-        gatewayService.reportAndDeductQuota(dto, user.getPhone());
+        gatewayService.reportAndDeductQuota(dto, BusinessRequestResolver.context(request), user);
         return CommonResult.success("资源使用结果已记录");
     }
 
     private User currentUser(HttpServletRequest request) {
         return (User) request.getAttribute("pdkClientUser");
     }
+
 }

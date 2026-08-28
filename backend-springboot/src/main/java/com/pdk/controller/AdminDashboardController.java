@@ -11,6 +11,7 @@ import com.pdk.mapper.TokenPoolMapper;
 import com.pdk.mapper.UserMapper;
 import com.pdk.security.RequirePermission;
 import com.pdk.security.RolePermissions;
+import com.pdk.security.AdminBusinessScope;
 import com.pdk.service.IFinancialService;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
@@ -30,30 +31,37 @@ public class AdminDashboardController {
     private final CardKeyMapper cardKeyMapper;
     private final TokenPoolMapper tokenPoolMapper;
     private final IFinancialService financialService;
+    private final AdminBusinessScope businessScope;
 
     @GetMapping("/summary")
     public CommonResult<Map<String, Object>> summary(HttpServletRequest request) {
         AdminPrincipal admin = (AdminPrincipal) request.getAttribute("pdkAdminPrincipal");
+        Long bizId = businessScope.enforce(admin, null);
         Map<String, Object> data = new LinkedHashMap<>();
         boolean seesUsers = RolePermissions.has(admin.roleCode(), RolePermissions.USER_VIEW);
         boolean seesTokens = RolePermissions.has(admin.roleCode(), RolePermissions.TOKEN_VIEW);
         boolean seesCards = RolePermissions.has(admin.roleCode(), RolePermissions.CARD_VIEW);
         if (seesUsers) {
-            data.put("userCount", userMapper.selectCount(null));
-            data.put("activeUserCount", userMapper.selectCount(new LambdaQueryWrapper<User>().ne(User::getStatus, "FROZEN")));
+            data.put("userCount", userMapper.selectCount(new LambdaQueryWrapper<User>()
+                    .eq(bizId != null, User::getBizId, bizId)));
+            data.put("activeUserCount", userMapper.selectCount(new LambdaQueryWrapper<User>()
+                    .eq(bizId != null, User::getBizId, bizId).ne(User::getStatus, "FROZEN")));
         }
         if (seesTokens) {
-            data.put("healthyResourceCount", tokenPoolMapper.selectCount(new LambdaQueryWrapper<TokenPool>().eq(TokenPool::getHealthStatus, "HEALTHY")));
+            data.put("healthyResourceCount", tokenPoolMapper.selectCount(new LambdaQueryWrapper<TokenPool>()
+                    .eq(bizId != null, TokenPool::getBizId, bizId)
+                    .eq(TokenPool::getHealthStatus, "HEALTHY")));
         }
         if (seesCards) {
             LambdaQueryWrapper<CardKey> cards = new LambdaQueryWrapper<CardKey>().eq(CardKey::getStatus, "UNUSED");
+            cards.eq(bizId != null, CardKey::getBizId, bizId);
             if ("PARTNER".equals(admin.roleCode())) {
                 cards.eq(CardKey::getGeneratedByAdmin, admin.username());
             }
             data.put("unusedCardCount", cardKeyMapper.selectCount(cards));
         }
         if (RolePermissions.has(admin.roleCode(), RolePermissions.FINANCE_VIEW)) {
-            data.put("finance", financialService.getFinanceSummary());
+            data.put("finance", financialService.getFinanceSummary(bizId));
         }
         return CommonResult.success(data);
     }

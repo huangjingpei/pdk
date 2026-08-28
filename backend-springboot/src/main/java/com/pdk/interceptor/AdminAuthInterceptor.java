@@ -60,7 +60,8 @@ public class AdminAuthInterceptor implements HandlerInterceptor {
             AdminUser admin = adminUserMapper.selectById(Long.parseLong(loginId.substring(6)));
             if (admin == null || !"ACTIVE".equals(admin.getStatus())
                     || !java.util.Set.of("SUPER_ADMIN", "PARTNER").contains(admin.getRoleCode())) return null;
-            return new AdminPrincipal(admin.getId(), admin.getUsername(), admin.getDisplayName(), admin.getRoleCode(), "ADMIN");
+            if ("PARTNER".equals(admin.getRoleCode()) && admin.getBizId() == null) return null;
+            return new AdminPrincipal(admin.getId(), admin.getUsername(), admin.getDisplayName(), admin.getRoleCode(), "ADMIN", admin.getBizId());
         }
         if (loginId.startsWith("USER:")) {
             Long userId = Long.parseLong(loginId.substring(5));
@@ -68,7 +69,7 @@ public class AdminAuthInterceptor implements HandlerInterceptor {
             UserCredential credential = credentialMapper.selectOne(new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<UserCredential>()
                     .eq(UserCredential::getUserId, userId));
             if (user == null || credential == null || !"ACTIVE".equals(credential.getStatus()) || !"PARTNER".equals(credential.getRoleCode())) return null;
-            return new AdminPrincipal(userId, user.getPhone(), user.getPhone(), "PARTNER", "USER");
+            return new AdminPrincipal(userId, user.getPhone(), user.getPhone(), "PARTNER", "USER", user.getBizId());
         }
         return null;
     }

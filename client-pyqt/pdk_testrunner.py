@@ -26,6 +26,7 @@ from pdk_client import (
     default_device_id,
     random_password,
     random_phone,
+    load_client_config,
 )
 
 
@@ -44,8 +45,14 @@ class Result:
 
 
 class TestRunner:
-    def __init__(self, base_url: Optional[str] = None, device_id: Optional[str] = None) -> None:
-        self.client = PdkApiClient(base_url or os.getenv("PDK_API_BASE", "http://localhost:8080"))
+    def __init__(self, base_url: Optional[str] = None, device_id: Optional[str] = None,
+                 app_id: Optional[int] = None) -> None:
+        self.build_config = load_client_config()
+        resolved_app_id = app_id if app_id is not None else int(self.build_config["appId"])
+        self.client = PdkApiClient(
+            base_url or os.getenv("PDK_API_BASE", "http://localhost:8080"),
+            app_id=resolved_app_id,
+        )
         self.device_id = device_id or default_device_id()
         # 手动指定的测试身份（GUI/CLI 可注入；留空则自动生成）
         self.manual_phone: str = ""
@@ -521,7 +528,7 @@ class TestRunner:
         sid, name, cat = "B16", "解绑-未登录", "边界"
         expected = "code=40100；登录状态无效"
         self.client.expectation = expected
-        anon = PdkApiClient(self.client.base_url)
+        anon = PdkApiClient(self.client.base_url, app_id=self.client.app_id)
         body = anon.unbind_device()
         ok = self._code_match(body, 40100)
         return self._result(sid, name, cat, expected, body, passed=ok,

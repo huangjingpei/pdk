@@ -108,6 +108,7 @@ struct ApiResponse {
  * ========================================================================== */
 struct Config {
     std::string baseUrl  = "http://localhost:8080"; // 服务端基础地址（生产用 https）
+    long        appId    = 1; // 客户端构建固定的公开业务标识；PDD=1
     std::string rootSalt = "PDK_SECRET_SALT_2026_ENTERPRISE"; // 与后端 AesByteFlipUtils 一致
     std::string deviceId;        // 可选：留空则自动生成并持久化（方案A：本地缓存+服务端权威）
     bool        enableDebugLog = false; // 是否把 HTTP 请求/响应/期待 输出到调试日志回调
@@ -154,10 +155,13 @@ public:
     std::string deviceId()    const;
     std::string tokenName()   const;
     std::string tokenValue()  const;
+    long        appId()       const;
+    void        setAppId(long appId); // 调试/多构建配置；生产客户端不应开放给最终用户修改
     std::string lastStateDetail() const; // 最近一次状态详情（便于无回调时轮询）
     State       lastState()   const;
 
     // —— 鉴权 ——
+    ApiResponse businessInfo(); // 登录前公开业务信息：名称/描述/注册模式/有效状态
     ApiResponse sendSms(const std::string& phone, const std::string& purpose = "REGISTER");
     ApiResponse registerAccount(const std::string& phone,
                                 const std::string& password,

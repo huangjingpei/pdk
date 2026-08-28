@@ -8,7 +8,7 @@ SMS_CODE = "123456"
 
 
 def main() -> None:
-    client = PdkApiClient(base_url=BASE_URL)
+    client = PdkApiClient(base_url=BASE_URL, app_id=1)  # PDD 客户端固定 appId=1
 
     # 状态回调：界面据此刷新“未登录 / 登录中 / 已登录 / 被踢”
     client.on_state = lambda s, d: print(f"[状态] {s.name} —— {d}")
@@ -18,6 +18,11 @@ def main() -> None:
     client.on_log = lambda line: print(f"[调试] {line}")
 
     print("== 设备ID:", client.session.device_id, "==")
+
+    r = client.business_info()
+    if not client.is_ok(r):
+        print("当前业务不可用:", r.get("message"))
+        return
 
     r = client.send_sms(PHONE, "REGISTER")
     if not client.is_ok(r):

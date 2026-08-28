@@ -59,8 +59,11 @@ export DB_PASS='replace-me'
 export SPRING_DATA_REDIS_HOST='127.0.0.1'
 export PDK_ADMIN_PASSWORD_PEPPER='replace-with-random-value'
 export PDK_SECURITY_ROOT_SALT='replace-with-random-value'
-export PDK_TRIAL_SMS_CODE='replace-or-connect-real-sms-provider'
+export PDK_SMS_PROVIDER='local'              # 仅开发联调
+export PDK_SMS_FIXED_CODE_ENABLED='false'    # 默认及正式环境禁止固定验证码
 ```
+
+当前 `AliyunSmsSender` 仍是明确返回 `50320` 的预留适配器，尚未安装阿里云 SDK，因此不能把 `PDK_SMS_PROVIDER` 直接改成 `aliyun` 上生产。正式发布前需完成阿里云适配和回执测试；本地模式只允许开发联调，验证码会写入服务端日志。
 
 运行：
 
@@ -83,12 +86,24 @@ curl -fsS http://127.0.0.1:8080/actuator/health
 
 1. JDBC URL 的 `createDatabaseIfNotExist=true` 在空环境创建 `pdk_biz_db`。
 2. `spring.sql.init.mode=always` 自动加载 classpath 下的 `schema-mysql.sql`。
-3. SQL 使用 `CREATE TABLE IF NOT EXISTS`、`ON DUPLICATE KEY UPDATE` 和条件插入，因此可以重复执行。
+3. SQL 使用 `CREATE TABLE IF NOT EXISTS`、`ON DUPLICATE KEY UPDATE` 和条件插入，因此同一最终结构可以重复执行。
 4. `continue-on-error=false` 保证任何 DDL/种子错误都会终止启动，不允许应用在残缺结构上运行。
 
-数据库账号首次建库时需要 `CREATE` 权限；如果生产环境禁止应用账号建库，应由 DBA 预先创建 `pdk_biz_db` 并授予该库全部 DDL/DML 权限。即使数据库已存在，表和种子仍由启动脚本自动检查。
+数据库账号首次建库时需要 `CREATE` 权限；如果生产环境禁止应用账号建库，应由 DBA 预先创建空的 `pdk_biz_db` 并授予该库全部 DDL/DML 权限。当前基线不包含旧表 ALTER：已有旧结构时先备份并重建为空库，再启动新版本。
 
-当前机制适合原型与单实例部署。正式长期演进建议迁移到 Flyway/Liquibase 版本化迁移，避免只靠 `CREATE TABLE IF NOT EXISTS` 无法自动修改已有表字段。
+当前机制适合原型与全新部署。产生必须保留的正式生产数据后，应在下一次结构变化前迁移到 Flyway/Liquibase 版本化迁移。
+
+### IDEA 启动日志说明
+
+运行 `compile spring-boot:run` 后出现 `Started PdkApplication` 就表示后端已经启动。Maven 任务会持续占用运行窗口来承载 Web 服务，这不是卡住；停止服务时使用 IDEA 的停止按钮。
+
+项目通过 `.mvn/jvm.config`、Maven 编码属性和 Spring Boot 运行参数统一使用 UTF-8。如果控制台仍显示 `Picked up JAVA_TOOL_OPTIONS: -Dfile.encoding=GBK`，说明 IDEA 运行配置或 Windows 环境变量仍注入了 GBK；应在 IDEA 的 Maven Runner/运行配置中删除该环境变量，或改为 `-Dfile.encoding=UTF-8`。
+
+MyBatis 默认不再逐条打印 SqlSession、JDBC 和定时清理 SQL。需要临时检查完整 SQL 时，在 IDEA 运行配置增加：
+
+```text
+PDK_MAPPER_LOG_LEVEL=DEBUG
+```
 
 ## 5. 管理端编译
 
@@ -226,7 +241,7 @@ journalctl -u pdk-backend -f
 ## 11. 当前生产限制
 
 - Sa-Token 当前使用进程内会话存储，只能运行一个后端实例；部署多副本前必须接入 Sa-Token Redis DAO。
-- 试用验证码仍是环境变量校验，正式上线必须接入真实短信验证码服务和频率限制。
+- 短信已抽象为统一发送接口，本地验证码模式仅供开发；正式上线前必须完成 `AliyunSmsSender` SDK/签名/模板/回执实现，并关闭固定验证码和本地发送模式。
 - 管理员密码当前为 pepper + SHA-256，正式上线应迁移到 BCrypt 或 Argon2，并增加登录失败锁定和 MFA。
-- 当前 SQL 初始化不是版本化迁移工具；已有表结构升级需要人工迁移脚本。
+- 当前 SQL 初始化是全新库最终基线，不是版本化迁移工具；旧结构必须先备份并重建，未来保留生产数据后的结构升级应引入 Flyway/Liquibase。
 - Redis 租约消费已使用 Lua 保证单次消费，但 Redis 与 MySQL 之间仍不是分布式事务；对严格账务场景建议引入数据库租约表或事务消息。

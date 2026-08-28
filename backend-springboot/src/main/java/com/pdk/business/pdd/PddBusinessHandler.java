@@ -8,6 +8,8 @@ import com.pdk.domain.entity.TokenPool;
 import org.springframework.stereotype.Component;
 import lombok.RequiredArgsConstructor;
 
+import java.util.Set;
+
 /** appId=1 / bizCode=PDD 的拼多多业务差异实现。 */
 @Component
 @RequiredArgsConstructor
@@ -20,6 +22,11 @@ public class PddBusinessHandler implements BusinessHandler {
     @Override
     public String bizCode() {
         return BIZ_CODE;
+    }
+
+    @Override
+    public Set<String> supportedActions() {
+        return actionValidator.supportedActions();
     }
 
     @Override

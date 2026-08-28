@@ -10,6 +10,7 @@ import UserManager from '../views/user/UserManager.vue';
 import SystemConfig from '../views/settings/SystemConfig.vue';
 import PackageManager from '../views/package/PackageManager.vue';
 import AdminManager from '../views/admin/AdminManager.vue';
+import BusinessManager from '../views/business/BusinessManager.vue';
 import { hasPermission, isLoggedIn } from '../auth';
 
 const router = createRouter({
@@ -78,6 +79,12 @@ const router = createRouter({
       name: 'UserManager',
       component: UserManager,
       meta: { title: '用户管理', permission: 'user:view' },
+    },
+    {
+      path: '/business/manager',
+      name: 'BusinessManager',
+      component: BusinessManager,
+      meta: { title: '业务管理', permission: 'business:view' },
     },
     {
       path: '/settings',

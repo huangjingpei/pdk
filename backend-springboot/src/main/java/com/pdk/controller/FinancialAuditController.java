@@ -28,6 +28,7 @@ public class FinancialAuditController {
 
     private final IFinancialService financialService;
     private final AdminAuditService adminAuditService;
+    private final com.pdk.platform.business.BusinessService businessService;
 
     @GetMapping("/summary")
     @Operation(summary = "获取财务全盘收支与毛利汇总")
@@ -41,16 +42,22 @@ public class FinancialAuditController {
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "10") int size,
             @RequestParam(required = false) String orderType,
-            @RequestParam(required = false) String searchKey) {
-        return CommonResult.success(financialService.pageIncomes(page, size, orderType, searchKey));
+            @RequestParam(required = false) String searchKey,
+            @RequestParam(required = false) Long bizId,
+            @RequestParam(required = false) Long appId) {
+        if (appId != null) bizId = businessService.requireByAppId(appId).getId();
+        return CommonResult.success(financialService.pageIncomes(page, size, orderType, searchKey, bizId));
     }
 
     @GetMapping("/expenses")
     @Operation(summary = "分页查询对公采购支出")
     public CommonResult<Page<CompanyExpense>> pageExpenses(
             @RequestParam(defaultValue = "1") int page,
-            @RequestParam(defaultValue = "10") int size) {
-        return CommonResult.success(financialService.pageExpenses(page, size));
+            @RequestParam(defaultValue = "10") int size,
+            @RequestParam(required = false) Long bizId,
+            @RequestParam(required = false) Long appId) {
+        if (appId != null) bizId = businessService.requireByAppId(appId).getId();
+        return CommonResult.success(financialService.pageExpenses(page, size, bizId));
     }
 
     @PostMapping("/expenses/purchase-token")

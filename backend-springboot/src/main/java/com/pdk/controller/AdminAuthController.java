@@ -52,7 +52,7 @@ public class AdminAuthController {
         admin.setLastLoginAt(LocalDateTime.now());
         adminUserMapper.updateById(admin);
         AdminPrincipal principal = new AdminPrincipal(admin.getId(), admin.getUsername(),
-                admin.getDisplayName(), admin.getRoleCode(), "ADMIN");
+                admin.getDisplayName(), admin.getRoleCode(), "ADMIN", admin.getBizId());
         return CommonResult.success(sessionPayload(principal), "登录成功");
     }
 
@@ -75,6 +75,7 @@ public class AdminAuthController {
         data.put("username", admin.username());
         data.put("displayName", admin.displayName());
         data.put("role", admin.roleCode());
+        data.put("bizId", admin.bizId());
         data.put("permissions", RolePermissions.forRole(admin.roleCode()));
         return data;
     }

@@ -12,6 +12,8 @@ import java.time.LocalDateTime;
 public class SystemConfig {
     @TableId(type = IdType.AUTO)
     private Long id;
+    /** 为空表示平台全局配置。业务核心配置优先放在 pdk_business。 */
+    private Long bizId;
     private String configKey;
     private String configValue;
     private String configType;

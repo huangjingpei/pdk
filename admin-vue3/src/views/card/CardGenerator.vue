@@ -2,17 +2,18 @@
   <div class="space-y-4">
     <div class="flex justify-between items-center">
       <div>
-        <h2 class="text-xl font-bold text-slate-800">套餐激活码批量生成与凭证池</h2>
+        <h2 class="text-xl font-bold text-slate-800">多业务套餐激活码与凭证池</h2>
         <p class="text-xs text-slate-500 mt-1">
           管理激活码的生成、售卖与激活状态，本表与财务实收表完全解耦
         </p>
       </div>
-      <el-button type="primary" :icon="Key" @click="openGenerate">批量生成新激活码</el-button>
+      <div><el-select v-model="businessFilter" clearable placeholder="全部业务" style="width:180px;margin-right:8px" @change="load"><el-option v-for="b in businesses" :key="b.bizId" :label="`${b.businessName} (${b.appId})`" :value="b.bizId" /></el-select><el-button type="primary" :icon="Key" @click="openGenerate">批量生成新激活码</el-button></div>
     </div>
 
     <!-- 卡密列表 -->
     <el-card shadow="never" class="border-slate-200">
       <el-table :data="tableData" stripe border style="width: 100%">
+        <el-table-column label="业务" width="140"><template #default="s">{{ businessName(s.row.bizId) }}</template></el-table-column>
         <el-table-column prop="cardKey" label="卡密序列号" width="220">
           <template #default="scope">
             <span class="font-mono font-medium text-indigo-600">{{ scope.row.cardKey }}</span>
@@ -92,8 +93,11 @@ const dialogVisible = ref(false);
 const renewVisible = ref(false);
 const renewCardKey = ref('');
 const renewPackageId = ref<number>();
-interface Plan { id:number; name:string; versionNo:number; salePrice:number }
+import type { BusinessRuntime } from '../../types';
+interface Plan { id:number; bizId:number; name:string; versionNo:number; salePrice:number }
 const plans = ref<Plan[]>([]);
+const businesses=ref<BusinessRuntime[]>([]); const businessFilter=ref<number|''>('');
+const businessName=(id:number)=>businesses.value.find(b=>b.bizId===id)?.businessName||`业务#${id}`;
 
 const form = reactive({
   packageId: undefined as number | undefined,
@@ -104,15 +108,15 @@ const tableData = ref<CardKeyItem[]>([]);
 
 async function load(): Promise<void> {
   try {
-    const response = await api.get<ApiResult<PageResult<CardKeyItem>>>('/api/v1/admin/card/list', { params: { size: 100 } });
+    const response = await api.get<ApiResult<PageResult<CardKeyItem>>>('/api/v1/admin/card/list', { params: { size: 100, bizId: businessFilter.value || undefined } });
     tableData.value = response.data.data.records;
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '激活码列表加载失败');
   }
 }
 
-async function loadPlans(): Promise<void> {
-  const response = await api.get<ApiResult<Plan[]>>('/api/v1/admin/package/list', { params: { status: 'ACTIVE' } });
+async function loadPlans(bizId?: number): Promise<void> {
+  const response = await api.get<ApiResult<Plan[]>>('/api/v1/admin/package/list', { params: { status: 'ACTIVE', bizId } });
   plans.value = response.data.data;
 }
 
@@ -122,13 +126,13 @@ function packageName(id: number): string {
 }
 
 function openGenerate(): void {
-  loadPlans();
+  loadPlans(businessFilter.value || undefined);
   dialogVisible.value = true;
 }
 
 async function openRenew(row: CardKeyItem): Promise<void> {
   renewCardKey.value = row.cardKey;
-  await loadPlans();
+  await loadPlans(row.bizId);
   renewPackageId.value = plans.value[0]?.id;
   renewVisible.value = true;
 }
@@ -141,7 +145,8 @@ async function renew(): Promise<void> {
 
 async function voidCard(row: CardKeyItem): Promise<void> {
   await ElMessageBox.confirm('作废已激活的激活码会立即终止授权并释放小号，确认继续？','作废激活码',{type:'warning'});
-  try { await api.put(`/api/v1/admin/card/${row.cardKey}/void`); ElMessage.success('激活码已作废'); await load(); }
+  const appId=businesses.value.find(b=>b.bizId===row.bizId)?.appId;
+  try { await api.put(`/api/v1/admin/card/${row.cardKey}/void`,null,{params:{appId}}); ElMessage.success('激活码已作废'); await load(); }
   catch(error){ ElMessage.error(error instanceof Error ? error.message : '作废失败'); }
 }
 
@@ -157,6 +162,7 @@ async function handleBatchGenerate(): Promise<void> {
 }
 
 onMounted(async () => {
+  const b=await api.get<ApiResult<BusinessRuntime[]>>('/api/v1/admin/business/list'); businesses.value=b.data.data;
   await load();
   await loadPlans();
 });

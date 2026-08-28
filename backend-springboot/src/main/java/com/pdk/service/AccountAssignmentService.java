@@ -30,7 +30,7 @@ public class AccountAssignmentService {
 
     @Transactional(rollbackFor = Exception.class)
     public boolean allocateTrial(User user, int accountCount, int callsPerAccount) {
-        List<TokenPool> tokens = tokenPoolMapper.selectUnassignedHealthyForUpdate(accountCount);
+        List<TokenPool> tokens = tokenPoolMapper.selectUnassignedHealthyForUpdate(user.getBizId(), accountCount);
         if (tokens.size() < accountCount) {
             return false;
         }
@@ -72,12 +72,13 @@ public class AccountAssignmentService {
     @Transactional(rollbackFor = Exception.class)
     public AssignedResource acquire(User user) {
         assignmentMapper.update(null, new LambdaUpdateWrapper<AccountAssignment>()
+                .eq(AccountAssignment::getBizId, user.getBizId())
                 .eq(AccountAssignment::getUserId, user.getId())
                 .eq(AccountAssignment::getStatus, "ACTIVE")
                 .le(AccountAssignment::getExpireAt, LocalDateTime.now())
                 .set(AccountAssignment::getStatus, "RELEASED")
                 .set(AccountAssignment::getReleasedAt, LocalDateTime.now()));
-        AccountAssignment assignment = assignmentMapper.selectNextUsableForUpdate(user.getId());
+        AccountAssignment assignment = assignmentMapper.selectNextUsableForUpdate(user.getBizId(), user.getId());
         if (assignment == null) {
             throw new BusinessException(50301, "当前套餐没有可用的小号资源，请联系代理或平台处理");
         }
@@ -94,8 +95,8 @@ public class AccountAssignmentService {
      */
     @Transactional(rollbackFor = Exception.class)
     public void recomputeUserRemainingCalls(Long userId) {
-        Integer sum = assignmentMapper.selectSumRemaining(userId);
         User user = userMapper.selectById(userId);
+        Integer sum = user == null ? 0 : assignmentMapper.selectSumRemaining(user.getBizId(), userId);
         if (user != null) {
             user.setRemainingCalls(sum == null ? 0 : sum);
             userMapper.updateById(user);
@@ -132,7 +133,7 @@ public class AccountAssignmentService {
     public void replaceFault(Long assignmentId) {
         AccountAssignment old = assignmentMapper.selectById(assignmentId);
         if (old == null || !"ACTIVE".equals(old.getStatus())) return;
-        List<TokenPool> replacements = tokenPoolMapper.selectUnassignedHealthyForUpdate(1);
+        List<TokenPool> replacements = tokenPoolMapper.selectUnassignedHealthyForUpdate(old.getBizId(), 1);
         if (replacements.isEmpty()) {
             old.setStatus("RELEASED");
             old.setReleasedAt(LocalDateTime.now());
@@ -140,6 +141,7 @@ public class AccountAssignmentService {
             return;
         }
         AccountAssignment replacement = new AccountAssignment();
+        replacement.setBizId(old.getBizId());
         replacement.setUserId(old.getUserId());
         replacement.setTokenId(replacements.get(0).getId());
         replacement.setPackagePlanId(old.getPackagePlanId());
@@ -158,7 +160,9 @@ public class AccountAssignmentService {
     }
 
     public List<AccountAssignment> activeAssignments(Long userId) {
+        User owner = requireUser(userId);
         return assignmentMapper.selectList(new LambdaQueryWrapper<AccountAssignment>()
+                .eq(AccountAssignment::getBizId, owner.getBizId())
                 .eq(AccountAssignment::getUserId, userId)
                 .eq(AccountAssignment::getStatus, "ACTIVE")
                 .orderByAsc(AccountAssignment::getSlotIndex));
@@ -216,7 +220,9 @@ public class AccountAssignmentService {
     }
 
     private void releaseActive(Long userId, String status) {
+        User owner = requireUser(userId);
         assignmentMapper.update(null, new LambdaUpdateWrapper<AccountAssignment>()
+                .eq(AccountAssignment::getBizId, owner.getBizId())
                 .eq(AccountAssignment::getUserId, userId)
                 .eq(AccountAssignment::getStatus, "ACTIVE")
                 .set(AccountAssignment::getStatus, status)
@@ -225,7 +231,7 @@ public class AccountAssignmentService {
 
     private void allocateNew(User user, Integer packageId, Long cardKeyId, int count, int calls,
                              LocalDateTime expireAt, int startSlot) {
-        List<TokenPool> tokens = tokenPoolMapper.selectUnassignedHealthyForUpdate(count);
+        List<TokenPool> tokens = tokenPoolMapper.selectUnassignedHealthyForUpdate(user.getBizId(), count);
         if (tokens.size() < count) {
             throw new BusinessException(50302, "公司可分配小号资源不足，需要 " + count + " 个，当前只有 " + tokens.size() + " 个");
         }
@@ -236,6 +242,7 @@ public class AccountAssignmentService {
                                    LocalDateTime expireAt, int startSlot, List<TokenPool> tokens) {
         for (int i = 0; i < tokens.size(); i++) {
             AccountAssignment assignment = new AccountAssignment();
+            assignment.setBizId(user.getBizId());
             assignment.setUserId(user.getId());
             assignment.setTokenId(tokens.get(i).getId());
             assignment.setPackagePlanId(packageId);
@@ -248,5 +255,11 @@ public class AccountAssignmentService {
             assignment.setExpireAt(expireAt);
             assignmentMapper.insert(assignment);
         }
+    }
+
+    private User requireUser(Long userId) {
+        User user = userMapper.selectById(userId);
+        if (user == null) throw new BusinessException(40402, "用户不存在: " + userId);
+        return user;
     }
 }

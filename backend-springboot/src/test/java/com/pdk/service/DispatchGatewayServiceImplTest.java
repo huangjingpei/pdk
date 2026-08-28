@@ -26,6 +26,7 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
+import com.pdk.platform.business.BusinessContext;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -62,6 +63,7 @@ class DispatchGatewayServiceImplTest {
 
         user = new User();
         user.setId(1L);
+        user.setBizId(1L);
         user.setPhone("13800138000");
         user.setDeviceId("DEVICE-A");
         user.setExpireTime(LocalDateTime.now().plusDays(1));
@@ -70,6 +72,7 @@ class DispatchGatewayServiceImplTest {
 
         token = new TokenPool();
         token.setId(8L);
+        token.setBizId(1L);
         token.setTokenVal("secret-token");
         token.setAccountAlias("slot-8");
         token.setHealthStatus("HEALTHY");
@@ -85,13 +88,12 @@ class DispatchGatewayServiceImplTest {
     @Test
     @DisplayName("领取资源会校验用户并把底层资源标记为 BUSY")
     void acquireMarksTokenBusyAndCreatesLease() {
-        when(userMapper.selectOne(any())).thenReturn(user);
-        when(deviceBindingService.get(user.getPhone())).thenReturn("DEVICE-A");
+        when(deviceBindingService.get(1L, 1L)).thenReturn("DEVICE-A");
         AccountAssignment assignment = new AccountAssignment();
         assignment.setId(9L); assignment.setSlotIndex(1);
         when(assignmentService.acquire(user)).thenReturn(new AccountAssignmentService.AssignedResource(assignment, token));
 
-        EncryptedTokenPayloadVO result = service.acquireEncryptedToken(acquire, user.getPhone(), "DEVICE-A");
+        EncryptedTokenPayloadVO result = service.acquireEncryptedToken(acquire, context(), user, "DEVICE-A");
 
         assertNotNull(result.getEncryptedPayload());
         assertEquals(10, result.getRemainingUserQuota());
@@ -106,18 +108,17 @@ class DispatchGatewayServiceImplTest {
     void acquireRejectsInvalidEntitlementAndClock() {
         acquire.setTimestamp(System.currentTimeMillis() - 6 * 60 * 1000L);
         assertEquals(40012, assertThrows(BusinessException.class,
-                () -> service.acquireEncryptedToken(acquire, user.getPhone(), "DEVICE-A")).getCode());
+                () -> service.acquireEncryptedToken(acquire, context(), user, "DEVICE-A")).getCode());
 
         acquire.setTimestamp(System.currentTimeMillis());
         user.setExpireTime(LocalDateTime.now().minusSeconds(1));
-        when(userMapper.selectOne(any())).thenReturn(user);
         assertEquals(40301, assertThrows(BusinessException.class,
-                () -> service.acquireEncryptedToken(acquire, user.getPhone(), "DEVICE-A")).getCode());
+                () -> service.acquireEncryptedToken(acquire, context(), user, "DEVICE-A")).getCode());
 
         user.setExpireTime(LocalDateTime.now().plusDays(1));
         user.setRemainingCalls(0);
         assertEquals(40302, assertThrows(BusinessException.class,
-                () -> service.acquireEncryptedToken(acquire, user.getPhone(), "DEVICE-A")).getCode());
+                () -> service.acquireEncryptedToken(acquire, context(), user, "DEVICE-A")).getCode());
     }
 
     @Test
@@ -125,11 +126,11 @@ class DispatchGatewayServiceImplTest {
     void successfulReportDeductsAndWritesLog() {
         ReportResultDTO report = report("SUCCESS");
         when(dispatchLogMapper.selectCount(any())).thenReturn(0L);
-        when(resourceLeaseService.consume(report.getLeaseTraceId(), user.getPhone()))
-                .thenReturn(new ResourceLeaseService.LeaseInfo(8L, user.getPhone(), "slot-8", "GOODS_COLLECT"));
+        when(resourceLeaseService.consume(1L, report.getLeaseTraceId(), 1L))
+                .thenReturn(lease("GOODS_COLLECT"));
         when(userMapper.update(any(), any())).thenReturn(1);
 
-        service.reportAndDeductQuota(report, user.getPhone());
+        service.reportAndDeductQuota(report, context(), user);
 
         ArgumentCaptor<PdkDispatchLog> log = ArgumentCaptor.forClass(PdkDispatchLog.class);
         verify(dispatchLogMapper).insert(log.capture());
@@ -143,10 +144,10 @@ class DispatchGatewayServiceImplTest {
     void networkFailureDoesNotDeduct() {
         ReportResultDTO report = report("FAIL_NETWORK");
         when(dispatchLogMapper.selectCount(any())).thenReturn(0L);
-        when(resourceLeaseService.consume(report.getLeaseTraceId(), user.getPhone()))
-                .thenReturn(new ResourceLeaseService.LeaseInfo(8L, user.getPhone(), "slot-8", "DETAIL_QUERY"));
+        when(resourceLeaseService.consume(1L, report.getLeaseTraceId(), 1L))
+                .thenReturn(lease("DETAIL_QUERY"));
 
-        service.reportAndDeductQuota(report, user.getPhone());
+        service.reportAndDeductQuota(report, context(), user);
 
         verify(userMapper, never()).update(any(), any());
         ArgumentCaptor<PdkDispatchLog> log = ArgumentCaptor.forClass(PdkDispatchLog.class);
@@ -161,10 +162,10 @@ class DispatchGatewayServiceImplTest {
     void bannedAccountIsBlacklistedWithoutDeduction() {
         ReportResultDTO report = report("FAIL_ACCOUNT_BANNED");
         when(dispatchLogMapper.selectCount(any())).thenReturn(0L);
-        when(resourceLeaseService.consume(report.getLeaseTraceId(), user.getPhone()))
-                .thenReturn(new ResourceLeaseService.LeaseInfo(8L, user.getPhone(), "slot-8", "ORDER_PULL"));
+        when(resourceLeaseService.consume(1L, report.getLeaseTraceId(), 1L))
+                .thenReturn(lease("ORDER_PULL"));
 
-        service.reportAndDeductQuota(report, user.getPhone());
+        service.reportAndDeductQuota(report, context(), user);
 
         verify(userMapper, never()).update(any(), any());
         verify(tokenPoolMapper).markTokenFaultStatus(8L, "FAULT_BLACK");
@@ -176,9 +177,9 @@ class DispatchGatewayServiceImplTest {
         ReportResultDTO report = report("SUCCESS");
         when(dispatchLogMapper.selectCount(any())).thenReturn(1L);
 
-        service.reportAndDeductQuota(report, user.getPhone());
+        service.reportAndDeductQuota(report, context(), user);
 
-        verify(resourceLeaseService, never()).consume(anyString(), anyString());
+        verify(resourceLeaseService, never()).consume(anyLong(), anyString(), anyLong());
         verify(userMapper, never()).update(any(), any());
         verify(dispatchLogMapper, never()).insert(any(PdkDispatchLog.class));
     }
@@ -188,10 +189,10 @@ class DispatchGatewayServiceImplTest {
     void missingLeaseIsRejected() {
         ReportResultDTO report = report("SUCCESS");
         when(dispatchLogMapper.selectCount(any())).thenReturn(0L);
-        when(resourceLeaseService.consume(report.getLeaseTraceId(), user.getPhone())).thenReturn(null);
+        when(resourceLeaseService.consume(1L, report.getLeaseTraceId(), 1L)).thenReturn(null);
 
         BusinessException error = assertThrows(BusinessException.class,
-                () -> service.reportAndDeductQuota(report, user.getPhone()));
+                () -> service.reportAndDeductQuota(report, context(), user));
         assertEquals(41001, error.getCode());
     }
 
@@ -201,5 +202,15 @@ class DispatchGatewayServiceImplTest {
         dto.setStatus(status);
         dto.setResponseDurationMs(88L);
         return dto;
+    }
+
+    private BusinessContext context() {
+        return new BusinessContext(1, 1, "PDD", "拼多多", "desc", "SELF_SERVICE",
+                true, 24, 1, 20, false);
+    }
+
+    private ResourceLeaseService.LeaseInfo lease(String action) {
+        return new ResourceLeaseService.LeaseInfo(1L, 1L, 8L, user.getPhone(), "slot-8",
+                action, null, 1);
     }
 }

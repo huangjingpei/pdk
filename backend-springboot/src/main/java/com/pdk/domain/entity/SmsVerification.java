@@ -9,6 +9,7 @@ import java.time.LocalDateTime;
 public class SmsVerification {
     @TableId(type = IdType.AUTO)
     private Long id;
+    private Long bizId;
     private String phone;
     private String purpose;
     private String codeHash;

@@ -12,6 +12,7 @@
 #include <cstring>
 #include <ctime>
 #include <fstream>
+#include <set>
 #include <sstream>
 #include <vector>
 
@@ -224,6 +225,32 @@ struct HttpResult {
     bool networkOk = false;
 };
 
+static void redact_json_value(json& value) {
+    static const std::set<std::string> sensitive = {
+        "password", "newPassword", "oldPassword", "smsCode", "cardKey",
+        "invitationCode", "paymentTxnNo", "tokenValue", "token"
+    };
+    if (value.is_object()) {
+        for (auto& item : value.items()) {
+            if (sensitive.count(item.key()) > 0) item.value() = "***";
+            else redact_json_value(item.value());
+        }
+    } else if (value.is_array()) {
+        for (auto& item : value) redact_json_value(item);
+    }
+}
+
+static std::string redact_body_for_log(const std::string& bodyJson) {
+    if (bodyJson.empty()) return "";
+    try {
+        json value = json::parse(bodyJson);
+        redact_json_value(value);
+        return value.dump();
+    } catch (...) {
+        return "<non-json body omitted>";
+    }
+}
+
 static HttpResult curl_exec(const std::string& method,
                             const std::string& url,
                             int timeoutMs,
@@ -281,6 +308,7 @@ static HttpResult curl_exec(const std::string& method,
 struct Client::Impl {
     std::string baseUrl;
     std::string rootSalt;
+    long        appId = 1;
     int         timeoutMs = 20000;
     bool        debugLog  = false;
 
@@ -305,10 +333,12 @@ struct Client::Impl {
  * 构造 / 析构
  * ========================================================================== */
 Client::Client(const Config& cfg) : impl_(std::make_unique<Impl>()) {
+    if (cfg.appId <= 0) throw PdkException("appId 必须为正整数");
     impl_->baseUrl   = cfg.baseUrl;
     if (!impl_->baseUrl.empty() && impl_->baseUrl.back() == '/')
         impl_->baseUrl.pop_back();
     impl_->rootSalt  = cfg.rootSalt.empty() ? "PDK_SECRET_SALT_2026_ENTERPRISE" : cfg.rootSalt;
+    impl_->appId     = cfg.appId;
     impl_->timeoutMs = cfg.httpTimeoutMs;
     impl_->debugLog  = cfg.enableDebugLog;
     impl_->deviceId  = cfg.deviceId.empty() ? default_device_id() : cfg.deviceId;
@@ -348,6 +378,18 @@ std::string Client::phone()       const { return impl_->phone; }
 std::string Client::deviceId()    const { return impl_->deviceId; }
 std::string Client::tokenName()   const { return impl_->tokenName; }
 std::string Client::tokenValue()  const { return impl_->tokenValue; }
+long        Client::appId()       const { return impl_->appId; }
+
+void Client::setAppId(long appId) {
+    if (appId <= 0) throw PdkException("appId 必须为正整数");
+    if (impl_->appId == appId) return;
+    impl_->appId = appId;
+    // 登录态属于具体业务，调试时切换 appId 必须清除旧业务会话。
+    impl_->tokenValue.clear();
+    impl_->phone.clear();
+    impl_->password.clear();
+    emitState(State::Ready, "业务已切换，旧登录态已清除，appId=" + std::to_string(appId));
+}
 
 /* ============================================================================
  * 内部：统一请求 + 解析为 ApiResponse，并发出请求/响应事件与调试日志
@@ -369,6 +411,7 @@ ApiResponse Client::request(const std::string& method,
                             const std::string& expectation,
                             bool retried) {
     std::map<std::string, std::string> hdrs;
+    hdrs["X-PDK-App-ID"] = std::to_string(impl_->appId);
     if (authenticated) {
         if (!impl_->tokenValue.empty())
             hdrs[impl_->tokenName] = impl_->tokenValue;
@@ -398,7 +441,8 @@ ApiResponse Client::request(const std::string& method,
     if (!query.empty()) url += "?" + query;
 
     emitEvent(Event::RequestSent, method + " " + path);
-    emitLog("[请求] " + method + " " + url + (bodyJson.empty() ? "" : "\n   body: " + bodyJson));
+    emitLog("[请求] " + method + " " + url
+            + (bodyJson.empty() ? "" : "\n   body: " + redact_body_for_log(bodyJson)));
     if (!expectation.empty()) emitLog("[期待] " + expectation);
 
     HttpResult hr = curl_exec(method, url, impl_->timeoutMs, hdrs, sendBody);
@@ -474,9 +518,15 @@ ApiResponse Client::request(const std::string& method,
 /* ============================================================================
  * 鉴权
  * ========================================================================== */
+ApiResponse Client::businessInfo() {
+    return request("GET", "/api/v1/client/business/by-app/" + std::to_string(impl_->appId),
+                   false, "", "", "期待: code=200，返回业务名称/描述/注册策略/有效状态");
+}
+
 ApiResponse Client::sendSms(const std::string& phone, const std::string& purpose) {
     emitState(State::Ready, "正在发送验证码到 " + phone);
-    json j = {{"phone", phone}, {"purpose", purpose.empty() ? "REGISTER" : purpose}};
+    json j = {{"appId", impl_->appId}, {"phone", phone},
+              {"purpose", purpose.empty() ? "REGISTER" : purpose}};
     ApiResponse r = request("POST", "/api/v1/client/auth/sms/send", false, j.dump(), "",
                             "期待: code=200 且 data 含 expireMinutes/debugCode");
     if (r.ok()) emitState(State::SmsSent, "验证码已发送（" + phone + "）");
@@ -490,6 +540,7 @@ ApiResponse Client::registerAccount(const std::string& phone,
                                     const std::string& invitationCode) {
     emitState(State::Registering, "正在注册 " + phone);
     json j = {
+        {"appId", impl_->appId},
         {"phone", phone},
         {"password", password},
         {"deviceId", impl_->deviceId},
@@ -516,7 +567,8 @@ ApiResponse Client::registerAccount(const std::string& phone,
 
 ApiResponse Client::login(const std::string& phone, const std::string& password) {
     emitState(State::LoggingIn, "正在登录 " + phone);
-    json j = {{"phone", phone}, {"password", password}, {"deviceId", impl_->deviceId}};
+    json j = {{"appId", impl_->appId}, {"phone", phone},
+              {"password", password}, {"deviceId", impl_->deviceId}};
     ApiResponse r = request("POST", "/api/v1/client/auth/login", false, j.dump(), "",
                             "期待: code=200（40103=设备不一致需解绑；40105=密码错误）");
     if (r.ok()) {
@@ -559,7 +611,8 @@ ApiResponse Client::unbindDevice() {
 ApiResponse Client::changePassword(const std::string& phone,
                                    const std::string& oldPassword,
                                    const std::string& newPassword) {
-    json j = {{"phone", phone}, {"oldPassword", oldPassword}, {"newPassword", newPassword}};
+    json j = {{"appId", impl_->appId}, {"phone", phone},
+              {"oldPassword", oldPassword}, {"newPassword", newPassword}};
     ApiResponse r = request("POST", "/api/v1/client/auth/change-password", false, j.dump(), "",
                             "期待: code=200，密码修改成功");
     if (!r.ok()) emitState(State::Error, r.message);
@@ -574,6 +627,7 @@ ApiResponse Client::activateCard(const std::string& cardKey,
                                  const std::string& paymentChannel,
                                  double actualAmount) {
     json j = {
+        {"appId", impl_->appId},
         {"cardKey", cardKey},
         {"userPhone", userPhone},
         {"deviceId", impl_->deviceId},

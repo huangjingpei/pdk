@@ -129,12 +129,12 @@ def decrypt_response(envelope_json: str, session_aes_key: bytes) -> str:
     return plaintext.decode("utf-8")
 
 
-def fetch_public_config(base_url: str, timeout: int = 10) -> dict:
+def fetch_public_config(base_url: str, timeout: int = 10, app_id: int = 1) -> dict:
     """拉取服务端公钥与加密模式（对应后端 /api/v1/client/config/public）。"""
     import requests  # 延迟导入，避免无网络环境下导入报错
 
     url = base_url.rstrip("/") + "/api/v1/client/config/public"
-    resp = requests.get(url, timeout=timeout)
+    resp = requests.get(url, timeout=timeout, headers={"X-PDK-App-ID": str(app_id)})
     return resp.json()
 
 
@@ -161,13 +161,13 @@ class PublicKeyPinMismatchError(Exception):
 
 
 def fetch_public_config_pinned(base_url: str, expected_fingerprint: str,
-                               timeout: int = 10) -> dict:
+                               timeout: int = 10, app_id: int = 1) -> dict:
     """拉取公钥配置并做指纹钉扎校验。
 
     - ``expected_fingerprint`` 为空时退化为不校验（仅向后兼容，不推荐生产用）。
     - 指纹不符抛 :class:`PublicKeyPinMismatchError`，调用方应据此拒绝启用加密。
     """
-    cfg = fetch_public_config(base_url, timeout=timeout)
+    cfg = fetch_public_config(base_url, timeout=timeout, app_id=app_id)
     data = cfg.get("data") or cfg
     pub = data.get("publicKey") or ""
     if expected_fingerprint and pub:

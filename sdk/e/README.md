@@ -39,7 +39,8 @@
 ## 3. 调用流程（与 C++/Python 端完全一致）
 
 ```
-pdk_create()                       ' 创建实例，拿到句柄
+pdk_create_ex(..., appId)          ' 创建实例，拿到句柄；PDD=1
+  └─ pdk_business_info()            ' 登录前读取名称、注册策略、状态、支持动作
   └─ pdk_send_sms(手机, "REGISTER") ' 发验证码
   └─ pdk_register(手机, 密码, 验证码) ' 或 pdk_login
   └─ pdk_acquire_token(动作, 商品ID) ' 拿到加密 VO(JSON)
@@ -50,6 +51,10 @@ pdk_create()                       ' 创建实例，拿到句柄
   └─ pdk_profile() / pdk_resource_status() ' 查配额/小号
 pdk_destroy(句柄)                  ' 释放
 ```
+
+旧程序继续调用 `pdk_create()` 时默认使用 `appId=1`，无需修改。新业务客户端应使用
+`pdk_create_ex(..., appId)`，并把 appId 固定在各自构建中。DLL 会自动为所有 HTTP 请求添加
+`X-PDK-App-ID`，注册、登录、短信、改密和卡密激活的请求体也会自动携带相同 appId。
 
 ---
 

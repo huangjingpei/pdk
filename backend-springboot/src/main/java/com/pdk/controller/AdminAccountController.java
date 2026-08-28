@@ -31,6 +31,7 @@ public class AdminAccountController {
 
     private final AdminUserMapper adminUserMapper;
     private final AdminAuditService adminAuditService;
+    private final com.pdk.platform.business.BusinessService businessService;
 
     @Value("${pdk.security.admin-password-pepper}")
     private String passwordPepper;
@@ -39,7 +40,7 @@ public class AdminAccountController {
     @RequirePermission(RolePermissions.ADMIN_MANAGE)
     public CommonResult<List<AdminAccountView>> list() {
         List<AdminAccountView> views = adminUserMapper.selectList(null).stream()
-                .map(u -> new AdminAccountView(u.getId(), u.getUsername(), u.getDisplayName(),
+                .map(u -> new AdminAccountView(u.getId(), u.getBizId(), u.getUsername(), u.getDisplayName(),
                         u.getRoleCode(), u.getStatus(), u.getLastLoginAt(), u.getCreatedAt()))
                 .collect(Collectors.toList());
         return CommonResult.success(views);
@@ -53,12 +54,17 @@ public class AdminAccountController {
         if (!ROLES.contains(dto.roleCode())) {
             throw new BusinessException(40031, "后台角色只能是 SUPER_ADMIN 或 PARTNER");
         }
+        if ("PARTNER".equals(dto.roleCode())) {
+            if (dto.bizId() == null) throw new BusinessException(40054, "代理账号必须选择所属业务");
+            businessService.requireById(dto.bizId());
+        }
         if (adminUserMapper.selectCount(new LambdaQueryWrapper<AdminUser>()
                 .eq(AdminUser::getUsername, dto.username())) > 0) {
             throw new BusinessException(40010, "该登录账号已存在");
         }
         AdminUser user = new AdminUser();
         user.setUsername(dto.username());
+        user.setBizId("PARTNER".equals(dto.roleCode()) ? dto.bizId() : null);
         user.setPasswordHash(PasswordHashUtils.sha256(passwordPepper, dto.password()));
         user.setDisplayName(dto.displayName());
         user.setRoleCode(dto.roleCode());
@@ -67,7 +73,7 @@ public class AdminAccountController {
         AdminPrincipal admin = (AdminPrincipal) request.getAttribute("pdkAdminPrincipal");
         adminAuditService.record(admin, "CREATE_ADMIN", "ADMIN", user.getUsername(), null,
                 "{\"role\":\"" + user.getRoleCode() + "\"}", "超级管理员创建后台账号", request);
-        return CommonResult.success(new AdminAccountView(user.getId(), user.getUsername(),
+        return CommonResult.success(new AdminAccountView(user.getId(), user.getBizId(), user.getUsername(),
                 user.getDisplayName(), user.getRoleCode(), user.getStatus(), null, user.getCreatedAt()),
                 "后台账号已创建");
     }
@@ -76,6 +82,7 @@ public class AdminAccountController {
     @RequirePermission(RolePermissions.ADMIN_MANAGE)
     @Transactional(rollbackFor = Exception.class)
     public CommonResult<String> changeRole(@PathVariable Long id, @RequestParam String role,
+                                           @RequestParam(required = false) Long bizId,
                                            HttpServletRequest request) {
         if (!ROLES.contains(role)) {
             throw new BusinessException(40031, "后台角色只能是 SUPER_ADMIN 或 PARTNER");
@@ -89,6 +96,13 @@ public class AdminAccountController {
             throw new BusinessException(40033, "不能修改自己的角色");
         }
         String before = user.getRoleCode();
+        if ("PARTNER".equals(role)) {
+            if (bizId == null) throw new BusinessException(40054, "代理账号必须选择所属业务");
+            businessService.requireById(bizId);
+            user.setBizId(bizId);
+        } else {
+            user.setBizId(null);
+        }
         user.setRoleCode(role);
         adminUserMapper.updateById(user);
         adminAuditService.record(me, "CHANGE_ADMIN_ROLE", "ADMIN", user.getUsername(),

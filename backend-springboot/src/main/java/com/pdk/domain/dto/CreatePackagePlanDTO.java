@@ -6,6 +6,7 @@ import java.math.BigDecimal;
 
 @Data
 public class CreatePackagePlanDTO {
+    @NotNull @Positive private Long appId;
     @NotBlank @Size(max = 64) private String name;
     @NotNull @DecimalMin("0.01") private BigDecimal listPrice;
     @NotNull @DecimalMin("0.01") @DecimalMax("100.00") private BigDecimal discountRate;

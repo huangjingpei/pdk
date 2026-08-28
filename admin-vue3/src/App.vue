@@ -8,7 +8,7 @@
           PDK
         </div>
         <div>
-          <div class="font-bold text-sm text-slate-100">拼多多云控商业化</div>
+          <div class="font-bold text-sm text-slate-100">PDK 多业务商业化</div>
           <div class="text-xs text-slate-400">Spring Boot 3 + Vue 3</div>
         </div>
       </div>
@@ -71,6 +71,11 @@
           <span>测试平台</span>
         </el-menu-item>
 
+        <el-menu-item v-if="hasPermission('business:view')" index="/business/manager">
+          <el-icon><Grid /></el-icon>
+          <span>业务管理</span>
+        </el-menu-item>
+
         <el-menu-item v-if="hasPermission('system:config')" index="/settings">
           <el-icon><Setting /></el-icon>
           <span>系统设置</span>
@@ -87,7 +92,7 @@
     <el-container>
       <el-header height="56px" class="bg-white border-b border-slate-200 flex items-center justify-between px-6">
         <div class="text-sm font-medium text-slate-700">
-          拼多多采集分发云控管理后台 (企业安全生产版本)
+          PDK 多业务管理后台（PDD / ZHIBO 聚合）
         </div>
         <div class="flex items-center gap-4 text-xs text-slate-500">
           <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 font-medium border border-emerald-200">

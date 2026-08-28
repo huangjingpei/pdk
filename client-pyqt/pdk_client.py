@@ -21,6 +21,7 @@ import random
 import string
 import time
 import uuid
+from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
@@ -29,13 +30,35 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 ROOT_SALT = os.getenv("PDK_SECURITY_ROOT_SALT", "PDK_SECRET_SALT_2026_ENTERPRISE")
 DEFAULT_BASE_URL = os.getenv("PDK_API_BASE", "http://localhost:8080")
+DEFAULT_APP_ID = int(os.getenv("PDK_APP_ID", "1"))
+
+
+def load_client_config() -> dict[str, Any]:
+    """读取生产构建配置；未指定时保持调试工作台可切换业务。"""
+    configured = os.getenv("PDK_CLIENT_CONFIG", "").strip()
+    if not configured:
+        return {"appId": DEFAULT_APP_ID, "productionEditable": True, "displayName": "多业务调试版"}
+    path = Path(configured).expanduser().resolve()
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise RuntimeError(f"客户端构建配置读取失败: {path}: {exc}") from exc
+    app_id = int(data.get("appId", 0))
+    if app_id <= 0:
+        raise RuntimeError(f"客户端构建配置 appId 非法: {path}")
+    data["appId"] = app_id
+    data["configPath"] = str(path)
+    return data
 
 
 class ApiError(RuntimeError):
     """网络层错误（区别于业务返回码）。"""
 
 
-_SENSITIVE_KEYS = ("password", "newPassword", "oldPassword", "tokenValue", "token")
+_SENSITIVE_KEYS = (
+    "password", "newPassword", "oldPassword", "smsCode", "cardKey",
+    "invitationCode", "paymentTxnNo", "tokenValue", "token",
+)
 
 
 def redact_sensitive(payload: Any) -> Any:
@@ -147,8 +170,11 @@ class ClientSession:
 class PdkApiClient:
     """对 PDK 后端发起真实 HTTP 调用的轻量客户端。"""
 
-    def __init__(self, base_url: str = DEFAULT_BASE_URL) -> None:
+    def __init__(self, base_url: str = DEFAULT_BASE_URL, app_id: int = DEFAULT_APP_ID) -> None:
+        if int(app_id) <= 0:
+            raise ValueError("app_id 必须为正整数")
         self.base_url = base_url.rstrip("/")
+        self._app_id = int(app_id)
         self.session = ClientSession()
         self.http = requests.Session()
         # 调试辅助：当前调用上下文的「期待」注解（由调用方设置，如场景 expected），
@@ -158,6 +184,23 @@ class PdkApiClient:
         # 最后一条请求的完整记录（method/url/params/请求体/HTTP状态/响应体/期待），
         # 供 GUI 接口调试卡片展示 request/response 细节。
         self.last_request_record: Optional[dict[str, Any]] = None
+
+    @property
+    def app_id(self) -> int:
+        return self._app_id
+
+    @app_id.setter
+    def app_id(self, value: int) -> None:
+        value = int(value)
+        if value <= 0:
+            raise ValueError("app_id 必须为正整数")
+        if value == self._app_id:
+            return
+        self._app_id = value
+        # 登录态归属具体业务；调试界面切换业务时不能复用原业务 Token。
+        self.session.token_value = ""
+        self.session.phone = ""
+        self.session.password = ""
 
     # ------------------------------------------------------------------ 通用请求
     def request(
@@ -179,7 +222,10 @@ class PdkApiClient:
         仅在「网络不可达 / 非 JSON 响应」时返回 code=0 的本地错误报文。
         每次请求会经 on_request 钩子回传「请求+响应+期待」结构化记录，便于调试。
         """
-        hdrs: dict[str, str] = {"Accept": "application/json"}
+        hdrs: dict[str, str] = {
+            "Accept": "application/json",
+            "X-PDK-App-ID": str(self.app_id),
+        }
         if authenticated:
             if self.session.token_value:
                 hdrs[self.session.token_name] = self.session.token_value
@@ -231,11 +277,11 @@ class PdkApiClient:
             "method": method,
             "url": url,
             "params": params,
-            "request_json": request_json,
+            "request_json": redact_sensitive(request_json),
             "http_status": http_status,
             "code": int((body or {}).get("code", 0) or 0),
             "msg": str((body or {}).get("message", "")),
-            "body": body,
+            "body": redact_sensitive(body),
             "expected": self.expectation if self.expectation else "",
         }
         self.last_request_record = rec
@@ -255,13 +301,18 @@ class PdkApiClient:
         return int(body.get("code", 0) or 0)
 
     # ------------------------------------------------------------------ 鉴权相关
+    def business_info(self) -> dict[str, Any]:
+        """登录前读取当前构建 appId 的名称、描述、注册策略与可用状态。"""
+        return self.request("GET", f"/api/v1/client/business/by-app/{self.app_id}")
+
     def send_sms(self, phone: str, purpose: str = "REGISTER") -> dict[str, Any]:
         return self.request("POST", "/api/v1/client/auth/sms/send",
-                            json={"phone": phone, "purpose": purpose})
+                            json={"appId": self.app_id, "phone": phone, "purpose": purpose})
 
     def register(self, phone: str, password: str, device_id: str, sms_code: str,
                  invitation_code: str = "") -> dict[str, Any]:
         body = self.request("POST", "/api/v1/client/auth/register", json={
+            "appId": self.app_id,
             "phone": phone,
             "password": password,
             "deviceId": device_id,
@@ -282,6 +333,7 @@ class PdkApiClient:
 
     def login(self, phone: str, password: str, device_id: str) -> dict[str, Any]:
         body = self.request("POST", "/api/v1/client/auth/login", json={
+            "appId": self.app_id,
             "phone": phone,
             "password": password,
             "deviceId": device_id,
@@ -314,12 +366,14 @@ class PdkApiClient:
 
     def change_password(self, phone: str, old_password: str, new_password: str) -> dict[str, Any]:
         return self.request("POST", "/api/v1/client/auth/change-password", json={
-            "phone": phone, "oldPassword": old_password, "newPassword": new_password,
+            "appId": self.app_id, "phone": phone,
+            "oldPassword": old_password, "newPassword": new_password,
         })
 
     # ------------------------------------------------------------------ 卡密核销
     def activate_card(self, card_key: str, user_phone: str, device_id: str) -> dict[str, Any]:
         return self.request("POST", "/api/v1/card/activate", json={
+            "appId": self.app_id,
             "cardKey": card_key.strip(),
             "userPhone": user_phone,
             "deviceId": device_id,

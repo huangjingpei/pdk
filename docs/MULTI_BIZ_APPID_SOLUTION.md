@@ -30,20 +30,18 @@
 
 `ADMIN_ONLY` 用户仍使用统一客户端登录接口，携带 `appId + 手机号 + 密码 + 设备UUID`。管理员创建时设备 UUID 可以为空，首次成功登录时绑定；已绑定后继续沿用现有单设备校验与管理员解绑机制。
 
-## 2. 当前项目扫描结论
+## 2. 项目扫描与实施状态
 
-当前项目实际上已经具备管理员预创建账号的基础能力：
+本文最初扫描出的风险已经在当前代码中落地修复：
 
-- 客户端自助注册和登录位于 `ClientAuthController`。
-- 管理员手工创建用户位于 `AdminUserController.POST /api/v1/admin/user`。
-- `AdminCreateUserDTO` 已包含手机号、初始密码和可选设备 UUID。
-- 用户、套餐、卡密、小号池、独占分配、消费流水目前都没有业务字段。
-- `pdk_user.phone` 当前全局唯一，查询也普遍仅按手机号进行。
-- `DeviceBindingService` 的 Redis Key 当前为 `pdk:device:bind:{phone}`。
-- `ResourceLeaseService` 的租约仅记录手机号，没有记录业务。
-- `TokenPoolMapper` 从全局小号池选取资源，没有业务过滤。
-- 管理端已有用户、套餐、卡密、调度、销售和财务页面，但没有业务管理页面和业务筛选。
-- PyQt/SDK 请求当前没有统一携带 `appId`。
+- `pdk_business` 已成为 `appId -> bizId -> bizCode` 的服务端权威映射；所有客户端请求统一解析并绑定 `BusinessContext`。
+- 用户、短信、邀请码、套餐、卡密、小号池、独占分配、消费、销售、成本和审计均已增加 `biz_id`。当前采用全新建库基线，不在启动脚本中回填或升级旧表。
+- 用户唯一键已改为 `(biz_id, phone)`；设备和租约 Redis Key 均包含 `bizId` 与服务端用户 ID。
+- 调度只从当前业务资源池选择小号，租约和结果上报校验 `bizId + userId`，并由业务 Handler 校验动作、编码凭证和分类失败。
+- 管理端已经增加业务管理/配置页面，并在用户、套餐、卡密、资源、销售和财务页面提供业务列及筛选；PARTNER 后台账号绑定单一 `bizId`，服务端强制数据范围。
+- PyQt、Python SDK、C++/C API 和易语言 DLL 均统一携带 `X-PDK-App-ID`；短信、注册、登录、改密和卡密激活请求体也携带 `appId`，URL 保持不变。
+- 缺省 appId 的旧客户端仍可按配置回落 PDD=1；Header/Body 不一致返回 `40050`；数据库开关、部署 allowlist 或 Handler 不可用时返回明确业务错误。
+- 管理员建号和客户端登录密码约束已统一为 8～64 位；`ADMIN_ONLY` 的首次改密策略按业务配置执行。
 
 因此不能只在用户表增加一个 `appId` 展示字段。若调度池、套餐、卡密、Redis Key 和流水不同时隔离，会出现业务 A 用户领取业务 B 小号、同手机号跨客户端互踢、跨业务卡密激活和统计串账。
 
@@ -67,6 +65,7 @@ CREATE TABLE pdk_business (
     trial_duration_hours INT NOT NULL DEFAULT 0,
     trial_account_count INT NOT NULL DEFAULT 0,
     trial_calls_per_account INT NOT NULL DEFAULT 0,
+    force_initial_password_change TINYINT NOT NULL DEFAULT 0,
     status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE' COMMENT 'ACTIVE, DISABLED',
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
@@ -240,13 +239,13 @@ GET /api/v1/client/business/by-app/{appId}
 
 ### 7.1 设备绑定
 
-当前 Redis Key：
+实施前 Redis Key：
 
 ```text
 pdk:device:bind:{phone}
 ```
 
-调整为：
+当前已调整为：
 
 ```text
 pdk:device:bind:{bizId}:{userId}
@@ -327,50 +326,23 @@ PARTNER 账号只能看到自身所属业务的数据；SUPER_ADMIN 默认看全
 
 Python SDK、C++ SDK、易语言声明和 PyQt `PdkApiClient` 都应新增 appId 配置，并在登录后请求中自动附加 `X-PDK-App-ID`，避免每个业务调用方自行拼装而遗漏。
 
-## 10. 兼容迁移方案
+## 10. 全新建库与客户端兼容方案
 
-推荐分四阶段实施：
+数据库不承担旧结构的在线迁移：
 
-### 阶段一：建立业务主数据
+1. 如旧库仍有需要保留的数据，先独立备份或导出；本项目不会自动转换这些数据。
+2. 删除旧表或创建新的空数据库，并通过 JDBC `DB_URL` 选择目标库。
+3. Spring Boot 启动时执行 `schema-mysql.sql`，一次性创建带完整 `biz_id`、联合唯一键和索引的最终结构。
+4. 脚本只允许 `CREATE TABLE IF NOT EXISTS`、最终索引定义和幂等种子，不包含 `ALTER`、动态 SQL、迁移版本表、`CREATE DATABASE` 或 `USE`。
+5. 如果将来生产数据必须原地升级，单独引入 Flyway/Liquibase 版本迁移，不修改本基线脚本去兼容历史结构。
 
-- 新建 `pdk_business`，插入 `bizId=1/appId=1` 的拼多多业务。
-- 各业务表增加可空 `biz_id`，将历史数据全部回填为 1。
-- 接口开始接受 appId；旧客户端缺省 appId 暂映射为 1。
-
-### 阶段二：代码查询全面加业务条件
-
-- 登录改为 `(bizId, phone)`。
-- 套餐、卡密、小号、assignment、流水、财务查询加入 `bizId`。
-- Redis 设备 Key 和租约加入业务/用户维度。
-- 管理端增加业务页面、筛选和业务描述列。
-
-### 阶段三：约束收紧
-
-- `biz_id` 改为非空。
-- 删除 `phone` 全局唯一索引，增加 `(biz_id, phone)` 唯一索引。
-- 增加卡密、套餐、小号相关业务复合索引。
-- 新 SDK 和客户端强制发送 appId。
-
-### 阶段四：关闭兼容模式
-
-- 监控确认没有缺失 appId 的旧客户端请求。
-- 关闭 `appId=1` 自动兜底。
-- 缺少 appId 统一返回 `40050`。
+数据库无需兼容旧结构，但客户端协议仍保留可控兼容开关：缺少 `appId` 时可临时回落到 PDD `appId=1`。新 SDK 和客户端必须显式发送 appId；升级完成后关闭 `PDK_ALLOW_LEGACY_MISSING_APP_ID`，缺少 appId 返回 `40050`。
 
 ## 11. Spring Boot 自动初始化要求
 
-现有 `spring.sql.init.mode=always` 和 `schema-locations=classpath:schema-mysql.sql` 必须保留。多业务改造涉及新增表、增加列、替换唯一索引，不能只依赖新的 `CREATE TABLE IF NOT EXISTS`，因为它不会修改已存在的表。
+现有 `spring.sql.init.mode=always` 和 `schema-locations=classpath:schema-mysql.sql` 必须保留。项目现阶段明确采用**全新建库模式**：部署前备份需要保留的数据，然后删除旧表/重建数据库，由 `schema-mysql.sql` 一次性创建最终结构；脚本不再包含 `ALTER TABLE` 历史迁移。
 
-建议在 `schema-mysql.sql` 中增加 `pdk_schema_migration` 版本记录，并用可重复执行的条件迁移完成：
-
-1. 判断列/索引是否存在；
-2. 不存在才执行 `ALTER TABLE`；
-3. 回填历史数据为 `biz_id=1`；
-4. 校验没有空值和跨业务脏数据；
-5. 最后建立非空及唯一约束；
-6. 记录迁移版本。
-
-任何迁移失败仍应让 Spring Boot 启动失败，避免应用在部分业务表已隔离、部分未隔离的危险状态下运行。上线前必须对生产库做备份并在副本演练唯一索引替换。
+全量脚本仍使用 `CREATE TABLE IF NOT EXISTS` 与不覆盖运营配置的种子 UPSERT，因此同一最终结构可以重复启动。`continue-on-error=false` 必须保留，任何建表、索引或种子错误都让启动失败。以后若产生必须原地升级的生产数据，再正式引入 Flyway/Liquibase，不能重新把大量兼容 ALTER 混回基线 schema。
 
 ## 12. 验收标准
 
@@ -387,7 +359,7 @@ Python SDK、C++ SDK、易语言声明和 PyQt `PdkApiClient` 都应新增 appId
 9. 调度、扣次、故障替换、消费流水和财务记录均带正确 bizId。
 10. 管理后台用户页显示 appId、业务名称/描述和账号来源，并可按业务筛选。
 11. 停用业务后禁止新登录和新业务调用，历史流水仍可查询。
-12. `schema-mysql.sql` 在空库和已有单业务库上均能重复启动执行。
+12. `schema-mysql.sql` 能在空库完成初始化，并能在由同一最终基线创建的数据库上重复启动；不负责升级旧版单业务表结构。
 
 ## 13. 推荐实施顺序
 
@@ -829,22 +801,18 @@ assignment 也可以分别通过 `(user_id,biz_id)`、`(token_id,biz_id)`、`(ca
 
 所有历史/流水类外键避免 `ON DELETE CASCADE`。用户、卡密、套餐和小号都应逻辑停用或废弃，不能因为删除主记录连带删除财务及审计证据。
 
-## 19. 索引迁移与验证步骤
+## 19. 索引建库与数据导入验证
 
-索引调整应按以下顺序执行，避免先删除旧唯一约束后写入重复数据：
+所有 `biz_id NOT NULL`、业务联合索引和唯一约束直接定义在各表最终 `CREATE TABLE` 中，不再执行“加可空列、回填、删旧索引、改非空”的在线迁移步骤。建库流程为：
 
-1. 创建 `pdk_business` 和拼多多 `bizId=1/appId=1`。
-2. 给各表增加可空 `biz_id`。
-3. 历史数据回填 `biz_id=1`。
-4. 用核对 SQL 检查空业务、重复 `(biz_id,phone)`、跨业务关联和重复 ACTIVE assignment。
-5. 部署所有读写都带 bizId 的兼容代码。
-6. 建立新的业务联合索引和唯一约束。
-7. 删除被替代的旧索引，例如用户 `UNIQUE(phone)` 和短信旧联合索引。
-8. 将必填业务列改为 `NOT NULL`。
-9. 通过慢查询日志和 `EXPLAIN ANALYZE` 检查索引命中情况。
-10. 最后关闭旧客户端 appId 缺省兼容。
+1. 备份需要保留的旧数据，然后删除旧表或创建新的空数据库。
+2. 通过 `DB_URL` 指定目标数据库；基线脚本本身不创建或切换数据库。
+3. 启动 Spring Boot，由 `schema-mysql.sql` 创建最终结构和三条业务种子。
+4. 如需导入历史记录，在应用外完成字段映射并明确每条记录的 bizId；导入前后运行一致性核对。
+5. 通过慢查询日志和 `EXPLAIN ANALYZE` 检查 `(biz_id, ...)` 索引命中情况。
+6. 新客户端全部显式携带 appId；确认无旧客户端后关闭协议层 appId 缺省兼容。
 
-重点核对 SQL 应覆盖：
+导入数据时的重点核对 SQL 应覆盖：
 
 ```sql
 -- 是否还有未归属业务的数据
@@ -870,7 +838,7 @@ JOIN pdk_package_plan p ON p.id = c.package_id
 WHERE c.biz_id <> p.biz_id;
 ```
 
-`schema-mysql.sql` 自动初始化机制继续保留，但索引迁移必须记录版本并支持重复启动。每一项 `ALTER/DROP INDEX/CREATE INDEX` 都先查询 `information_schema` 判断当前状态，不能假定数据库一定来自最新版空库。
+`schema-mysql.sql` 自动初始化机制继续保留；它只支持从空库创建最终结构，不承担旧表原地升级。需要保留的旧数据应在重建前导出，并按新表业务归属规则经过核对后再导入。
 
 ## 20. `bizCode` 对业务实现的作用
 
@@ -896,9 +864,12 @@ public interface BusinessHandler {
 ```text
 BusinessHandlerRegistry
   PDD         -> PddBusinessHandler（完整复用当前拼多多逻辑）
-  ZHIBO_AI    -> ZhiboAiBusinessHandler
-  ZHIBO_LIVE  -> ZhiboLiveBusinessHandler
+  ZHIBO_AI ─┐
+             ├-> ZhiboBusinessHandler（聚合实现目录 business/zhibo）
+  ZHIBO_LIVE┘
 ```
+
+`ZHIBO_AI` 和 `ZHIBO_LIVE` 是两个独立的数据库业务与客户端标识，不合并数据；它们只是共享同一个 `ZhiboBusinessHandler` 实现。注册表通过 `supportedBizCodes()` 把两个具体编码映射到同一 Bean。`ZHIBO` 仅作为部署配置的聚合别名，不写入业务数据。
 
 请求入口只负责 `appId -> BusinessContext`；策略注册表使用服务端查出的 `bizCode` 选择实现。这样新增业务不会修改登录、套餐、卡密、扣次和权限等公共主链，只扩展业务特有动作与资源协议。
 
@@ -948,7 +919,9 @@ token_val           -> credential_payload
 
 不同 appId 对应不同客户端，客户端能执行的动作很可能不同。不能继续只靠全局 DTO 枚举允许所有动作。
 
-建议增加业务动作配置表：
+动作能力必须按 Handler 隔离。当前阶段已经核对后决定**不新增可由后台任意编辑的动作表**：动作会改变 DTO 校验、凭证协议和扣次语义，单纯修改数据库无法产生对应代码能力，反而容易让客户端看到服务端不能执行的动作。当前实现由版本化的 Handler `supportedActions()` 作为权威来源，公开业务信息返回 `supportedActions`，领取资源仍由 `validateAcquire()` 做最终校验。
+
+若未来动作仅是已有执行器的运营开关，而不是新增协议能力，再增加下面的覆盖表，并与 Handler 声明集合取交集：
 
 ```sql
 CREATE TABLE pdk_business_action (
@@ -975,9 +948,10 @@ CREATE TABLE pdk_business_action (
   "businessName": "拼多多业务",
   "businessDescription": "现有拼多多采集与分发业务",
   "registrationMode": "SELF_SERVICE",
-  "actions": [
-    {"code": "GOODS_COLLECT", "name": "商品采集"},
-    {"code": "ORDER_PULL", "name": "订单拉取"}
+  "supportedActions": [
+    "GOODS_COLLECT",
+    "ORDER_PULL",
+    "DETAIL_QUERY"
   ]
 }
 ```
@@ -1057,7 +1031,7 @@ bizId, bizCode, appId, userId, traceId
 推荐结构是：
 
 ```text
-公共平台内核 + 业务 SPI + 各 bizCode 独立实现目录
+公共平台内核 + 业务 SPI + 按实现族隔离的业务目录
 ```
 
 不推荐为业务 A、业务 B 分别复制一套：
@@ -1106,13 +1080,9 @@ com.pdk
 │  │  ├─ PddCredentialCodec.java
 │  │  ├─ PddFailureClassifier.java
 │  │  └─ PddResourceHealthChecker.java
-│  ├─ zhiboai
-│  │  ├─ ZhiboAiBusinessHandler.java
-│  │  ├─ ZhiboAiActionValidator.java
-│  │  └─ ...
-│  └─ zhibolive
-│     ├─ ZhiboLiveBusinessHandler.java
-│     └─ ...
+│  └─ zhibo
+│     ├─ ZhiboBusinessHandler.java  # supportedBizCodes=ZHIBO_AI,ZHIBO_LIVE
+│     └─ README.md
 ├─ controller
 ├─ domain
 ├─ mapper
@@ -1222,17 +1192,15 @@ pdk-parent
 ├─ pdk-platform-core
 ├─ pdk-business-spi
 ├─ pdk-business-pdd
-├─ pdk-business-zhibo-ai
-├─ pdk-business-zhibo-live
+├─ pdk-business-zhibo
 └─ pdk-application
 ```
 
 依赖方向必须单向：
 
 ```text
-business-pdd ─┐
-business-zhibo-ai   ├─> business-spi -> platform-core
-business-zhibo-live ┘
+business-pdd ────┐
+business-zhibo ──┴─> business-spi -> platform-core
 
 application -> platform-core + 所有需要启用的 business 模块
 ```
@@ -1263,8 +1231,7 @@ id, biz_id, user_id/resource_id, created_at, updated_at
 ```text
 db/migration/platform/
 db/migration/business/pdd/
-db/migration/business/zhibo-ai/
-db/migration/business/zhibo-live/
+db/migration/business/zhibo/
 ```
 
 但 Spring Boot 启动自动初始化和版本记录仍由平台统一管理，不能让每个 Handler 在运行时自行执行任意 DDL。
@@ -1277,8 +1244,7 @@ db/migration/business/zhibo-live/
 admin-vue3/src
 ├─ views/business/             # 通用业务管理
 ├─ business/pdd/               # 拼多多专属管理组件
-├─ business/zhibo-ai/
-└─ business/zhibo-live/
+└─ business/zhibo/
 ```
 
 PyQt/SDK 推荐“公共客户端内核 + 不同 appId 构建配置”：
@@ -1287,8 +1253,8 @@ PyQt/SDK 推荐“公共客户端内核 + 不同 appId 构建配置”：
 client-core/
 client-apps/
 ├─ pdd/app-config.json         # appId=1, bizCode=PDD
-├─ zhibo-ai/app-config.json     # appId=2, bizCode=ZHIBO_AI
-└─ zhibo-live/app-config.json   # appId=3, bizCode=ZHIBO_LIVE
+├─ zhibo-ai/app-config.json     # appId=2, bizCode=ZHIBO_AI, implementationGroup=zhibo
+└─ zhibo-live/app-config.json   # appId=3, bizCode=ZHIBO_LIVE, implementationGroup=zhibo
 ```
 
 若客户端 A/B 界面和功能差异不大，使用同一套代码按配置构建即可；如果界面、工作流和依赖完全不同，再创建独立客户端入口，但 HTTP、加密、登录和设备 SDK 仍复用公共库。
@@ -1300,8 +1266,7 @@ client-apps/
 ```text
 src/test/java/com/pdk/platform/       # 登录、卡密、隔离、财务等公共测试
 src/test/java/com/pdk/business/pdd/   # PDD action、错误映射、凭证测试
-src/test/java/com/pdk/business/zhiboai/
-src/test/java/com/pdk/business/zhibolive/
+src/test/java/com/pdk/business/zhibo/ # 聚合 Handler 与两个别名的契约测试
 ```
 
 每个新 Handler 必须通过同一套 `BusinessHandlerContractTest`，至少验证 bizCode 唯一、动作校验、凭证不串业务、错误映射和资源替换。
@@ -1351,7 +1316,7 @@ pdk:
     # 默认只启用现有 PDD，避免升级后误开放两个新业务
     enabled-codes: ${PDK_ENABLED_BIZ_CODES:PDD}
     legacy-default-app-id: ${PDK_LEGACY_DEFAULT_APP_ID:1}
-    allow-legacy-missing-app-id: ${PDK_ALLOW_MISSING_APP_ID:true}
+    allow-legacy-missing-app-id: ${PDK_ALLOW_LEGACY_MISSING_APP_ID:true}
 ```
 
 部署示例：
@@ -1360,14 +1325,14 @@ pdk:
 # 只部署现有拼多多业务
 PDK_ENABLED_BIZ_CODES=PDD
 
-# 只部署两个直播业务
-PDK_ENABLED_BIZ_CODES=ZHIBO_AI,ZHIBO_LIVE
+# 只部署两个直播业务（聚合别名会展开为两个具体 bizCode）
+PDK_ENABLED_BIZ_CODES=ZHIBO
 
 # 部署全部业务
 PDK_ENABLED_BIZ_CODES=PDD,ZHIBO_AI,ZHIBO_LIVE
 ```
 
-配置值统一使用大写规范化后的 bizCode。未知编码应让启动失败，而不是悄悄忽略拼写错误。
+配置值统一使用大写规范化后的 bizCode。`ZHIBO` 是唯一支持的聚合别名，等价于 `ZHIBO_AI,ZHIBO_LIVE`；其他未知编码会让启动失败，而不是悄悄忽略拼写错误。
 
 ### 26.3 模块是否物理打包
 
@@ -1383,8 +1348,7 @@ PDK_ENABLED_BIZ_CODES=PDD,ZHIBO_AI,ZHIBO_LIVE
 
 ```text
 -Pbiz-pdd
--Pbiz-zhibo-ai
--Pbiz-zhibo-live
+-Pbiz-zhibo
 -Pbiz-all
 ```
 
@@ -1478,7 +1442,7 @@ GET /api/v1/admin/business/{bizId}/runtime-status
 
 关闭时正在执行的请求无法绝对瞬时终止。业务状态缓存应主动失效，并设置较短 TTL；关键写接口在事务提交前可再次校验业务状态。
 
-资源租约关闭策略建议：停止发放新租约；对关闭前已经发放的租约，允许在短租约有效期内上报结果并完成幂等收尾，避免资源永久保持 BUSY。上报完成后不再续发。
+当前采用“严格关闭”策略：停止登录、领取和结果上报；关闭前发放的 Redis 短租约依靠 TTL 自动释放，数据库 assignment 不使用租约 BUSY 状态，因此不会永久占用。若未来引入长事务或外部资源锁，再增加只允许既有租约收尾的专用通道，不能直接放宽所有停用业务请求。
 
 ### 26.7 后台开启与部署支持的关系
 
@@ -1506,21 +1470,22 @@ Handler 模块 = 代码能力
 
 ### 26.9 健康检查与启动校验
 
-建议新增业务健康端点或集成到 Actuator：
+已经集成到 Actuator：
 
 ```text
-/actuator/health/businesses
+/actuator/health
+/actuator/health/business
 ```
 
 返回当前部署的三个维度：allowlist、Handler 注册、业务依赖健康。启动时执行：
 
 1. allowlist 每个 bizCode 必须存在于代码 Handler 注册表；
-2. 数据库每个 ACTIVE 业务必须在当前部署中可用；
+2. 当前部署 allowlist 中的业务必须有 Handler；数据库中其他 ACTIVE 业务允许显示 `NOT_IN_DEPLOYMENT`；
 3. 同一个 bizCode 不能有两个 Handler；
 4. appId 和 bizCode 不能重复；
 5. 当前部署支持的业务扩展表和必要配置必须存在。
 
-对于“数据库 ACTIVE 但当前部署不支持”的情况，生产环境建议启动失败，防止流量进入不完整节点；管理/迁移工具环境可以通过只读模式显式放宽。
+“数据库 ACTIVE 但不在当前部署 allowlist”是部分业务部署的合法状态，请求返回 `NOT_IN_DEPLOYMENT`。allowlist 中的编码不存在、Handler 缺失或重复注册才必须启动失败；同一个负载均衡服务组仍必须使用相同 allowlist。
 
 ### 26.10 业务专属定时任务
 
@@ -1528,8 +1493,7 @@ Handler 模块 = 代码能力
 
 ```text
 PddResourceHealthJob          -> 仅 PDD
-ZhiboAiResourceHealthJob     -> 仅 ZHIBO_AI
-ZhiboLiveResourceHealthJob   -> 仅 ZHIBO_LIVE
+ZhiboResourceHealthJob       -> 聚合实现按 BusinessContext 分别处理 ZHIBO_AI/ZHIBO_LIVE
 ```
 
 管理员关闭业务后，业务专属的新任务停止执行，但必要的资源释放和一致性清理仍由公共任务完成。
@@ -1538,13 +1502,13 @@ ZhiboLiveResourceHealthJob   -> 仅 ZHIBO_LIVE
 
 ```json
 // pdd/app-config.json
-{"appId": 1, "bizCode": "PDD", "displayName": "拼多多业务"}
+{"appId": 1, "bizCode": "PDD", "displayName": "拼多多业务", "productionEditable": false}
 
 // zhibo-ai/app-config.json
-{"appId": 2, "bizCode": "ZHIBO_AI", "displayName": "zhibo-ai"}
+{"appId": 2, "bizCode": "ZHIBO_AI", "displayName": "zhibo-ai", "implementationGroup": "zhibo", "productionEditable": false}
 
 // zhibo-live/app-config.json
-{"appId": 3, "bizCode": "ZHIBO_LIVE", "displayName": "zhibo-live"}
+{"appId": 3, "bizCode": "ZHIBO_LIVE", "displayName": "zhibo-live", "implementationGroup": "zhibo", "productionEditable": false}
 ```
 
 生产客户端只信任构建时固定的 appId，不让最终用户切换；调试客户端可以提供业务选择器。客户端启动时读取公开业务状态：未部署显示“当前服务未部署此业务”，管理员关闭显示“业务维护中”，不能统一显示成用户名或密码错误。
@@ -1563,3 +1527,33 @@ ZhiboLiveResourceHealthJob   -> 仅 ZHIBO_LIVE
 8. 业务关闭前的短租约可以安全收尾但不能继续领取；
 9. 三个客户端显示各自的业务名称、描述和有效状态；
 10. schema 自动初始化不会在重启时覆盖管理员设置的业务开关。
+
+## 27. 实施核对清单（2026-08-28）
+
+| 核对项 | 状态 | 当前落点/决定 |
+| --- | --- | --- |
+| 业务主数据与三条种子 | 已完成 | `pdk_business`；PDD 启用，两个直播业务默认关闭 |
+| `appId -> bizId -> bizCode` 权威解析 | 已完成 | `BusinessRequestResolver` + `BusinessContext`；Header/Body 防篡改 |
+| ZHIBO 聚合目录 | 已完成 | `business/zhibo/ZhiboBusinessHandler` 同时声明两个具体 bizCode |
+| 数据库业务字段与查询索引 | 已完成 | 用户、短信、套餐、卡密、资源、assignment、流水、财务、审计均隔离 |
+| 并发唯一性 | 已完成 | 套餐版本唯一键；ACTIVE 小号与用户槽位生成列唯一键 |
+| 全新库自动初始化 | 已完成 | `schema-mysql.sql` 仅创建最终结构与幂等种子，不包含历史 `ALTER`；Spring Boot 每次启动自动执行 |
+| SELF_SERVICE / ADMIN_ONLY | 已完成 | 短信注册按业务开放；管理员建号；首次改密策略 |
+| 设备、登录 Token 与停用业务会话 | 已完成 | Redis Key 含 bizId/userId；每次受保护请求重新检查业务状态 |
+| 套餐、卡密、续费与销售 | 已完成 | 全链 biz 一致性；原卡密续费不变并生成独立续费流水 |
+| 小号独占、租约、扣次与替换 | 已完成 | bizId 参与分配、Redis 租约、结果上报、故障替换和统计 |
+| 通用凭证模型 | 已完成（兼容迁移） | 新增 `credential_type/credential_payload`，PDD 兼容保留 `token_val`；Handler 只读通用载荷 |
+| 动作能力 | 已完成 | Handler 版本化声明 `supportedActions`；公开接口返回；不采用可绕过代码能力的任意动作表 |
+| 后台角色数据范围 | 已完成 | SUPER_ADMIN 全局；PARTNER 必须绑定单一 bizId，Controller 服务端强制范围 |
+| 业务管理/配置页 | 已完成 | 名称、描述、注册/试用、初始改密、DB 开关、部署与 Handler 状态、动作和库存统计 |
+| 各管理页面业务展示 | 已完成 | 用户含业务描述；套餐、卡密、资源、销售、财务含业务筛选/列 |
+| 部署部分业务 | 已完成 | `PDK_ENABLED_BIZ_CODES`；支持 `ZHIBO` 聚合别名；非本实例业务为 `NOT_IN_DEPLOYMENT`，allowlist 缺 Handler 才启动失败 |
+| 健康检查 | 已完成 | Actuator `business` HealthIndicator + 启动校验 |
+| PyQt | 已完成 | 调试版可切换；生产配置锁定 appId；公开业务信息、注册策略、动作；逐 HTTP 请求/响应/期待日志 |
+| Python / C++ / C / 易语言 SDK | 已完成 | URL 不变，统一 appId Header/Body；新增公开业务信息调用 |
+| 业务动作数据库覆盖表 | 经核对不实施 | 只有出现“已存在执行器的运营开关”需求时才增加，并必须与 Handler 能力取交集 |
+| 物理 Maven 多模块/微服务 | 经核对暂不实施 | 当前 Package 隔离足够，避免破坏统一事务；达到 25.6 条件后再拆 |
+
+若需要导入旧数据，必须先备份并离线执行重复/跨业务核对 SQL，再映射到新表；不要直接把旧表结构交给当前基线脚本升级。
+
+凭证字段目前完成的是“模型泛化与下发加密兼容”，数据库静态加密仍应由生产环境的数据库 TDE/KMS 或后续字段级密钥服务承担；日志和后台响应已强制脱敏，不能把生产凭证明文写入日志、导出文件或前端状态。

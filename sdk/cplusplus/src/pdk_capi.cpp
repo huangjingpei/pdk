@@ -13,10 +13,6 @@
 
 #include <nlohmann/json.hpp>
 
-#ifdef _WIN32
-#  define PDK_CAPI_EXPORTS
-#endif
-
 using namespace pdk;
 
 namespace {
@@ -54,10 +50,17 @@ std::string resp_to_json(const ApiResponse& r) {
 extern "C" {
 
 PDK_CAPI PdkHandle pdk_create(const char* base_url, const char* device_id, const char* root_salt) {
+    return pdk_create_ex(base_url, device_id, root_salt, 1);
+}
+
+PDK_CAPI PdkHandle pdk_create_ex(const char* base_url, const char* device_id,
+                                 const char* root_salt, long app_id) {
+    if (app_id <= 0) return nullptr;
     Config cfg;
     if (base_url && *base_url) cfg.baseUrl = base_url;
     if (device_id && *device_id) cfg.deviceId = device_id;
     if (root_salt && *root_salt) cfg.rootSalt = root_salt;
+    cfg.appId = app_id;
     cfg.enableDebugLog = false;
 
     auto* inst = new (std::nothrow) CapiInstance();
@@ -125,6 +128,18 @@ PDK_CAPI char* pdk_get_device_id(PdkHandle h) {
 PDK_CAPI char* pdk_get_token_value(PdkHandle h) {
     auto* inst = asInst(h);
     return inst ? dup_str(inst->client.tokenValue()) : dup_str("");
+}
+
+PDK_CAPI long pdk_get_app_id(PdkHandle h) {
+    auto* inst = asInst(h);
+    return inst ? inst->client.appId() : 0;
+}
+
+PDK_CAPI int pdk_set_app_id(PdkHandle h, long app_id) {
+    auto* inst = asInst(h);
+    if (!inst || app_id <= 0) return 0;
+    inst->client.setAppId(app_id);
+    return 1;
 }
 
 PDK_CAPI char* pdk_send_sms(PdkHandle h, const char* phone, const char* purpose) {
@@ -202,6 +217,12 @@ PDK_CAPI char* pdk_report_result(PdkHandle h, const char* lease_trace_id, const 
     return dup_str(resp_to_json(inst->client.reportResult(
         lease_trace_id ? lease_trace_id : "", status ? status : "",
         response_duration_ms, error_message ? error_message : "")));
+}
+
+PDK_CAPI char* pdk_business_info(PdkHandle h) {
+    auto* inst = asInst(h);
+    if (!inst) return dup_str(R"({"code":0,"message":"无效句柄"})");
+    return dup_str(resp_to_json(inst->client.businessInfo()));
 }
 
 PDK_CAPI char* pdk_profile(PdkHandle h) {

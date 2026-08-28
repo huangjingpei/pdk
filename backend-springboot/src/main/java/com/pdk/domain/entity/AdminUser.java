@@ -12,6 +12,8 @@ import java.time.LocalDateTime;
 public class AdminUser {
     @TableId(type = IdType.AUTO)
     private Long id;
+    /** SUPER_ADMIN 为空；PARTNER 必须绑定一个业务。 */
+    private Long bizId;
     private String username;
     private String passwordHash;
     private String displayName;

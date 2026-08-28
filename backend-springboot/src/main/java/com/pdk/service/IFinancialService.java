@@ -13,15 +13,21 @@ public interface IFinancialService {
      */
     FinanceSummaryVO getFinanceSummary();
 
+    FinanceSummaryVO getFinanceSummary(Long bizId);
+
     /**
      * 分页查询独立收入流水
      */
-    Page<FinancialIncome> pageIncomes(int page, int size, String orderType, String searchKey);
+    default Page<FinancialIncome> pageIncomes(int page, int size, String orderType, String searchKey) {
+        return pageIncomes(page, size, orderType, searchKey, null);
+    }
+    Page<FinancialIncome> pageIncomes(int page, int size, String orderType, String searchKey, Long bizId);
 
     /**
      * 分页查询对公采购支出
      */
-    Page<CompanyExpense> pageExpenses(int page, int size);
+    default Page<CompanyExpense> pageExpenses(int page, int size) { return pageExpenses(page, size, null); }
+    Page<CompanyExpense> pageExpenses(int page, int size, Long bizId);
 
     /**
      * 录入采购 Token 支出记账

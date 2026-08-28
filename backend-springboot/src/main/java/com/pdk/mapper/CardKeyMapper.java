@@ -12,6 +12,6 @@ public interface CardKeyMapper extends BaseMapper<CardKey> {
     /**
      * 悲观行锁锁定卡密记录 (SELECT ... FOR UPDATE) 杜绝高并发重复核销
      */
-    @Select("SELECT * FROM pdk_card_key WHERE card_key = #{cardKey} FOR UPDATE")
-    CardKey selectOneForUpdate(@Param("cardKey") String cardKey);
+    @Select("SELECT * FROM pdk_card_key WHERE biz_id = #{bizId} AND card_key = #{cardKey} FOR UPDATE")
+    CardKey selectOneForUpdate(@Param("bizId") Long bizId, @Param("cardKey") String cardKey);
 }
