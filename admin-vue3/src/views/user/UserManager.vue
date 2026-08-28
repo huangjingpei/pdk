@@ -7,7 +7,7 @@
       </div>
       <div class="flex gap-2">
         <el-button v-if="isSuperAdmin" type="primary" :icon="Plus" @click="openCreate">新增用户</el-button>
-        <el-button :icon="Refresh" @click="load">刷新</el-button>
+        <el-button :icon="Refresh" @click="load()">刷新</el-button>
       </div>
     </div>
 
@@ -229,11 +229,14 @@ const canResetPassword = computed(() => hasPermission('user:password:reset'));
 // 仅超级管理员可执行「新增用户」与「删除（冻结/解冻）」——按角色严格控制，不依赖权限位分配
 const isSuperAdmin = computed(() => authState.session?.role === 'SUPER_ADMIN');
 
-async function load(p = 1): Promise<void> {
-  page.value = p;
+// 防御：模板里若误写 @click="load"（不带括号），原生 PointerEvent 会被当成页码传进来，
+// 导致 page=[object PointerEvent] 触发后端 MethodArgumentTypeMismatchException。
+async function load(p: unknown = 1): Promise<void> {
+  const target = (typeof p === 'number' && Number.isFinite(p) && p > 0) ? p : 1;
+  page.value = target;
   loading.value = true;
   try {
-    const params: Record<string, unknown> = { page: p, size: pageSize.value };
+    const params: Record<string, unknown> = { page: target, size: pageSize.value };
     if (keyword.value.trim()) params.keyword = keyword.value.trim();
     if (statusFilter.value) params.status = statusFilter.value;
     if (businessFilter.value) params.bizId = businessFilter.value;

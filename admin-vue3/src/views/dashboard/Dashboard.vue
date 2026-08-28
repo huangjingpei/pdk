@@ -2,7 +2,7 @@
   <div>
     <div class="heading">
       <div><h2>运营任务总览</h2><p>按当前角色展示可访问的业务范围，数据来自 Spring Boot 实时接口。</p></div>
-      <el-button type="primary" :icon="Refresh" :loading="loading" @click="load">刷新数据</el-button>
+      <el-button type="primary" :icon="Refresh" :loading="loading" @click="load()">刷新数据</el-button>
     </div>
     <el-row :gutter="16">
       <el-col v-for="item in metrics" :key="item.label" :span="6">

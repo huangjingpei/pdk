@@ -8,7 +8,7 @@
       </div>
       <div class="flex gap-2">
         <el-button type="primary" :icon="Plus" @click="openCreate">新增账号</el-button>
-        <el-button :icon="Refresh" @click="load">刷新</el-button>
+        <el-button :icon="Refresh" @click="load()">刷新</el-button>
       </div>
     </div>
 

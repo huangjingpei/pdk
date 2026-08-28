@@ -5,7 +5,7 @@
         <h2>业务管理与部署状态</h2>
         <p>数据库开关与部署白名单双重控制。ZHIBO_AI / ZHIBO_LIVE 共用 zhibo 聚合 Handler，但 appId、用户和资源完全隔离。</p>
       </div>
-      <div><el-button type="primary" @click="openCreate">新增业务</el-button><el-button @click="load">刷新</el-button></div>
+      <div><el-button type="primary" @click="openCreate">新增业务</el-button><el-button @click="load()">刷新</el-button></div>
     </div>
 
     <el-alert type="info" :closable="false" class="mb"
