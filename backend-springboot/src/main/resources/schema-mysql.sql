@@ -26,8 +26,8 @@ INSERT INTO `pdk_business` (`id`, `app_id`, `biz_code`, `biz_name`, `description
  `trial_enabled`, `trial_duration_hours`, `trial_account_count`, `trial_calls_per_account`,
  `force_initial_password_change`, `status`) VALUES
 (1, 1, 'PDD', '拼多多业务', '拼多多账号与下单资源服务', 'SELF_SERVICE', 1, 24, 1, 20, 0, 'ACTIVE'),
-(2, 2, 'ZHIBO_AI', '直播 AI', '直播智能内容生成能力；与直播控制共用 zhibo 聚合实现', 'ADMIN_ONLY', 0, 0, 0, 0, 1, 'DISABLED'),
-(3, 3, 'ZHIBO_LIVE', '直播控制', '直播场控与账号能力；与直播 AI 共用 zhibo 聚合实现', 'ADMIN_ONLY', 0, 0, 0, 0, 1, 'DISABLED')
+(2, 2, 'ZHIBO_AI', '直播 AI', '直播智能内容生成能力；与直播矩阵共用 zhibo 聚合实现', 'ADMIN_ONLY', 0, 0, 0, 0, 1, 'DISABLED'),
+(3, 3, 'ZHIBO_LIVE', '直播矩阵', '直播场控与账号能力；与直播 AI 共用 zhibo 聚合实现', 'ADMIN_ONLY', 0, 0, 0, 0, 1, 'DISABLED')
 ON DUPLICATE KEY UPDATE `biz_name` = VALUES(`biz_name`), `description` = VALUES(`description`);
 
 

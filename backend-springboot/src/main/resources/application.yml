@@ -75,7 +75,9 @@ pdk:
   business:
     # 单体部署可用逗号分隔启用多个业务；ZHIBO 聚合别名会展开为 ZHIBO_AI,ZHIBO_LIVE。
     # 数据库 ACTIVE 只是管理开关，只有同时位于此部署白名单且 Handler 健康才真正可用。
-    enabled-codes: ${PDK_ENABLED_BIZ_CODES:PDD}
+    # 默认放开三个 bizCode 的部署能力，但 pdk_business 种子数据里 ZHIBO_AI/ZHIBO_LIVE 为 DISABLED，
+    # 因此仍需管理员在「业务管理」页显式启用后才会变为 AVAILABLE。
+    enabled-codes: ${PDK_ENABLED_BIZ_CODES:PDD,ZHIBO}
     legacy-default-app-id: ${PDK_LEGACY_DEFAULT_APP_ID:1}
     allow-legacy-missing-app-id: ${PDK_ALLOW_LEGACY_MISSING_APP_ID:true}
     # 部分业务部署允许数据库中其他 ACTIVE 业务呈现 NOT_IN_DEPLOYMENT；allowlist 自身缺 Handler 仍必定启动失败。
