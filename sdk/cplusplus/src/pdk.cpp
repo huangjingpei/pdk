@@ -619,6 +619,35 @@ ApiResponse Client::changePassword(const std::string& phone,
     return r;
 }
 
+ApiResponse Client::resetPassword(const std::string& phone,
+                                  const std::string& smsCode,
+                                  const std::string& newPassword) {
+    emitState(State::Ready, "正在通过短信验证码重置密码（" + phone + "）");
+    json j = {{"appId", impl_->appId}, {"phone", phone},
+              {"smsCode", smsCode}, {"newPassword", newPassword}};
+    ApiResponse r = request("POST", "/api/v1/client/auth/reset-password", false, j.dump(), "",
+                            "期待: code=200，密码重置成功");
+    if (r.ok()) emitState(State::Ready, "密码已重置，请用新密码登录");
+    else emitState(State::Error, r.message);
+    return r;
+}
+
+ApiResponse Client::adminResetPassword(long userId, const std::string& newPassword) {
+    json j = {{"newPassword", newPassword}};
+    ApiResponse r = request("POST", "/api/v1/admin/user/" + std::to_string(userId) + "/reset-password",
+                            true, j.dump(), "", "期待: code=200，密码已重置");
+    if (!r.ok()) emitState(State::Error, r.message);
+    return r;
+}
+
+ApiResponse Client::adminSetPasswordPolicy(long userId, bool mustChange) {
+    json j = {{"mustChange", mustChange}};
+    ApiResponse r = request("PUT", "/api/v1/admin/user/" + std::to_string(userId) + "/password-policy",
+                            true, j.dump(), "", "期待: code=200，强制改密标记已更新");
+    if (!r.ok()) emitState(State::Error, r.message);
+    return r;
+}
+
 /* ============================================================================
  * 卡密核销（开放接口）
  * ========================================================================== */

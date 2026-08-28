@@ -7,6 +7,8 @@ import com.pdk.common.api.CommonResult;
 import com.pdk.common.exception.BusinessException;
 import com.pdk.domain.dto.AdminAdjustUserDTO;
 import com.pdk.domain.dto.AdminCreateUserDTO;
+import com.pdk.domain.dto.AdminResetPasswordDTO;
+import com.pdk.domain.dto.UserPasswordPolicyDTO;
 import com.pdk.domain.dto.UserAssignmentDetail;
 import com.pdk.domain.entity.InvitationCode;
 import com.pdk.domain.entity.PackagePlan;
@@ -27,9 +29,11 @@ import com.pdk.service.DeviceBindingService;
 import com.pdk.service.InvitationService;
 import com.pdk.platform.business.BusinessContext;
 import com.pdk.platform.business.BusinessService;
+import cn.dev33.satoken.stp.StpLogic;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
@@ -52,6 +56,8 @@ public class AdminUserController {
     private final PasswordEncoder passwordEncoder;
     private final BusinessService businessService;
     private final com.pdk.security.AdminBusinessScope businessScope;
+    @Qualifier("clientStpLogic")
+    private final StpLogic clientStpLogic;
 
     @GetMapping("/list")
     @RequirePermission(RolePermissions.USER_VIEW)
@@ -267,6 +273,57 @@ public class AdminUserController {
         return CommonResult.success("用户状态已更新为 " + status);
     }
 
+    @PostMapping("/{id}/reset-password")
+    @RequirePermission(RolePermissions.USER_PASSWORD_RESET)
+    @Transactional(rollbackFor = Exception.class)
+    public CommonResult<String> resetPassword(@PathVariable Long id,
+                                              @Valid @RequestBody AdminResetPasswordDTO dto,
+                                              HttpServletRequest request) {
+        User user = requireScopedUser(id, request);
+        UserCredential credential = credentialMapper.selectOne(new LambdaQueryWrapper<UserCredential>()
+                .eq(UserCredential::getUserId, id));
+        if (credential == null) throw new BusinessException(40402, "用户凭证不存在，请联系管理员");
+        String before = snapshotCredential(credential);
+        if (passwordEncoder.matches(dto.getNewPassword(), credential.getPasswordHash())) {
+            throw new BusinessException(40019, "新密码不能与旧密码相同");
+        }
+        // 管理员代重置：强制用户下次登录改密（管理员知道临时密码，应当使其尽快失效）
+        credential.setPasswordHash(passwordEncoder.encode(dto.getNewPassword()));
+        credential.setMustChangePassword(1);
+        credentialMapper.updateById(credential);
+        // 吊销全部在线会话，强制用新密码重新登录
+        clientStpLogic.kickout(user.getId());
+        AdminPrincipal admin = principal(request);
+        adminAuditService.record(admin, user.getBizId(), "RESET_USER_PASSWORD", "USER", user.getPhone(),
+                before, snapshotCredential(credential), "管理员重置用户密码并强制改密", request);
+        return CommonResult.success("密码已重置，用户需在下次登录时修改密码");
+    }
+
+    @PutMapping("/{id}/password-policy")
+    @RequirePermission(RolePermissions.USER_PASSWORD_RESET)
+    @Transactional(rollbackFor = Exception.class)
+    public CommonResult<String> passwordPolicy(@PathVariable Long id,
+                                               @Valid @RequestBody UserPasswordPolicyDTO dto,
+                                               HttpServletRequest request) {
+        User user = requireScopedUser(id, request);
+        UserCredential credential = credentialMapper.selectOne(new LambdaQueryWrapper<UserCredential>()
+                .eq(UserCredential::getUserId, id));
+        if (credential == null) throw new BusinessException(40402, "用户凭证不存在，请联系管理员");
+        String before = snapshotCredential(credential);
+        credential.setMustChangePassword(dto.isMustChange() ? 1 : 0);
+        credentialMapper.updateById(credential);
+        // 开启强制改密时吊销在线会话，使其下次登录即触发改密；取消强制则不动会话
+        if (dto.isMustChange()) {
+            clientStpLogic.kickout(user.getId());
+        }
+        AdminPrincipal admin = principal(request);
+        adminAuditService.record(admin, user.getBizId(),
+                dto.isMustChange() ? "FORCE_USER_CHANGE_PASSWORD" : "CANCEL_FORCE_USER_CHANGE_PASSWORD",
+                "USER", user.getPhone(), before, snapshotCredential(credential),
+                dto.isMustChange() ? "管理员强制用户下次登录改密" : "管理员取消强制改密", request);
+        return CommonResult.success(dto.isMustChange() ? "已强制该用户下次登录时修改密码" : "已取消强制改密");
+    }
+
     private String snapshot(User u) {
         return "{\"status\":\"" + (u.getStatus() == null ? "" : u.getStatus())
                 + "\",\"packageId\":" + (u.getCurrentPackageId() == null ? 0 : u.getCurrentPackageId())
@@ -277,6 +334,11 @@ public class AdminUserController {
 
     private AdminPrincipal principal(HttpServletRequest request) {
         return (AdminPrincipal) request.getAttribute("pdkAdminPrincipal");
+    }
+
+    private String snapshotCredential(UserCredential c) {
+        return "{\"mustChangePassword\":" + (c.getMustChangePassword() == null ? 0 : c.getMustChangePassword())
+                + ",\"status\":\"" + (c.getStatus() == null ? "" : c.getStatus()) + "\"}";
     }
 
     private User requireScopedUser(Long id, HttpServletRequest request) {

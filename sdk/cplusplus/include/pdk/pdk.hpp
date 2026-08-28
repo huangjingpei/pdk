@@ -173,6 +173,14 @@ public:
     ApiResponse changePassword(const std::string& phone,
                                const std::string& oldPassword,
                                const std::string& newPassword);
+    // 自助找回密码（无需旧密码）：先 sendSms(phone, "RESET_PASSWORD") 取得验证码，再调用本方法
+    ApiResponse resetPassword(const std::string& phone,
+                              const std::string& smsCode,
+                              const std::string& newPassword);
+    // 管理端：代客户重置密码（强制下次登录改密），需管理员会话
+    ApiResponse adminResetPassword(long userId, const std::string& newPassword);
+    // 管理端：切换客户「强制下次登录改密」标记，需管理员会话
+    ApiResponse adminSetPasswordPolicy(long userId, bool mustChange);
 
     // —— 卡密核销（开放接口，无需登录）——
     ApiResponse activateCard(const std::string& cardKey,

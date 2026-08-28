@@ -9,6 +9,7 @@ import com.pdk.domain.dto.ClientLoginDTO;
 import com.pdk.domain.dto.ClientRegisterDTO;
 import com.pdk.domain.dto.SendSmsDTO;
 import com.pdk.domain.dto.ChangePasswordDTO;
+import com.pdk.domain.dto.ClientResetPasswordDTO;
 import com.pdk.domain.entity.User;
 import com.pdk.domain.entity.UserCredential;
 import com.pdk.mapper.UserMapper;
@@ -169,6 +170,35 @@ public class ClientAuthController {
         credential.setMustChangePassword(0);
         credentialMapper.updateById(credential);
         return CommonResult.success("密码修改成功，请使用新密码登录");
+    }
+
+    @PostMapping("/reset-password")
+    @org.springframework.transaction.annotation.Transactional(rollbackFor = Exception.class)
+    public CommonResult<String> resetPassword(@Valid @RequestBody ClientResetPasswordDTO dto,
+                                               HttpServletRequest request) {
+        BusinessContext business = businessRequestResolver.resolveContextAndBind(request, dto.getAppId());
+        User user = userMapper.selectOne(new LambdaQueryWrapper<User>()
+                .eq(User::getBizId, business.bizId()).eq(User::getPhone, dto.getPhone()));
+        if (user == null) {
+            throw new BusinessException(40100, "账号不存在，请先领取试用或激活卡密");
+        }
+        // 复用既有短信验证码设施（按 bizId + phone + RESET_PASSWORD 隔离与频控）
+        smsCodeService.verify(business.bizId(), dto.getPhone(), "RESET_PASSWORD", dto.getSmsCode());
+        UserCredential credential = credentialMapper.selectOne(new LambdaQueryWrapper<UserCredential>()
+                .eq(UserCredential::getUserId, user.getId()));
+        if (credential == null) {
+            throw new BusinessException(40402, "用户凭证不存在，请联系管理员");
+        }
+        if (passwordEncoder.matches(dto.getNewPassword(), credential.getPasswordHash())) {
+            throw new BusinessException(40019, "新密码不能与旧密码相同");
+        }
+        credential.setPasswordHash(passwordEncoder.encode(dto.getNewPassword()));
+        // 自助找回后不强制改密（用户本人刚设置了新密码）
+        credential.setMustChangePassword(0);
+        credentialMapper.updateById(credential);
+        // 重置成功后吊销该用户全部在线会话，强制用新密码重新登录，避免旧会话残留
+        clientStpLogic.kickout(user.getId());
+        return CommonResult.success("密码已重置，请使用新密码登录");
     }
 
     @PostMapping("/logout")

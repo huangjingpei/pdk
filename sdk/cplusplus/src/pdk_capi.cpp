@@ -183,6 +183,28 @@ PDK_CAPI char* pdk_change_password(PdkHandle h, const char* phone,
         phone ? phone : "", old_password ? old_password : "", new_password ? new_password : "")));
 }
 
+PDK_CAPI char* pdk_reset_password(PdkHandle h, const char* phone,
+                                  const char* sms_code, const char* new_password) {
+    auto* inst = asInst(h);
+    if (!inst) return dup_str(R"({"code":0,"message":"无效句柄"})");
+    return dup_str(resp_to_json(inst->client.resetPassword(
+        phone ? phone : "", sms_code ? sms_code : "", new_password ? new_password : "")));
+}
+
+PDK_CAPI char* pdk_admin_reset_password(PdkHandle h, long user_id, const char* new_password) {
+    auto* inst = asInst(h);
+    if (!inst) return dup_str(R"({"code":0,"message":"无效句柄"})");
+    return dup_str(resp_to_json(inst->client.adminResetPassword(
+        user_id, new_password ? new_password : "")));
+}
+
+PDK_CAPI char* pdk_admin_set_password_policy(PdkHandle h, long user_id, int must_change) {
+    auto* inst = asInst(h);
+    if (!inst) return dup_str(R"({"code":0,"message":"无效句柄"})");
+    return dup_str(resp_to_json(inst->client.adminSetPasswordPolicy(
+        user_id, must_change != 0)));
+}
+
 PDK_CAPI char* pdk_activate_card(PdkHandle h, const char* card_key, const char* user_phone,
                                  const char* payment_channel, double actual_amount) {
     auto* inst = asInst(h);

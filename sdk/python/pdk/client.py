@@ -452,6 +452,40 @@ class PdkApiClient:
             self._emit_state(State.Error, body.get("message", ""))
         return body
 
+    def request_reset_sms(self, phone):
+        """「忘记密码」链路：发送短信用途为 RESET_PASSWORD 的验证码。"""
+        return self.send_sms(phone, "RESET_PASSWORD")
+
+    def reset_password(self, phone, sms_code, new_password):
+        """自助找回密码：用手机号 + 短信验证码重设密码（无需旧密码）。"""
+        self._emit_state(State.Ready, f"正在通过短信验证码重置密码（{phone}）")
+        body = self.request("POST", "/api/v1/client/auth/reset-password", json_body={
+            "appId": self.app_id, "phone": phone,
+            "smsCode": sms_code, "newPassword": new_password,
+        })
+        if self.is_ok(body):
+            self._emit_state(State.Ready, "密码已重置，请用新密码登录")
+        else:
+            self._emit_state(State.Error, body.get("message", ""))
+        return body
+
+    # ---------------------------------------------------------------- 管理员密码治理（管理端调用）
+    def admin_reset_password(self, user_id, new_password):
+        """管理员代客户重置密码（强制下次登录改密）。需管理员会话。"""
+        body = self.request("POST", f"/api/v1/admin/user/{user_id}/reset-password",
+                            authenticated=True, json_body={"newPassword": new_password})
+        if not self.is_ok(body):
+            self._emit_state(State.Error, body.get("message", ""))
+        return body
+
+    def admin_set_password_policy(self, user_id, must_change: bool):
+        """管理员切换客户「强制下次登录改密」标记。需管理员会话。"""
+        body = self.request("PUT", f"/api/v1/admin/user/{user_id}/password-policy",
+                            authenticated=True, json_body={"mustChange": bool(must_change)})
+        if not self.is_ok(body):
+            self._emit_state(State.Error, body.get("message", ""))
+        return body
+
     # ---------------------------------------------------------------- 卡密
     def activate_card(self, card_key, user_phone, payment_channel="OFFLINE", actual_amount=0.0):
         payload: dict = {

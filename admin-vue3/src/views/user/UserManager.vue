@@ -59,7 +59,7 @@
         </el-table-column>
         <el-table-column prop="expireTime" label="到期时间" width="180" />
         <el-table-column prop="createdAt" label="注册时间" width="180" />
-        <el-table-column label="操作" width="470" fixed="right">
+        <el-table-column label="操作" width="560" fixed="right">
           <template #default="scope">
             <div class="action-cell">
               <el-button type="info" size="small" @click="openDetail(scope.row)">套餐详情</el-button>
@@ -69,6 +69,9 @@
               <el-button v-if="canEdit" type="success" size="small" @click="openAdjust(scope.row)">调整套餐</el-button>
               <el-button v-if="isSuperAdmin" :type="scope.row.status === 'FROZEN' ? 'primary' : 'danger'" size="small"
                 @click="toggleStatus(scope.row)">{{ scope.row.status === 'FROZEN' ? '解冻' : '冻结' }}</el-button>
+              <el-button v-if="canResetPassword" type="danger" size="small" @click="openReset(scope.row)">重置密码</el-button>
+              <el-button v-if="canResetPassword" :type="scope.row.mustChangePassword ? 'warning' : 'success'" size="small"
+                @click="toggleForceChange(scope.row)">{{ scope.row.mustChangePassword ? '取消强制改密' : '强制改密' }}</el-button>
             </div>
           </template>
         </el-table-column>
@@ -124,6 +127,21 @@
       <template #footer>
         <el-button @click="adjustVisible = false">取消</el-button>
         <el-button type="primary" :loading="adjusting" @click="submitAdjust">确认调整</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 管理员重置密码对话框 -->
+    <el-dialog v-model="resetVisible" title="重置用户密码" width="460px">
+      <el-alert type="warning" :closable="false" class="mb-3"
+        :title="`将重置用户 ${resetTarget?.phone || ''} 的密码，并强制其下次登录时修改`" />
+      <el-form :model="resetForm" label-width="96px">
+        <el-form-item label="新密码" required>
+          <el-input v-model="resetForm.newPassword" type="password" show-password placeholder="8-64 位" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="resetVisible = false">取消</el-button>
+        <el-button type="primary" :loading="resetting" @click="submitReset">确认重置</el-button>
       </template>
     </el-dialog>
 
@@ -207,6 +225,7 @@ const availableBusinesses = computed(() => businesses.value.filter(b => b.effect
 const canEdit = computed(() => hasPermission('user:edit'));
 const canUnbind = computed(() => hasPermission('user:unbind'));
 const canManagePartner = computed(() => hasPermission('partner:manage'));
+const canResetPassword = computed(() => hasPermission('user:password:reset'));
 // 仅超级管理员可执行「新增用户」与「删除（冻结/解冻）」——按角色严格控制，不依赖权限位分配
 const isSuperAdmin = computed(() => authState.session?.role === 'SUPER_ADMIN');
 
@@ -353,6 +372,56 @@ async function unbind(id: number): Promise<void> {
     await load();
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '解绑失败');
+  }
+}
+
+// ---- 管理员重置密码 ----
+const resetVisible = ref(false);
+const resetting = ref(false);
+const resetTarget = ref<ClientUser | null>(null);
+const resetForm = ref({ id: 0, newPassword: '' });
+
+function openReset(row: ClientUser): void {
+  resetTarget.value = row;
+  resetForm.value = { id: row.id, newPassword: '' };
+  resetVisible.value = true;
+}
+
+async function submitReset(): Promise<void> {
+  if (resetForm.value.newPassword.length < 8) {
+    ElMessage.error('新密码至少 8 位');
+    return;
+  }
+  resetting.value = true;
+  try {
+    await api.post(`/api/v1/admin/user/${resetForm.value.id}/reset-password`, {
+      newPassword: resetForm.value.newPassword,
+    });
+    ElMessage.success('密码已重置，用户需在下次登录时修改');
+    resetVisible.value = false;
+    await load();
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '重置失败');
+  } finally {
+    resetting.value = false;
+  }
+}
+
+// ---- 强制 / 取消强制改密 ----
+async function toggleForceChange(row: ClientUser): Promise<void> {
+  const willForce = !row.mustChangePassword;
+  const label = willForce ? '强制该用户下次登录时修改密码' : '取消强制改密';
+  try {
+    await ElMessageBox.confirm(`确认${label}？${willForce ? '该用户所有在线会话将失效。' : ''}`, label, { type: 'warning' });
+  } catch {
+    return;
+  }
+  try {
+    await api.put(`/api/v1/admin/user/${row.id}/password-policy`, { mustChange: willForce });
+    ElMessage.success(willForce ? '已强制改密' : '已取消强制改密');
+    await load();
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '操作失败');
   }
 }
 

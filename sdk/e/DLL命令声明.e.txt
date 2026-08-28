@@ -91,6 +91,22 @@
     .参数 old_password, 文本型, , 旧密码
     .参数 new_password, 文本型, , 新密码
 
+.DLL命令 pdk_reset_password, 文本型, "pdk_capi.dll", "pdk_reset_password", 公开, UTF-8
+    .参数 h, 整数型, , 句柄
+    .参数 phone, 文本型, , 手机号
+    .参数 sms_code, 文本型, , 短信验证码（先用 pdk_send_sms(phone,"RESET_PASSWORD") 获取）
+    .参数 new_password, 文本型, , 新密码（8-64 位）
+
+.DLL命令 pdk_admin_reset_password, 文本型, "pdk_capi.dll", "pdk_admin_reset_password", 公开, UTF-8
+    .参数 h, 整数型, , 句柄
+    .参数 user_id, 整数型, , 用户 ID
+    .参数 new_password, 文本型, , 新密码（8-64 位）
+
+.DLL命令 pdk_admin_set_password_policy, 文本型, "pdk_capi.dll", "pdk_admin_set_password_policy", 公开, UTF-8
+    .参数 h, 整数型, , 句柄
+    .参数 user_id, 整数型, , 用户 ID
+    .参数 must_change, 整数型, , 1=强制下次登录改密，0=取消强制
+
 .DLL命令 pdk_activate_card, 文本型, "pdk_capi.dll", "pdk_activate_card", 公开, UTF-8
     .参数 h, 整数型, , 句柄
     .参数 card_key, 文本型, , 卡密，如 "PDK-8891-2041-9982"

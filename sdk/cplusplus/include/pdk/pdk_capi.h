@@ -76,6 +76,13 @@ PDK_CAPI char* pdk_logout(PdkHandle h);
 PDK_CAPI char* pdk_unbind_device(PdkHandle h);
 PDK_CAPI char* pdk_change_password(PdkHandle h, const char* phone,
                                    const char* old_password, const char* new_password);
+/* 自助找回密码（无需旧密码）：先 pdk_send_sms(phone,"RESET_PASSWORD") 取验证码，再调用本函数 */
+PDK_CAPI char* pdk_reset_password(PdkHandle h, const char* phone,
+                                  const char* sms_code, const char* new_password);
+/* 管理端：代客户重置密码（强制下次登录改密），需管理员会话 */
+PDK_CAPI char* pdk_admin_reset_password(PdkHandle h, long user_id, const char* new_password);
+/* 管理端：切换客户「强制下次登录改密」标记，需管理员会话 */
+PDK_CAPI char* pdk_admin_set_password_policy(PdkHandle h, long user_id, int must_change);
 
 /* 卡密核销（开放接口） */
 PDK_CAPI char* pdk_activate_card(PdkHandle h, const char* card_key, const char* user_phone,
