@@ -15,6 +15,7 @@ import com.pdk.platform.business.BusinessContext;
 import com.pdk.service.AccountAssignmentService;
 import com.pdk.service.DeviceBindingService;
 import com.pdk.service.InvitationService;
+import com.pdk.service.LoginLogService;
 import com.pdk.service.SmsCodeService;
 import jakarta.servlet.http.HttpServletRequest;
 import org.junit.jupiter.api.BeforeEach;
@@ -43,6 +44,7 @@ public class ClientAuthScenariosTest {
     @Mock private PasswordEncoder passwordEncoder;
     @Mock private AccountAssignmentService assignmentService;
     @Mock private InvitationService invitationService;
+    @Mock private LoginLogService loginLogService;
     @Mock private StpLogic clientStpLogic;
     @Mock private BusinessRequestResolver businessRequestResolver;
 
