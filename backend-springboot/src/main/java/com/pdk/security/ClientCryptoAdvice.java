@@ -99,7 +99,8 @@ public class ClientCryptoAdvice implements RequestBodyAdvice, ResponseBodyAdvice
             if ("off".equals(mode)) {
                 // 关闭模式下收到信封：按明文透传（交由后续校验，通常绑定失败返回明文错误）
                 REQUEST_ENCRYPTED.set(false);
-                return inputMessage;
+                // inputMessage.getBody() 已被 copyToByteArray 消费，必须用缓存内容重建输入流。
+                return wrap(rawStr, inputMessage.getHeaders());
             }
             BodyCryptoService.DecryptResult result = bodyCrypto.decryptEnvelope(rawStr);
             REQUEST_ENCRYPTED.set(true);
@@ -113,7 +114,8 @@ public class ClientCryptoAdvice implements RequestBodyAdvice, ResponseBodyAdvice
                 throw new BusinessException(42900, "当前已强制启用协议加密，请使用支持加密的客户端");
             }
             REQUEST_ENCRYPTED.set(false);
-            return inputMessage;
+            // 明文兼容模式同样已经读取过原始流；返回原对象会让 Jackson 收到空 body。
+            return wrap(rawStr, inputMessage.getHeaders());
         }
     }
 
