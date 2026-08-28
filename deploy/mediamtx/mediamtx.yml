@@ -1,0 +1,30 @@
+logLevel: info
+logDestinations: [stdout]
+
+authMethod: http
+# Docker Compose 使用 MTX_AUTHHTTPADDRESS 环境变量覆盖并注入内部服务令牌。
+authHTTPAddress: http://backend:8080/api/v1/internal/mediamtx/auth
+authHTTPExclude:
+  - action: api
+  - action: metrics
+  - action: pprof
+
+api: true
+apiAddress: :9997
+
+# 当前部署只承担 ZHIBO_LIVE 的 RTMP 推流入口；关闭未使用协议以缩小暴露面。
+rtsp: false
+rtmp: true
+rtmpAddress: :1935
+hls: false
+webrtc: false
+srt: false
+moq: false
+
+pathDefaults:
+  overridePublisher: false
+  runOnAvailable: /usr/local/bin/pdk-mediamtx-event available
+  runOnUnavailable: /usr/local/bin/pdk-mediamtx-event unavailable
+
+paths:
+  "~^zhibo-live/ls_[A-Za-z0-9]{16,64}$": {}

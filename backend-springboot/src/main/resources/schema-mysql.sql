@@ -332,6 +332,44 @@ CREATE TABLE IF NOT EXISTS `pdk_user_referral` (
     INDEX `idx_referral_partner` (`biz_id`, `partner_user_id`, `created_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='客户注册渠道归属';
 
+-- 16. ZHIBO_LIVE MediaMTX 推流会话。票据只保存 SHA-256；活动用户生成列保证单用户单流。
+CREATE TABLE IF NOT EXISTS `pdk_live_stream_session` (
+    `id` BIGINT AUTO_INCREMENT PRIMARY KEY,
+    `biz_id` BIGINT NOT NULL COMMENT '固定归属 ZHIBO_LIVE 业务',
+    `user_id` BIGINT NOT NULL,
+    `stream_session_no` VARCHAR(48) NOT NULL,
+    `client_request_id` VARCHAR(64) NOT NULL,
+    `media_node_code` VARCHAR(64) NOT NULL,
+    `path` VARCHAR(160) NOT NULL,
+    `protocol` VARCHAR(10) NOT NULL DEFAULT 'RTMP',
+    `status` VARCHAR(24) NOT NULL COMMENT 'ISSUED/AUTHORIZED/LIVE/ENDED/EXPIRED',
+    `ticket_hash` CHAR(64) NOT NULL COMMENT '推流票据 SHA-256，禁止存明文',
+    `ticket_expires_at` DATETIME NOT NULL,
+    `device_id_hash` CHAR(64) NOT NULL,
+    `client_ip` VARCHAR(64) DEFAULT NULL,
+    `mediamtx_connection_id` VARCHAR(64) DEFAULT NULL,
+    `mediamtx_source_id` VARCHAR(64) DEFAULT NULL,
+    `authorized_at` DATETIME DEFAULT NULL,
+    `started_at` DATETIME DEFAULT NULL,
+    `ended_at` DATETIME DEFAULT NULL,
+    `duration_seconds` BIGINT DEFAULT NULL,
+    `billed_units` INT NOT NULL DEFAULT 0,
+    `end_reason` VARCHAR(64) DEFAULT NULL,
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    `active_user_guard` BIGINT GENERATED ALWAYS AS (
+        CASE WHEN `status` IN ('ISSUED','AUTHORIZED','LIVE','KICK_REQUESTED') THEN `user_id` ELSE NULL END
+    ) STORED,
+    UNIQUE KEY `uk_live_session_no` (`stream_session_no`),
+    UNIQUE KEY `uk_live_ticket_hash` (`ticket_hash`),
+    UNIQUE KEY `uk_live_client_request` (`biz_id`, `user_id`, `client_request_id`),
+    UNIQUE KEY `uk_live_active_user` (`biz_id`, `active_user_guard`),
+    UNIQUE KEY `uk_live_mediamtx_conn` (`media_node_code`, `mediamtx_connection_id`),
+    INDEX `idx_live_user_status` (`biz_id`, `user_id`, `status`, `created_at`),
+    INDEX `idx_live_ticket_expire` (`status`, `ticket_expires_at`),
+    INDEX `idx_live_path` (`path`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='ZHIBO_LIVE 推流会话与短效票据';
+
 -- 为升级前已存在的代理补齐稳定邀请码；重复启动不会重复生成。
 -- INSERT INTO `pdk_invitation_code` (`code`, `owner_user_id`, `status`, `used_count`)
 -- SELECT CONCAT('P', LPAD(UPPER(HEX(c.`user_id`)), 7, '0')), c.`user_id`, 'ACTIVE', 0
@@ -354,7 +392,7 @@ ON DUPLICATE KEY UPDATE `display_name` = VALUES(`display_name`), `role_code` = '
 UPDATE `pdk_admin_user` SET `status` = 'DISABLED'
 WHERE `username` IN ('super_admin', 'operations', 'finance', 'agent_demo', 'support');
 
--- 16. 平台系统配置（通用 KV，由超级管理员在「系统设置」页维护）
+-- 17. 平台系统配置（通用 KV，由超级管理员在「系统设置」页维护）
 CREATE TABLE IF NOT EXISTS `pdk_system_config` (
     `id` BIGINT AUTO_INCREMENT PRIMARY KEY,
     `biz_id` BIGINT DEFAULT NULL COMMENT 'NULL 为平台配置',

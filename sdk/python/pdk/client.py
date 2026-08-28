@@ -33,7 +33,7 @@ DEFAULT_APP_ID = int(os.getenv("PDK_APP_ID", "1"))
 ApiError = RuntimeError
 _SENSITIVE_KEYS = (
     "password", "newPassword", "oldPassword", "smsCode", "cardKey",
-    "invitationCode", "paymentTxnNo", "tokenValue", "token",
+    "invitationCode", "paymentTxnNo", "tokenValue", "token", "publishUrl",
 )
 
 
@@ -564,6 +564,26 @@ class PdkApiClient:
 
     def card_list(self):
         return self.request("GET", "/api/v1/client/account/card", authenticated=True)
+
+    # ---------------------------------------------------------------- ZHIBO_LIVE
+    def create_live_publish_ticket(self, title="", client_request_id="", requested_protocol="RTMP"):
+        """为 appId=3 申请一次性、短有效期的 MediaMTX 推流地址。"""
+        payload = {
+            "clientRequestId": client_request_id or str(uuid.uuid4()),
+            "title": title or None,
+            "requestedProtocol": requested_protocol,
+        }
+        return self.request("POST", "/api/v1/client/zhibo-live/publish-tickets",
+                            authenticated=True, json_body=payload)
+
+    def live_streams(self):
+        """查询当前登录用户最近的直播会话（ISSUED/LIVE/ENDED 等）。"""
+        return self.request("GET", "/api/v1/client/zhibo-live/streams/current", authenticated=True)
+
+    def stop_live_stream(self, stream_session_no):
+        """停止自己名下的直播会话；在线连接会通过 MediaMTX Control API 踢下线。"""
+        return self.request("POST", f"/api/v1/client/zhibo-live/streams/{stream_session_no}/stop",
+                            authenticated=True)
 
     # ---------------------------------------------------------------- 便捷
     def is_logged_in(self) -> bool:

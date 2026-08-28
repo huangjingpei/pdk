@@ -1,5 +1,10 @@
 # ZHIBO_LIVE 接入 MediaMTX HTTP Auth 后端方案
 
+> 本文是总体设计和后续演进蓝图。当前可运行实现、部署方式、测试步骤与逐项完成度分别见：
+> [开发说明](./ZHIBO_LIVE_MEDIAMTX_DEVELOPMENT.md)、[技术说明](./ZHIBO_LIVE_MEDIAMTX_TECHNICAL.md)、
+> [测试说明](./ZHIBO_LIVE_MEDIAMTX_TEST.md)、[完成情况](./ZHIBO_LIVE_MEDIAMTX_IMPLEMENTATION_STATUS.md)。
+> 当前 MVP 使用 RTMP 完成端到端准入；生产公网必须补配证书并切换 RTMPS 后再上线。
+
 ## 1. 结论
 
 该方案可行，适用于当前 `appId=3 / bizId=3 / bizCode=ZHIBO_LIVE`，但要把三个职责分开：

@@ -226,6 +226,36 @@ ENDPOINTS: list[EndpointDef] = [
         expects="code=200 返回已激活卡密列表",
         requires_auth=True,
     ),
+    EndpointDef(
+        eid="live_publish_ticket",
+        name="ZHIBO_LIVE 申请推流票据",
+        method="POST",
+        path="/api/v1/client/zhibo-live/publish-tickets",
+        fields=[
+            FieldDef("clientRequestId", "请求ID", placeholder="留空自动生成 UUID", required=False),
+            FieldDef("title", "直播标题", default="客户端直播", required=False),
+            FieldDef("requestedProtocol", "推流协议", default="RTMP", placeholder="当前部署仅 RTMP", required=True),
+        ],
+        expects="仅 appId=3 已登录且套餐有效时 code=200；返回90秒短效推流地址",
+        requires_auth=True,
+    ),
+    EndpointDef(
+        eid="live_streams",
+        name="ZHIBO_LIVE 推流会话",
+        method="GET",
+        path="/api/v1/client/zhibo-live/streams/current",
+        expects="code=200 返回当前用户推流会话及状态，响应不包含明文票据",
+        requires_auth=True,
+    ),
+    EndpointDef(
+        eid="live_stop",
+        name="ZHIBO_LIVE 停止推流",
+        method="POST",
+        path="/api/v1/client/zhibo-live/streams/{streamSessionNo}/stop",
+        fields=[FieldDef("streamSessionNo", "推流会话号", required=True)],
+        expects="code=200；只能停止当前登录用户自己的推流",
+        requires_auth=True,
+    ),
 ]
 
 
@@ -475,6 +505,14 @@ class EndpointCard(QWidget):
                 resp = client.resource_status()
             elif eid == "card_list":
                 resp = client.card_list()
+            elif eid == "live_publish_ticket":
+                resp = client.create_live_publish_ticket(
+                    values.get("clientRequestId", ""), values.get("title", "客户端直播"),
+                    values.get("requestedProtocol", "RTMP"))
+            elif eid == "live_streams":
+                resp = client.live_streams()
+            elif eid == "live_stop":
+                resp = client.stop_live_stream(values["streamSessionNo"])
             else:
                 resp = {"code": 0, "message": f"未实现端点 {eid}", "data": None}
         except Exception as exc:  # noqa: BLE001
@@ -508,7 +546,7 @@ class EndpointCard(QWidget):
 
         self.resp_status.setText(f"HTTP {http_status}  |  code={code}  |  {text}  |  {msg}")
         self.resp_status.setStyleSheet(f"color:{color};font-weight:600;")
-        self.resp_body.setPlainText(json.dumps(resp, ensure_ascii=False, indent=2, default=str))
+        self.resp_body.setPlainText(json.dumps(redact_sensitive(resp), ensure_ascii=False, indent=2, default=str))
 
     def run_scenario(self) -> None:
         """调用 TestRunner 的对应场景方法（带前后依赖）。"""

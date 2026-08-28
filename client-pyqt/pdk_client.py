@@ -57,7 +57,7 @@ class ApiError(RuntimeError):
 
 _SENSITIVE_KEYS = (
     "password", "newPassword", "oldPassword", "smsCode", "cardKey",
-    "invitationCode", "paymentTxnNo", "tokenValue", "token",
+    "invitationCode", "paymentTxnNo", "tokenValue", "token", "publishUrl",
 )
 
 
@@ -416,6 +416,34 @@ class PdkApiClient:
 
     def card_list(self) -> dict[str, Any]:
         return self.request("GET", "/api/v1/client/account/card", authenticated=True)
+
+    # ------------------------------------------------------------------ ZHIBO_LIVE 推流
+    def create_live_publish_ticket(
+        self,
+        client_request_id: str = "",
+        title: str = "客户端直播",
+        protocol: str = "RTMP",
+    ) -> dict[str, Any]:
+        """登录 appId=3 后申请一次性短效 MediaMTX 推流地址。"""
+        return self.request(
+            "POST", "/api/v1/client/zhibo-live/publish-tickets",
+            authenticated=True,
+            json={
+                "clientRequestId": client_request_id or str(uuid.uuid4()),
+                "title": title,
+                "requestedProtocol": protocol,
+            },
+        )
+
+    def live_streams(self) -> dict[str, Any]:
+        return self.request(
+            "GET", "/api/v1/client/zhibo-live/streams/current", authenticated=True)
+
+    def stop_live_stream(self, stream_session_no: str) -> dict[str, Any]:
+        return self.request(
+            "POST", f"/api/v1/client/zhibo-live/streams/{stream_session_no}/stop",
+            authenticated=True,
+        )
 
 
 def random_phone() -> str:

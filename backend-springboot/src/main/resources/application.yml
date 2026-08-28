@@ -93,6 +93,15 @@ pdk:
       access-key-secret: ${ALIYUN_SMS_ACCESS_KEY_SECRET:}
       sign-name: ${ALIYUN_SMS_SIGN_NAME:}
       template-code: ${ALIYUN_SMS_TEMPLATE_CODE:}
+  zhibo-live:
+    mediamtx:
+      enabled: ${PDK_MEDIAMTX_ENABLED:false}
+      public-rtmp-base-url: ${PDK_MEDIAMTX_PUBLIC_RTMP_BASE_URL:rtmp://localhost:1935}
+      control-base-url: ${PDK_MEDIAMTX_CONTROL_BASE_URL:http://localhost:9997}
+      node-code: ${PDK_MEDIAMTX_NODE_CODE:mediamtx-local}
+      # 必须通过环境变量配置为至少 32 字节随机值；业务服务与 MediaMTX 共用。
+      internal-service-token: ${PDK_MEDIAMTX_INTERNAL_SERVICE_TOKEN:}
+      ticket-ttl-seconds: ${PDK_MEDIAMTX_TICKET_TTL_SECONDS:90}
   security:
     dynamic-window-minutes: 10
     magic-bytes: "5044" # 0x50 0x44

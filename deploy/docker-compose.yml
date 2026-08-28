@@ -40,6 +40,12 @@ services:
       PDK_ADMIN_PASSWORD_PEPPER: ${PDK_ADMIN_PASSWORD_PEPPER:?set PDK_ADMIN_PASSWORD_PEPPER}
       PDK_SECURITY_ROOT_SALT: ${PDK_SECURITY_ROOT_SALT:?set PDK_SECURITY_ROOT_SALT}
       PDK_TRIAL_SMS_CODE: ${PDK_TRIAL_SMS_CODE:?set PDK_TRIAL_SMS_CODE}
+      PDK_ENABLED_BIZ_CODES: ${PDK_ENABLED_BIZ_CODES:-PDD,ZHIBO}
+      PDK_MEDIAMTX_ENABLED: "true"
+      PDK_MEDIAMTX_PUBLIC_RTMP_BASE_URL: ${PDK_MEDIAMTX_PUBLIC_RTMP_BASE_URL:-rtmp://localhost:1935}
+      PDK_MEDIAMTX_CONTROL_BASE_URL: http://mediamtx:9997
+      PDK_MEDIAMTX_NODE_CODE: mediamtx-docker-1
+      PDK_MEDIAMTX_INTERNAL_SERVICE_TOKEN: ${PDK_MEDIAMTX_INTERNAL_SERVICE_TOKEN:?set PDK_MEDIAMTX_INTERNAL_SERVICE_TOKEN}
       TZ: Asia/Shanghai
     depends_on:
       mysql:
@@ -52,6 +58,25 @@ services:
       timeout: 5s
       retries: 20
 
+  mediamtx:
+    build: ./mediamtx
+    restart: unless-stopped
+    environment:
+      MTX_AUTHHTTPADDRESS: http://backend:8080/api/v1/internal/mediamtx/auth?serviceToken=${PDK_MEDIAMTX_INTERNAL_SERVICE_TOKEN:?set PDK_MEDIAMTX_INTERNAL_SERVICE_TOKEN}
+      PDK_MEDIAMTX_EVENT_BASE_URL: http://backend:8080/api/v1/internal/mediamtx/events
+      PDK_MEDIAMTX_INTERNAL_SERVICE_TOKEN: ${PDK_MEDIAMTX_INTERNAL_SERVICE_TOKEN:?set PDK_MEDIAMTX_INTERNAL_SERVICE_TOKEN}
+      TZ: Asia/Shanghai
+    ports:
+      - "${PDK_MEDIAMTX_RTMP_PORT:-1935}:1935"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:9997/v3/config/global/get"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
   admin:
     build: ../admin-vue3
     restart: unless-stopped
@@ -59,6 +84,8 @@ services:
       - "8081:80"
     depends_on:
       backend:
+        condition: service_healthy
+      mediamtx:
         condition: service_healthy
 
 volumes:

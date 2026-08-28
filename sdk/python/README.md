@@ -55,6 +55,11 @@ SDK 保持所有 URL 不变，并自动为每次请求添加 `X-PDK-App-ID`。�
 | `decrypt_token(encrypted_payload)` | 单独解密 |
 | `report_result(trace_id, status, ms?, err?)` | 上报结果 |
 | `profile()` / `usage()` / `resource_status()` / `card_list()` | 查询 |
+| `create_live_publish_ticket(title?, request_id?, protocol?)` | appId=3 登录后申请短效推流地址 |
+| `live_streams()` / `stop_live_stream(session_no)` | 查询或停止自己的直播会话 |
+
+`ZHIBO_LIVE` 客户端应以 `app_id=3` 初始化。SDK 的调试回调不会输出 `publishUrl`，因为其中含有
+一次性推流票据；请将它直接交给 FFmpeg/OBS，不要写入日志、数据库或错误上报。
 
 ## 状态 / 事件枚举
 

@@ -21,7 +21,7 @@ public class ZhiboBusinessHandler implements BusinessHandler {
     public static final String LIVE_CODE = "ZHIBO_LIVE";
     private static final Set<String> CODES = Set.of(AI_CODE, LIVE_CODE);
     private static final Set<String> ACTIONS = Set.of(
-            "AI_GENERATE", "LIVE_CONTROL", "ACCOUNT_SYNC", "DETAIL_QUERY");
+            "AI_GENERATE", "LIVE_CONTROL", "LIVE_PUBLISH", "ACCOUNT_SYNC", "DETAIL_QUERY");
 
     @Override
     public String bizCode() {
