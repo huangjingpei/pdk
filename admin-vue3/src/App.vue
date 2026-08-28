@@ -85,6 +85,16 @@
           <el-icon><UserFilled /></el-icon>
           <span>账号管理</span>
         </el-menu-item>
+
+        <el-menu-item v-if="hasPermission('log:view')" index="/logs/login">
+          <el-icon><Document /></el-icon>
+          <span>登录日志</span>
+        </el-menu-item>
+
+        <el-menu-item v-if="hasPermission('log:view')" index="/logs/audit">
+          <el-icon><Lock /></el-icon>
+          <span>操作审计</span>
+        </el-menu-item>
       </el-menu>
     </el-aside>
 

@@ -11,6 +11,8 @@ import SystemConfig from '../views/settings/SystemConfig.vue';
 import PackageManager from '../views/package/PackageManager.vue';
 import AdminManager from '../views/admin/AdminManager.vue';
 import BusinessManager from '../views/business/BusinessManager.vue';
+import LoginLog from '../views/log/LoginLog.vue';
+import AuditLog from '../views/log/AuditLog.vue';
 import { hasPermission, isLoggedIn } from '../auth';
 
 const router = createRouter({
@@ -97,6 +99,18 @@ const router = createRouter({
       name: 'AdminManager',
       component: AdminManager,
       meta: { title: '账号管理', permission: 'admin:manage' },
+    },
+    {
+      path: '/logs/login',
+      name: 'LoginLog',
+      component: LoginLog,
+      meta: { title: '登录日志', permission: 'log:view' },
+    },
+    {
+      path: '/logs/audit',
+      name: 'AuditLog',
+      component: AuditLog,
+      meta: { title: '操作审计', permission: 'log:view' },
     },
   ],
 });

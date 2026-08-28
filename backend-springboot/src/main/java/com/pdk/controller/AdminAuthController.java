@@ -9,6 +9,7 @@ import com.pdk.domain.dto.AdminLoginDTO;
 import com.pdk.domain.entity.AdminUser;
 import com.pdk.mapper.AdminUserMapper;
 import com.pdk.security.AdminPrincipal;
+import com.pdk.service.LoginLogService;
 import com.pdk.security.RolePermissions;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
@@ -26,6 +27,7 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class AdminAuthController {
     private final AdminUserMapper adminUserMapper;
+    private final LoginLogService loginLogService;
     @Qualifier("adminStpLogic")
     private final StpLogic adminStpLogic;
 
@@ -37,7 +39,8 @@ public class AdminAuthController {
      * 登录后按角色拿到对应权限，前端据此展示不同内容；不再允许客户端身份登录后台。
      */
     @PostMapping("/login")
-    public CommonResult<Map<String, Object>> login(@Valid @RequestBody AdminLoginDTO dto) {
+    public CommonResult<Map<String, Object>> login(@Valid @RequestBody AdminLoginDTO dto,
+                                                    HttpServletRequest request) {
         AdminUser admin = adminUserMapper.selectOne(new LambdaQueryWrapper<AdminUser>()
                 .eq(AdminUser::getUsername, dto.getUsername()));
         boolean matched = admin != null
@@ -46,15 +49,19 @@ public class AdminAuthController {
                 && PasswordHashUtils.constantTimeEquals(admin.getPasswordHash(),
                         PasswordHashUtils.sha256(passwordPepper, dto.getPassword()));
         if (!matched) {
+            loginLogService.recordAdminLogin(admin == null ? null : admin.getId(), dto.getUsername(),
+                    false, admin == null ? "管理账号不存在" : "管理账号或密码错误", request);
             throw new BusinessException(40111, "管理账号或密码错误");
         }
         adminStpLogic.login("ADMIN:" + admin.getId());
         admin.setLastLoginAt(LocalDateTime.now());
         adminUserMapper.updateById(admin);
+        loginLogService.recordAdminLogin(admin.getId(), admin.getUsername(), true, null, request);
         AdminPrincipal principal = new AdminPrincipal(admin.getId(), admin.getUsername(),
                 admin.getDisplayName(), admin.getRoleCode(), "ADMIN", admin.getBizId());
         return CommonResult.success(sessionPayload(principal), "登录成功");
     }
+
 
     @GetMapping("/me")
     public CommonResult<Map<String, Object>> me(HttpServletRequest request) {
@@ -62,7 +69,12 @@ public class AdminAuthController {
     }
 
     @PostMapping("/logout")
-    public CommonResult<String> logout() {
+    public CommonResult<String> logout(HttpServletRequest request) {
+        AdminPrincipal principal = (AdminPrincipal) request.getAttribute("pdkAdminPrincipal");
+        if (principal != null) {
+            loginLogService.record(null, "ADMIN", principal.id(), principal.username(),
+                    "LOGOUT", "SUCCESS", null, null, request);
+        }
         adminStpLogic.logout();
         return CommonResult.success("已安全退出");
     }

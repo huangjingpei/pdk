@@ -17,6 +17,7 @@ import com.pdk.mapper.UserCredentialMapper;
 import com.pdk.platform.business.BusinessRequestResolver;
 import com.pdk.platform.business.BusinessContext;
 import com.pdk.service.DeviceBindingService;
+import com.pdk.service.LoginLogService;
 import com.pdk.service.SmsCodeService;
 import com.pdk.service.AccountAssignmentService;
 import com.pdk.service.InvitationService;
@@ -43,6 +44,7 @@ public class ClientAuthController {
     private final AccountAssignmentService assignmentService;
     private final InvitationService invitationService;
     private final BusinessRequestResolver businessRequestResolver;
+    private final LoginLogService loginLogService;
     @Qualifier("clientStpLogic")
     private final StpLogic clientStpLogic;
 
@@ -126,18 +128,26 @@ public class ClientAuthController {
         User user = userMapper.selectOne(new LambdaQueryWrapper<User>()
                 .eq(User::getBizId, business.bizId()).eq(User::getPhone, dto.getPhone()));
         if (user == null) {
+            loginLogService.recordClientFailure(business.bizId(), null, dto.getPhone(),
+                    "账号不存在", dto.getDeviceId(), request);
             throw new BusinessException(40100, "账号不存在，请先领取试用或激活卡密");
         }
         if ("FROZEN".equals(user.getStatus())) {
+            loginLogService.recordClientFailure(business.bizId(), user.getId(), dto.getPhone(),
+                    "账号已被冻结", dto.getDeviceId(), request);
             throw new BusinessException(40104, "账号已被冻结，请联系管理员");
         }
         UserCredential credential = credentialMapper.selectOne(new LambdaQueryWrapper<UserCredential>()
                 .eq(UserCredential::getUserId, user.getId()));
         if (credential == null || !"ACTIVE".equals(credential.getStatus())
                 || !passwordEncoder.matches(dto.getPassword(), credential.getPasswordHash())) {
+            loginLogService.recordClientFailure(business.bizId(), user.getId(), dto.getPhone(),
+                    "手机号或密码错误", dto.getDeviceId(), request);
             throw new BusinessException(40105, "手机号或密码错误");
         }
         if (user.getDeviceId() != null && !user.getDeviceId().equals(dto.getDeviceId())) {
+            loginLogService.recordClientFailure(business.bizId(), user.getId(), dto.getPhone(),
+                    "设备不匹配，账号已绑定其他电脑", dto.getDeviceId(), request);
             throw new BusinessException(40103, "账号已绑定其他电脑，请在原电脑解绑或联系管理员");
         }
         if (user.getDeviceId() == null) {
@@ -147,6 +157,8 @@ public class ClientAuthController {
 
         clientStpLogic.login(user.getId());
         deviceBindingService.bind(user.getBizId(), user.getId(), dto.getDeviceId());
+        loginLogService.recordClientSuccess(business.bizId(), user.getId(), user.getPhone(),
+                dto.getDeviceId(), request);
         return CommonResult.success(payload(user, credential, business), "客户端登录成功");
     }
 
@@ -169,6 +181,8 @@ public class ClientAuthController {
         credential.setPasswordHash(passwordEncoder.encode(dto.getNewPassword()));
         credential.setMustChangePassword(0);
         credentialMapper.updateById(credential);
+        loginLogService.record(business.bizId(), "CLIENT", user.getId(), user.getPhone(),
+                "PASSWORD_RESET", "SUCCESS", "用户自助修改密码", null, request);
         return CommonResult.success("密码修改成功，请使用新密码登录");
     }
 
@@ -198,6 +212,8 @@ public class ClientAuthController {
         credentialMapper.updateById(credential);
         // 重置成功后吊销该用户全部在线会话，强制用新密码重新登录，避免旧会话残留
         clientStpLogic.kickout(user.getId());
+        loginLogService.record(business.bizId(), "CLIENT", user.getId(), user.getPhone(),
+                "PASSWORD_RESET", "SUCCESS", "短信验证码自助找回密码", null, request);
         return CommonResult.success("密码已重置，请使用新密码登录");
     }
 

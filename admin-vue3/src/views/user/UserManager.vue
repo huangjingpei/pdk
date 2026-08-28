@@ -58,6 +58,21 @@
           </template>
         </el-table-column>
         <el-table-column prop="expireTime" label="到期时间" width="180" />
+        <el-table-column label="最近登录" width="200">
+          <template #default="s">
+            <div :class="canViewLog ? 'login-cell' : ''" @click="canViewLog && openLoginLog(s.row)">
+              <template v-if="s.row.lastLoginAt">
+                <div>{{ s.row.lastLoginAt }}</div>
+                <div class="text-xs text-slate-400">
+                  {{ s.row.lastLoginIp || 'IP 未知' }}<span v-if="canViewLog"> · 查看记录</span>
+                </div>
+              </template>
+              <span v-else class="text-xs text-slate-400">
+                暂无成功登录<span v-if="canViewLog"> · 查看记录</span>
+              </span>
+            </div>
+          </template>
+        </el-table-column>
         <el-table-column prop="createdAt" label="注册时间" width="180" />
         <el-table-column label="操作" width="560" fixed="right">
           <template #default="scope">
@@ -200,6 +215,38 @@
         </template>
       </div>
     </el-drawer>
+
+    <!-- 登录记录抽屉 -->
+    <el-drawer v-model="logVisible" :title="`登录记录 · ${logTarget?.phone || ''}`" size="60%">
+      <el-table v-loading="logLoading" :data="logRows" border size="small" max-height="620">
+        <el-table-column prop="createdAt" label="时间" width="180" />
+        <el-table-column label="事件" width="120">
+          <template #default="s">{{ eventText(s.row.eventType) }}</template>
+        </el-table-column>
+        <el-table-column label="结果" width="90">
+          <template #default="s">
+            <el-tag :type="s.row.result === 'SUCCESS' ? 'success' : 'danger'" size="small">
+              {{ s.row.result === 'SUCCESS' ? '成功' : '失败' }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="ipAddress" label="IP" min-width="140" />
+        <el-table-column label="设备" min-width="180">
+          <template #default="s">
+            <span class="font-mono text-xs text-slate-600 break-all">{{ s.row.deviceId || '-' }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="说明" min-width="200">
+          <template #default="s">
+            <span :class="s.row.result === 'FAIL' ? 'text-rose-600' : 'text-slate-500'">
+              {{ s.row.failReason || '-' }}
+            </span>
+          </template>
+        </el-table-column>
+      </el-table>
+      <el-alert v-if="!logLoading && logRows.length === 0" type="info" :closable="false" class="mt-3"
+        title="该用户暂无登录留痕。日志从本功能上线后开始记录，无法回溯历史登录。" />
+    </el-drawer>
   </div>
 </template>
 
@@ -209,7 +256,7 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import { Plus, Search, Refresh, RefreshLeft } from '@element-plus/icons-vue';
 import { api, type ApiResult, type PageResult } from '../../api';
 import { hasPermission, authState } from '../../auth';
-import type { ClientUser, PackagePlanLite, UserAssignmentDetail, BusinessRuntime } from '../../types';
+import type { ClientUser, PackagePlanLite, UserAssignmentDetail, BusinessRuntime, LoginLog } from '../../types';
 
 const rows = ref<ClientUser[]>([]);
 const loading = ref(false);
@@ -226,6 +273,7 @@ const canEdit = computed(() => hasPermission('user:edit'));
 const canUnbind = computed(() => hasPermission('user:unbind'));
 const canManagePartner = computed(() => hasPermission('partner:manage'));
 const canResetPassword = computed(() => hasPermission('user:password:reset'));
+const canViewLog = computed(() => hasPermission('log:view'));
 // 仅超级管理员可执行「新增用户」与「删除（冻结/解冻）」——按角色严格控制，不依赖权限位分配
 const isSuperAdmin = computed(() => authState.session?.role === 'SUPER_ADMIN');
 
@@ -254,6 +302,36 @@ function onSearch(): void { load(1); }
 function resetFilter(): void { keyword.value = ''; statusFilter.value = ''; businessFilter.value = ''; load(1); }
 const onPageChange = (p: number) => load(p);
 const onSizeChange = (s: number) => { pageSize.value = s; load(1); };
+
+// ---- 登录记录抽屉 ----
+const logVisible = ref(false);
+const logLoading = ref(false);
+const logRows = ref<LoginLog[]>([]);
+const logTarget = ref<ClientUser | null>(null);
+
+const eventLabels: Record<string, string> = {
+  LOGIN: '登录', LOGOUT: '退出', PASSWORD_RESET: '密码重置',
+  FORCE_CHANGE: '强制改密', DEVICE_UNBIND: '解绑设备',
+};
+function eventText(type: string): string {
+  return eventLabels[type] ?? type;
+}
+
+async function openLoginLog(row: ClientUser): Promise<void> {
+  logTarget.value = row;
+  logRows.value = [];
+  logVisible.value = true;
+  logLoading.value = true;
+  try {
+    const response = await api.get<ApiResult<LoginLog[]>>(`/api/v1/admin/logs/login/user/${row.id}`,
+      { params: { size: 50 } });
+    logRows.value = response.data.data;
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '加载登录记录失败');
+  } finally {
+    logLoading.value = false;
+  }
+}
 
 // ---- 新增用户 ----
 const createVisible = ref(false);
@@ -455,4 +533,6 @@ p { margin: 6px 0 0; color: #64748b; font-size: 13px; max-width: 720px; }
 .action-cell { display: flex; flex-wrap: nowrap; gap: 5px; }
 .action-cell .el-button { flex: 1 1 0; min-width: 0; padding: 0 4px; margin: 0; }
 .biz-desc { color:#64748b; font-size:11px; margin-top:3px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.login-cell { cursor: pointer; border-radius: 4px; padding: 2px 4px; margin: -2px -4px; }
+.login-cell:hover { background-color: #eff6ff; color: #2563eb; }
 </style>

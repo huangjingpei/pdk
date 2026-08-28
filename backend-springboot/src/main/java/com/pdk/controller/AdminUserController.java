@@ -15,7 +15,9 @@ import com.pdk.domain.entity.PackagePlan;
 import com.pdk.domain.entity.User;
 import com.pdk.domain.entity.UserCredential;
 import com.pdk.domain.entity.UserReferral;
+import com.pdk.domain.vo.LastLoginView;
 import com.pdk.mapper.InvitationCodeMapper;
+import com.pdk.mapper.LoginLogMapper;
 import com.pdk.mapper.PackagePlanMapper;
 import com.pdk.mapper.UserCredentialMapper;
 import com.pdk.mapper.UserMapper;
@@ -27,19 +29,25 @@ import com.pdk.service.AccountAssignmentService;
 import com.pdk.service.AdminAuditService;
 import com.pdk.service.DeviceBindingService;
 import com.pdk.service.InvitationService;
+import com.pdk.service.LoginLogService;
 import com.pdk.platform.business.BusinessContext;
 import com.pdk.platform.business.BusinessService;
 import cn.dev33.satoken.stp.StpLogic;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
+@Slf4j
 @RestController
 @RequestMapping("/api/v1/admin/user")
 @RequiredArgsConstructor
@@ -54,6 +62,8 @@ public class AdminUserController {
     private final InvitationCodeMapper invitationCodeMapper;
     private final UserReferralMapper referralMapper;
     private final PasswordEncoder passwordEncoder;
+    private final LoginLogService loginLogService;
+    private final LoginLogMapper loginLogMapper;
     private final BusinessService businessService;
     private final com.pdk.security.AdminBusinessScope businessScope;
     @Qualifier("clientStpLogic")
@@ -104,7 +114,30 @@ public class AdminUserController {
                 user.setInvitedByPhone(inviter == null ? null : inviter.getPhone());
             }
         });
+        fillLastLogin(result.getRecords());
         return CommonResult.success(result);
+    }
+
+    /**
+     * 批量回填最近一次成功登录。日志表尚未迁移时静默降级，
+     * 用户列表是本后台的核心页面，不能因为审计功能没上线而打不开。
+     */
+    private void fillLastLogin(List<User> users) {
+        if (users.isEmpty()) return;
+        try {
+            List<Long> ids = users.stream().map(User::getId).toList();
+            Map<Long, LastLoginView> latest = loginLogMapper.lastLoginBatch(ids).stream()
+                    .collect(Collectors.toMap(LastLoginView::getActorId, v -> v, (a, b) -> a));
+            users.forEach(user -> {
+                LastLoginView view = latest.get(user.getId());
+                if (view != null) {
+                    user.setLastLoginAt(view.getLastLoginAt());
+                    user.setLastLoginIp(view.getLastLoginIp());
+                }
+            });
+        } catch (Exception e) {
+            log.warn("回填最近登录信息失败，已降级为空：{}", e.getMessage());
+        }
     }
 
     @GetMapping("/{id}/assignments")
@@ -227,6 +260,8 @@ public class AdminUserController {
         adminAuditService.record(admin, user.getBizId(), "UNBIND_DEVICE", "USER", user.getPhone(),
                 "{\"deviceId\":\"" + user.getDeviceId() + "\"}", "{\"deviceId\":null}",
                 "管理员强制解绑电脑", request);
+        loginLogService.record(user.getBizId(), "CLIENT", user.getId(), user.getPhone(),
+                "DEVICE_UNBIND", "SUCCESS", "管理员解绑：" + admin.username(), null, request);
         return CommonResult.success("已由管理员解除电脑绑定");
     }
 
@@ -296,6 +331,8 @@ public class AdminUserController {
         AdminPrincipal admin = principal(request);
         adminAuditService.record(admin, user.getBizId(), "RESET_USER_PASSWORD", "USER", user.getPhone(),
                 before, snapshotCredential(credential), "管理员重置用户密码并强制改密", request);
+        loginLogService.record(user.getBizId(), "CLIENT", user.getId(), user.getPhone(),
+                "PASSWORD_RESET", "SUCCESS", "管理员代重置：" + admin.username(), null, request);
         return CommonResult.success("密码已重置，用户需在下次登录时修改密码");
     }
 
@@ -321,6 +358,10 @@ public class AdminUserController {
                 dto.isMustChange() ? "FORCE_USER_CHANGE_PASSWORD" : "CANCEL_FORCE_USER_CHANGE_PASSWORD",
                 "USER", user.getPhone(), before, snapshotCredential(credential),
                 dto.isMustChange() ? "管理员强制用户下次登录改密" : "管理员取消强制改密", request);
+        loginLogService.record(user.getBizId(), "CLIENT", user.getId(), user.getPhone(),
+                "FORCE_CHANGE", "SUCCESS",
+                (dto.isMustChange() ? "管理员开启强制改密：" : "管理员取消强制改密：") + admin.username(),
+                null, request);
         return CommonResult.success(dto.isMustChange() ? "已强制该用户下次登录时修改密码" : "已取消强制改密");
     }
 

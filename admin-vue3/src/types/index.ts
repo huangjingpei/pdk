@@ -95,6 +95,40 @@ export interface ClientUser {
   deviceId?: string;
   expireTime?: string;
   createdAt?: string;
+  /** 最近一次客户端登录成功时间，由 pdk_login_log 聚合回填，未迁移或从未登录时为空。 */
+  lastLoginAt?: string;
+  /** 最近一次客户端登录成功 IP。 */
+  lastLoginIp?: string;
+}
+
+export interface LoginLog {
+  id: number;
+  bizId?: number;
+  actorType: 'CLIENT' | 'ADMIN';
+  actorId?: number;
+  actorAccount: string;
+  eventType: 'LOGIN' | 'LOGOUT' | 'PASSWORD_RESET' | 'FORCE_CHANGE' | 'DEVICE_UNBIND';
+  result: 'SUCCESS' | 'FAIL';
+  failReason?: string;
+  ipAddress?: string;
+  deviceId?: string;
+  userAgent?: string;
+  createdAt?: string;
+}
+
+export interface AdminAuditLog {
+  id: number;
+  bizId?: number;
+  adminName: string;
+  adminRole?: string;
+  actionType: string;
+  targetType?: string;
+  targetId?: string;
+  beforeState?: string;
+  afterState?: string;
+  reason?: string;
+  ipAddress?: string;
+  createdAt?: string;
 }
 
 export interface PackagePlanLite {

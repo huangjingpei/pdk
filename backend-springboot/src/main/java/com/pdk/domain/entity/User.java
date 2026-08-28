@@ -37,6 +37,12 @@ public class User implements Serializable {
     private String businessDescription;
     @TableField(exist = false)
     private Boolean mustChangePassword;
+    /** 最近一次客户端登录成功时间，由 pdk_login_log 聚合得出，不落 pdk_user。 */
+    @TableField(exist = false)
+    private LocalDateTime lastLoginAt;
+    /** 最近一次客户端登录成功 IP。 */
+    @TableField(exist = false)
+    private String lastLoginIp;
 
     @TableField(fill = FieldFill.INSERT)
     private LocalDateTime createdAt;

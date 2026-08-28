@@ -28,12 +28,14 @@ public final class RolePermissions {
     public static final String SYSTEM_CONFIG = "system:config";
     public static final String BUSINESS_VIEW = "business:view";
     public static final String BUSINESS_EDIT = "business:edit";
+    /** 登录日志与管理员操作审计查看权限。仅超级管理员，代理不开放。 */
+    public static final String LOG_VIEW = "log:view";
 
     private static final Set<String> ALL = Set.of(
             DASHBOARD_VIEW, FINANCE_VIEW, FINANCE_EDIT, CARD_VIEW, CARD_CREATE,
             TOKEN_VIEW, TOKEN_EDIT, USER_VIEW, USER_EDIT, USER_UNBIND, USER_PASSWORD_RESET, DISPATCH_VIEW, ADMIN_MANAGE,
             PARTNER_MANAGE, PACKAGE_VIEW, PACKAGE_CREATE, PACKAGE_DISABLE, CARD_RENEW, CARD_VOID, SALES_VIEW,
-            SYSTEM_CONFIG, BUSINESS_VIEW, BUSINESS_EDIT
+            SYSTEM_CONFIG, BUSINESS_VIEW, BUSINESS_EDIT, LOG_VIEW
     );
 
     private static final Map<String, Set<String>> MATRIX = Map.of(
