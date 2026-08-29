@@ -24,8 +24,8 @@
     </el-card>
 
     <el-card shadow="never">
-      <el-table v-loading="loading" :data="rows" row-key="licenseId" border stripe @selection-change="selectedRows=$event">
-        <el-table-column type="selection" width="48" />
+      <el-table v-loading="loading" :data="pagedRows" row-key="licenseId" border stripe @selection-change="selectedRows=$event">
+        <el-table-column type="selection" width="48" :reserve-selection="true" />
         <el-table-column prop="licenseId" label="许可证ID" width="95" />
         <el-table-column prop="cardKeyMasked" label="卡密（脱敏）" width="165" />
         <el-table-column prop="packageName" label="套餐" min-width="140" />
@@ -39,7 +39,7 @@
             <span v-else class="text-slate-400">未激活 · 暂不计时</span>
           </template>
         </el-table-column>
-        <el-table-column prop="remainingCalls" label="剩余次数" width="95" />
+        <el-table-column label="剩余次数" width="95"><template #default="s">{{ s.row.remainingCalls >= 2147483647 ? '无限' : s.row.remainingCalls }}</template></el-table-column>
         <el-table-column label="操作" width="300" fixed="right">
           <template #default="s">
             <el-button size="small" type="primary" @click="openRenew(s.row)">续费</el-button>
@@ -50,6 +50,9 @@
           </template>
         </el-table-column>
       </el-table>
+      <el-pagination class="mt-3" background layout="total, sizes, prev, pager, next, jumper"
+        :total="total" :current-page="page" :page-size="pageSize" :page-sizes="[10,20,50,100]"
+        @current-change="handlePageChange" @size-change="handlePageSizeChange" />
     </el-card>
 
     <el-dialog v-model="assignVisible" title="给手机号分配设备许可证" width="500px">
@@ -97,6 +100,9 @@ import { api, type ApiResult, type PageResult } from '../../api';
 import type { BusinessRuntime, ClientUser, DeviceLicenseItem, PackagePlanLite } from '../../types';
 
 const businesses=ref<BusinessRuntime[]>([]), users=ref<ClientUser[]>([]), plans=ref<PackagePlanLite[]>([]), rows=ref<DeviceLicenseItem[]>([]);
+const page=ref(1), pageSize=ref(20);
+const total=computed(()=>rows.value.length);
+const pagedRows=computed(()=>rows.value.slice((page.value-1)*pageSize.value, page.value*pageSize.value));
 const bizId=ref<number>(), userId=ref<number>(), loading=ref(false), assignVisible=ref(false), renewVisible=ref(false), generatedVisible=ref(false), renewTarget=ref<DeviceLicenseItem>();
 const selectedRows=ref<DeviceLicenseItem[]>([]), generatedKeys=ref<string[]>([]), batchRenewMode=ref(false);
 const phoneLookup=ref('');
@@ -109,7 +115,9 @@ async function loadUsers(){userId.value=undefined;rows.value=[];selectedRows.val
 async function lookupCustomer(){const b=licenseBusinesses.value.find(v=>v.bizId===bizId.value);if(!b||!phoneLookup.value)return;const r=await api.get<ApiResult<ClientUser>>('/api/v1/admin/device-licenses/customer',{params:{appId:b.appId,phone:phoneLookup.value.trim()}});if(!users.value.some(u=>u.id===r.data.data.id))users.value.push(r.data.data);userId.value=r.data.data.id;await selectUser();}
 async function selectUser(){await Promise.all([loadLicenses(),loadPlans()]);}
 async function loadPlans(){if(!bizId.value)return;const r=await api.get<ApiResult<PackagePlanLite[]>>('/api/v1/admin/package/list',{params:{bizId:bizId.value,status:'ACTIVE'}});plans.value=r.data.data;}
-async function loadLicenses(){if(!userId.value)return;loading.value=true;try{const r=await api.get<ApiResult<DeviceLicenseItem[]>>(`/api/v1/admin/users/${userId.value}/device-licenses`);rows.value=r.data.data;selectedRows.value=[];}finally{loading.value=false;}}
+async function loadLicenses(){if(!userId.value)return;loading.value=true;try{const r=await api.get<ApiResult<DeviceLicenseItem[]>>(`/api/v1/admin/users/${userId.value}/device-licenses`);rows.value=r.data.data;selectedRows.value=[];page.value=1;}finally{loading.value=false;}}
+function handlePageChange(p:number){page.value=p;}
+function handlePageSizeChange(s:number){pageSize.value=s;page.value=1;}
 async function openAssign(){await loadPlans();assignForm.packageId=plans.value[0]?.id;assignForm.count=1;assignForm.remark='';assignVisible.value=true;}
 async function assign(){if(!userId.value||!assignForm.packageId)return;const r=await api.post<ApiResult<string[]>>(`/api/v1/admin/users/${userId.value}/device-licenses/batch-assign`,assignForm);generatedKeys.value=r.data.data;generatedVisible.value=true;ElMessage.success(`已分配 ${generatedKeys.value.length} 张卡密`);assignVisible.value=false;await loadLicenses();}
 async function copyGeneratedKeys(){try{await navigator.clipboard.writeText(generatedKeys.value.join('\n'));ElMessage.success('全部卡密已复制');}catch{ElMessage.error('复制失败，请手动选中文本复制');}}

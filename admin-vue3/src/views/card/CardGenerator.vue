@@ -7,7 +7,7 @@
           管理激活码的生成、售卖与激活状态，本表与财务实收表完全解耦
         </p>
       </div>
-      <div><el-select v-model="businessFilter" clearable placeholder="全部业务" style="width:180px;margin-right:8px" @change="load"><el-option v-for="b in businesses" :key="b.bizId" :label="`${b.businessName} (${b.appId})`" :value="b.bizId" /></el-select><el-button type="primary" :icon="Key" :disabled="isLicenseMode" @click="openGenerate">批量生成新激活码</el-button></div>
+      <div><el-select v-model="businessFilter" clearable placeholder="全部业务" style="width:180px;margin-right:8px" @change="onBusinessChange"><el-option v-for="b in businesses" :key="b.bizId" :label="`${b.businessName} (${b.appId})`" :value="b.bizId" /></el-select><el-button type="primary" :icon="Key" :disabled="isLicenseMode" @click="openGenerate">批量生成新激活码</el-button></div>
     </div>
 
     <el-alert v-if="isLicenseMode" type="warning" :closable="false" class="mb-3"
@@ -54,6 +54,9 @@
           </template>
         </el-table-column>
       </el-table>
+      <el-pagination class="mt-3" background layout="total, sizes, prev, pager, next, jumper"
+        :total="total" :current-page="current" :page-size="pageSize" :page-sizes="[10,20,50,100]"
+        @current-change="handlePageChange" @size-change="handleSizeChange" />
     </el-card>
 
     <!-- 批量生成对话框 -->
@@ -113,15 +116,25 @@ const form = reactive({
 });
 
 const tableData = ref<CardKeyItem[]>([]);
+const current = ref(1);
+const pageSize = ref(20);
+const total = ref(0);
 
 async function load(): Promise<void> {
   try {
-    const response = await api.get<ApiResult<PageResult<CardKeyItem>>>('/api/v1/admin/card/list', { params: { size: 100, bizId: businessFilter.value || undefined } });
+    const response = await api.get<ApiResult<PageResult<CardKeyItem>>>('/api/v1/admin/card/list', {
+      params: { page: current.value, size: pageSize.value, bizId: businessFilter.value || undefined },
+    });
     tableData.value = response.data.data.records;
+    total.value = response.data.data.total;
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '激活码列表加载失败');
   }
 }
+
+function handlePageChange(page: number): void { current.value = page; load(); }
+function handleSizeChange(size: number): void { pageSize.value = size; current.value = 1; load(); }
+function onBusinessChange(): void { current.value = 1; load(); }
 
 async function loadPlans(bizId?: number): Promise<void> {
   const response = await api.get<ApiResult<Plan[]>>('/api/v1/admin/package/list', { params: { status: 'ACTIVE', bizId } });

@@ -41,6 +41,16 @@ public class DeviceLicenseService {
     private final LiveStreamSessionService liveStreamService;
     @Qualifier("clientStpLogic") private final StpLogic clientStpLogic;
 
+    /**
+     * 设备许可证按授权到期时间计费，次数不再作为售卖口径。
+     * 这里不改成「无限」的语义开关、也不动推流扣减逻辑，而是在分配/激活时把剩余次数直接置为
+     * Integer.MAX_VALUE —— MediaMtxEventService 照常 remaining_calls - 1，只是永远扣不完，
+     * 从而零改动地兼容所有既有的次数校验与扣减代码。
+     */
+    public static final int UNLIMITED_CALLS = Integer.MAX_VALUE;
+
+    private static boolean unlimited(int calls) { return calls >= UNLIMITED_CALLS; }
+
     @Transactional(rollbackFor = Exception.class)
     public ClientLicenseContext authenticateAndBind(BusinessContext business, User user, ClientLoginDTO dto) {
         if (!business.usesDeviceLicense()) throw new IllegalArgumentException("当前业务不是设备许可证模式");
@@ -104,8 +114,8 @@ public class DeviceLicenseService {
             license.setActivatedAt(now); license.setEffectiveAt(now);
             if (license.getExpireAt() == null) license.setExpireAt(now.plusHours(plan.getDurationHours()));
             if (value(license.getTotalCalls()) <= 0) {
-                int calls = plan.getCallsPerAccount();
-                license.setRemainingCalls(calls); license.setTotalCalls(calls);
+                // 按到期时间计费，次数直接给到上限，避免老数据激活后仍受套餐次数限制
+                license.setRemainingCalls(UNLIMITED_CALLS); license.setTotalCalls(UNLIMITED_CALLS);
             }
         }
         license.setUserDeviceId(device.getId());
@@ -203,7 +213,8 @@ public class DeviceLicenseService {
             DeviceLicense license = new DeviceLicense();
             license.setBizId(business.bizId()); license.setUserId(user.getId()); license.setCardKeyId(card.getId());
             license.setPackageId(plan.getId().longValue()); license.setPackageNameSnapshot(plan.getName());
-            license.setStatus("UNBOUND"); license.setRemainingCalls(0); license.setTotalCalls(0); license.setVersion(0);
+            license.setStatus("UNBOUND"); license.setVersion(0);
+            license.setRemainingCalls(UNLIMITED_CALLS); license.setTotalCalls(UNLIMITED_CALLS);
             license.setCreatedAt(LocalDateTime.now()); license.setUpdatedAt(LocalDateTime.now());
             licenseMapper.insert(license);
             createIncome(card, user, plan, operator, "NORMAL_SALE", null, dto.getRemark());
@@ -236,9 +247,15 @@ public class DeviceLicenseService {
         LocalDateTime base = before != null && before.isAfter(now) ? before : now;
         LocalDateTime after = base.plusHours(plan.getDurationHours());
         int addedCalls = plan.getCallsPerAccount();
+        // 次数已是「按到期时间计费」的无限值，续费只延长时间。继续累加会整数溢出成负数，
+        // 反而让 remaining_calls <= 0 的校验把许可证锁死，必须跳过。
+        boolean counted = !unlimited(value(license.getTotalCalls()));
         license.setPackageId(plan.getId().longValue()); license.setPackageNameSnapshot(plan.getName());
-        license.setExpireAt(after); license.setRemainingCalls(value(license.getRemainingCalls()) + addedCalls);
-        license.setTotalCalls(value(license.getTotalCalls()) + addedCalls);
+        license.setExpireAt(after);
+        if (counted) {
+            license.setRemainingCalls(value(license.getRemainingCalls()) + addedCalls);
+            license.setTotalCalls(value(license.getTotalCalls()) + addedCalls);
+        }
         if (!"SUSPENDED".equals(license.getStatus())) license.setStatus(license.getUserDeviceId() == null ? "UNBOUND" : "ACTIVE");
         license.setVersion(value(license.getVersion()) + 1); licenseMapper.updateById(license);
         card.setPackageId(plan.getId());
