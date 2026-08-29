@@ -21,7 +21,7 @@
         <el-button type="success" :disabled="!userId" @click="openAssign">分配卡密/席位</el-button>
         <el-button type="primary" plain :disabled="selectedRows.length === 0" @click="openBatchRenew">批量续费（{{ selectedRows.length }}）</el-button>
         <el-button type="warning" plain :disabled="!userId || !bizId" @click="exportCards">导出卡密</el-button>
-        <el-button type="danger" plain :disabled="!userId || !bizId" @click="disableBusiness">禁用该客户此业务</el-button>
+        <el-button type="danger" plain :disabled="!userId || !bizId" @click="deleteBusiness">删除该客户此业务</el-button>
       </div>
     </el-card>
 
@@ -119,7 +119,7 @@ async function selectUser(){await Promise.all([loadLicenses(),loadPlans()]);}
 async function loadPlans(){if(!bizId.value)return;const r=await api.get<ApiResult<PackagePlanLite[]>>('/api/v1/admin/package/list',{params:{bizId:bizId.value,status:'ACTIVE'}});plans.value=r.data.data;}
 async function loadLicenses(){if(!userId.value)return;loading.value=true;try{const r=await api.get<ApiResult<DeviceLicenseItem[]>>(`/api/v1/admin/users/${userId.value}/device-licenses`);rows.value=r.data.data;selectedRows.value=[];page.value=1;}finally{loading.value=false;}}
 async function exportCards(){if(!userId.value||!bizId.value)return;try{const r=await api.post<ApiResult<LicenseExportResult>>(`/api/v1/admin/users/${userId.value}/device-licenses/export`,null,{params:{bizId:bizId.value}});const {fileName,csv}=r.data.data;const blob=new Blob([csv],{type:'text/csv;charset=utf-8'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=fileName;a.click();URL.revokeObjectURL(url);ElMessage.success(`已导出 ${r.data.data.recordCount} 张卡密，服务器已留存存根`);}catch(e:unknown){ElMessage.error(e instanceof Error?e.message:'导出失败');}}
-async function disableBusiness(){if(!userId.value||!bizId.value)return;await ElMessageBox.confirm('将撤销该客户在此业务下的全部许可证并作废对应卡密、踢掉在线会话。此操作不可恢复，需重新分配才能恢复。确认继续？','禁用该客户此业务',{type:'warning'});try{const r=await api.post(`/api/v1/admin/users/${userId.value}/device-licenses/revoke-business`,null,{params:{bizId:bizId.value,reason:'管理后台禁用客户业务'}});ElMessage.success((r.data as ApiResult<string>).message||'已禁用该客户此业务');await loadLicenses();}catch(e:unknown){if(e instanceof Error&&/cancel|quxiao|取消/i.test(e.message))return;ElMessage.error(e instanceof Error?e.message:'操作失败');}}
+async function deleteBusiness(){if(!userId.value||!bizId.value)return;await ElMessageBox.confirm('将彻底删除该客户在此业务下的全部授权数据（设备许可证、对应卡密、绑定设备），数据不可恢复。删除后该客户将无法登录和使用本业务。确认继续？','删除该客户此业务',{type:'warning'});try{const r=await api.post(`/api/v1/admin/users/${userId.value}/device-licenses/delete-business`,null,{params:{bizId:bizId.value,reason:'管理后台删除客户业务'}});ElMessage.success((r.data as ApiResult<string>).message||'已删除该客户此业务');await loadLicenses();}catch(e:unknown){if(e instanceof Error&&/cancel|quxiao|取消/i.test(e.message))return;ElMessage.error(e instanceof Error?e.message:'操作失败');}}
 function handlePageChange(p:number){page.value=p;}
 function handlePageSizeChange(s:number){pageSize.value=s;page.value=1;}
 async function openAssign(){await loadPlans();assignForm.packageId=plans.value[0]?.id;assignForm.count=1;assignForm.remark='';assignVisible.value=true;}

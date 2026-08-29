@@ -70,20 +70,20 @@ public class AdminDeviceLicenseController {
         return CommonResult.success(result, "已导出 " + result.getRecordCount() + " 张卡密，服务器已留存存根");
     }
 
-    @PostMapping("/api/v1/admin/users/{userId}/device-licenses/revoke-business")
+    @PostMapping("/api/v1/admin/users/{userId}/device-licenses/delete-business")
     @RequirePermission(RolePermissions.CARD_VOID)
-    public CommonResult<String> revokeBusiness(@PathVariable long userId,
+    public CommonResult<String> deleteBusiness(@PathVariable long userId,
                                                @RequestParam long bizId,
-                                               @RequestParam(defaultValue = "DISABLE_USER_BUSINESS") String reason,
+                                               @RequestParam(defaultValue = "DELETE_USER_BUSINESS") String reason,
                                                HttpServletRequest request) {
         User user = userMapper.selectById(userId);
         if (user == null) throw new BusinessException(40402, "用户不存在");
         businessScope.enforce(principal(request), bizId);
-        int n = licenseService.revokeUserBusiness(bizId, userId, reason, principal(request));
-        auditService.record(principal(request), bizId, "DISABLE_USER_BUSINESS", "USER",
+        int n = licenseService.deleteUserBusiness(bizId, userId, reason, principal(request));
+        auditService.record(principal(request), bizId, "DELETE_USER_BUSINESS", "USER",
                 String.valueOf(userId), null,
-                "{\"bizId\":" + bizId + ",\"revoked\":" + n + "}", reason, request);
-        return CommonResult.success("已禁用该客户在此业务下的全部授权（撤销 " + n + " 个许可证并作废卡密）");
+                "{\"bizId\":" + bizId + ",\"deleted\":" + n + "}", reason, request);
+        return CommonResult.success("已删除该客户在此业务下的全部授权数据（删除 " + n + " 个许可证、对应卡密与绑定设备），该客户将无法再登录和使用本业务");
     }
 
     @PostMapping("/api/v1/admin/users/{userId}/device-licenses/batch-assign")

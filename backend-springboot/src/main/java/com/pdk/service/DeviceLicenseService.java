@@ -28,7 +28,9 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Objects;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -311,40 +313,35 @@ public class DeviceLicenseService {
     }
 
     /**
-     * 禁用某客户在某业务下的全部授权：撤销其所有设备许可证、作废对应卡密（含该用户在该业务下尚未 Void 的卡密）、踢掉在线会话。
-     * 操作不可逆，需重新分配才能恢复。
+     * 删除某客户在某业务下的全部授权数据（硬删除）：设备许可证、对应卡密、绑定设备一并从数据库物理删除。
+     * 删除后该客户在本业务下既无许可证也无卡密，DEVICE_LICENSE 模式登录依赖 authenticateAndBind，
+     * 无证无卡将直接抛 40380/40382，无法登录、无法使用；操作不可逆。
+     * 注意：不删除 User/UserCredential，仅清除授权数据，保留客户账号记录与审计可追溯。
      */
     @Transactional(rollbackFor = Exception.class)
-    public int revokeUserBusiness(long bizId, long userId, String reason, AdminPrincipal operator) {
+    public int deleteUserBusiness(long bizId, long userId, String reason, AdminPrincipal operator) {
+        // 1. 先踢掉该用户在本业务下的所有在线会话（基于 license 会话），确保即时失效
+        kickUserLicenses(bizId, userId, "USER_BUSINESS_DELETED");
+        // 2. 收集许可证关联的卡密
         List<DeviceLicense> licenses = licenseMapper.selectList(new LambdaQueryWrapper<DeviceLicense>()
-                .eq(DeviceLicense::getBizId, bizId).eq(DeviceLicense::getUserId, userId)
-                .ne(DeviceLicense::getStatus, "REVOKED"));
-        int revoked = 0;
-        for (DeviceLicense lic : licenses) {
-            if (lic.getUserDeviceId() != null) {
-                liveStreamService.revokeLicenseSessions(bizId, lic.getId(), "USER_BUSINESS_DISABLED");
-            }
-            lic.setStatus("REVOKED");
-            lic.setVersion(value(lic.getVersion()) + 1);
-            licenseMapper.updateById(lic);
-            CardKey card = cardMapper.selectById(lic.getCardKeyId());
-            if (card != null && !"VOID".equals(card.getStatus())) {
-                card.setStatus("VOID");
-                cardMapper.updateById(card);
-            }
-            clientStpLogic.kickout("license:" + lic.getId());
-            revoked++;
+                .eq(DeviceLicense::getBizId, bizId).eq(DeviceLicense::getUserId, userId));
+        List<Long> cardKeyIds = licenses.stream().map(DeviceLicense::getCardKeyId)
+                .filter(Objects::nonNull).collect(Collectors.toList());
+        // 3. 删除设备许可证
+        if (!licenses.isEmpty()) {
+            licenseMapper.delete(new LambdaQueryWrapper<DeviceLicense>()
+                    .eq(DeviceLicense::getBizId, bizId).eq(DeviceLicense::getUserId, userId));
         }
-        // 一并作废该用户在此业务下、尚未 Void 的卡密（覆盖 USER_SUBSCRIPTION 模式或尚未生成许可证的预分配卡）
-        List<CardKey> cards = cardMapper.selectList(new LambdaQueryWrapper<CardKey>()
-                .eq(CardKey::getBizId, bizId).eq(CardKey::getAssignedUserId, userId)
-                .ne(CardKey::getStatus, "VOID"));
-        for (CardKey c : cards) {
-            c.setStatus("VOID");
-            cardMapper.updateById(c);
+        // 4. 删除卡密：许可证关联的 + 该用户在本业务下已分配（含尚未生成许可证的预分配卡）
+        if (!cardKeyIds.isEmpty()) {
+            cardMapper.delete(new LambdaQueryWrapper<CardKey>().in(CardKey::getId, cardKeyIds));
         }
-        kickUserLicenses(bizId, userId, "USER_BUSINESS_DISABLED");
-        return revoked;
+        cardMapper.delete(new LambdaQueryWrapper<CardKey>()
+                .eq(CardKey::getBizId, bizId).eq(CardKey::getAssignedUserId, userId));
+        // 5. 删除绑定设备记录（无外键约束，可直接删）
+        deviceMapper.delete(new LambdaQueryWrapper<UserDevice>()
+                .eq(UserDevice::getBizId, bizId).eq(UserDevice::getUserId, userId));
+        return licenses.size();
     }
 
     @Transactional(rollbackFor = Exception.class)
