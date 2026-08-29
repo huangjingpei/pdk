@@ -4,6 +4,7 @@ import com.pdk.common.api.CommonResult;
 import com.pdk.common.exception.BusinessException;
 import com.pdk.domain.dto.*;
 import com.pdk.domain.entity.LicenseRenewal;
+import com.pdk.domain.entity.Business;
 import com.pdk.domain.entity.User;
 import com.pdk.domain.vo.DeviceLicenseVO;
 import com.pdk.domain.vo.LicenseExportResult;
@@ -60,7 +61,8 @@ public class AdminDeviceLicenseController {
         User user = userMapper.selectById(userId);
         if (user == null) throw new BusinessException(40402, "用户不存在");
         businessScope.enforce(principal(request), bizId);
-        LicenseExportResult result = licenseService.exportCards(bizId, userId, principal(request));
+        Business biz = businessService.requireById(bizId);
+        LicenseExportResult result = licenseService.exportCards(bizId, userId, biz.getBizName(), principal(request));
         auditService.record(principal(request), bizId, "EXPORT_DEVICE_LICENSE_CARDS", "USER",
                 String.valueOf(userId), null,
                 "{\"bizId\":" + bizId + ",\"count\":" + result.getRecordCount() + ",\"file\":\"" + result.getFileName() + "\"}",

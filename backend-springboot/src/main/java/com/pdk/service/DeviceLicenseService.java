@@ -281,7 +281,7 @@ public class DeviceLicenseService {
      * 导出某用户在某业务下的全部设备许可证卡密（明文），并留存服务器存根。
      * 导出本就是管理员发给客户的动作，故仅需 CARD_VIEW；存根 + 审计双重留痕便于追溯。
      */
-    public LicenseExportResult exportCards(long bizId, long userId, AdminPrincipal operator) {
+    public LicenseExportResult exportCards(long bizId, long userId, String bizName, AdminPrincipal operator) {
         User user = userMapper.selectById(userId);
         if (user == null) throw new BusinessException(40402, "用户不存在");
         List<DeviceLicense> licenses = licenseMapper.selectList(new LambdaQueryWrapper<DeviceLicense>()
@@ -289,17 +289,17 @@ public class DeviceLicenseService {
                 .orderByDesc(DeviceLicense::getId));
         StringBuilder sb = new StringBuilder();
         sb.append('\uFEFF'); // Excel 打开 UTF-8 CSV 需要 BOM
-        sb.append(csvLine("手机号", "卡密", "套餐", "状态", "独立到期时间"));
+        sb.append(csvLine("手机号", "卡密"));
         int count = 0;
         for (DeviceLicense lic : licenses) {
             CardKey card = cardMapper.selectById(lic.getCardKeyId());
             String cardKey = card == null ? "" : card.getCardKey();
-            String expire = lic.getExpireAt() == null ? "未激活" : lic.getExpireAt().format(CSV_DTF);
-            sb.append(csvLine(user.getPhone(), cardKey, lic.getPackageNameSnapshot(), lic.getStatus(), expire));
+            sb.append(csvLine(user.getPhone(), cardKey));
             count++;
         }
         String csv = sb.toString();
-        String fileName = String.format("卡密导出_%s_%d_%s.csv", user.getPhone(), bizId, LocalDateTime.now().format(CSV_TS));
+        String safeName = bizName == null ? "" : bizName.replaceAll("[\\\\/:*?\"<>|]", "_");
+        String fileName = String.format("%s_%s_%s.csv", user.getPhone(), safeName, LocalDateTime.now().format(CSV_TS));
         LicenseExportStub stub = new LicenseExportStub();
         stub.setBizId(bizId); stub.setUserId(userId); stub.setPhone(user.getPhone());
         stub.setOperator(operator.username()); stub.setFileName(fileName);
