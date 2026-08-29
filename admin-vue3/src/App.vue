@@ -46,10 +46,22 @@
           <span>销售记录</span>
         </el-menu-item>
 
-        <el-menu-item v-if="hasPermission('card:view')" index="/card/generator">
-          <el-icon><Key /></el-icon>
-          <span>激活码池</span>
-        </el-menu-item>
+        <!-- 激活码池与设备许可证管的是同一批 pdk_card_key，区别只在业务授权模型：
+             USER_SUBSCRIPTION 走激活码池，DEVICE_LICENSE 走设备许可证。合成一组便于对照。 -->
+        <el-sub-menu v-if="hasPermission('card:view')" index="/card">
+          <template #title>
+            <el-icon><Key /></el-icon>
+            <span>卡密与授权</span>
+          </template>
+          <el-menu-item index="/card/generator">
+            <el-icon><Ticket /></el-icon>
+            <span>激活码池</span>
+          </el-menu-item>
+          <el-menu-item index="/license/manager">
+            <el-icon><Postcard /></el-icon>
+            <span>设备许可证</span>
+          </el-menu-item>
+        </el-sub-menu>
 
         <el-menu-item v-if="hasPermission('package:view')" index="/package/manager">
           <el-icon><Box /></el-icon>
@@ -64,11 +76,6 @@
         <el-menu-item v-if="hasPermission('user:view')" index="/user/manager">
           <el-icon><User /></el-icon>
           <span>用户管理</span>
-        </el-menu-item>
-
-        <el-menu-item v-if="hasPermission('card:view')" index="/license/manager">
-          <el-icon><Key /></el-icon>
-          <span>设备许可证</span>
         </el-menu-item>
 
         <el-menu-item v-if="hasPermission('dispatch:view')" index="/testing/workbench">

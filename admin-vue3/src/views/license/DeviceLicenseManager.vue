@@ -5,7 +5,7 @@
       <el-button @click="loadBusinesses">刷新</el-button>
     </div>
     <el-alert type="info" :closable="false" class="mb"
-      title="这里只显示授权模型为 DEVICE_LICENSE 的业务；用户级套餐业务请去「激活码池」。解绑不会暂停有效期，续费保留原卡密。"
+      title="这里只显示授权模型为 DEVICE_LICENSE 的业务；用户级套餐业务请去「卡密与授权 → 激活码池」。解绑不会暂停有效期，续费保留原卡密。"
       description="到期时间不是分配时确定的，而是客户第一次用这张卡密登录并绑定电脑的那一刻才开始计算——所以刚分配完显示「未激活 · 暂不计时」是正常的。注意：对尚未激活的许可证续费，时长会从续费时刻起算。" />
     <el-card shadow="never" class="mb">
       <div class="filters">
