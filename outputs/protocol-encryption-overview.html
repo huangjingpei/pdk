@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>协议安全加密：流程与复杂度</title>
+<style>
+  :root { color-scheme: light; }
+  body { margin: 0; background: #f7f8fa; color: #1a1a1a; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 24px; }
+  h1 { font-size: 20px; font-weight: 600; margin: 0 0 4px; }
+  .sub { color:#5f5e5a; font-size: 13px; }
+  .card { background: #ffffff; border: 1px solid #e3e6ea; border-radius: 12px; padding: 18px; margin: 16px 0; }
+  h2 { font-size: 15px; font-weight: 600; margin: 0 0 12px; }
+  svg { width: 100%; height: auto; display: block; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { border: 1px solid #e3e6ea; padding: 8px 10px; text-align: left; }
+  th { background: #f1f3f5; font-weight: 600; }
+  td code { background: #f1f3f5; padding: 1px 5px; border-radius: 4px; }
+  .tag { display:inline-block; padding:2px 8px; border-radius: 6px; font-size:12px; }
+  .t-green { background:#EAF3DE; color:#3B6D11; }
+  .t-amber { background:#FAEEDA; color:#854F0B; }
+  .t-blue { background:#E6F1FB; color:#185FA5; }
+  ul { font-size: 13px; line-height: 1.7; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>协议安全加密：流程与复杂度</h1>
+  <div class="sub">混合信封加密（客户端 ↔ 服务端）· 针对抓包 / MITM 的应用层防护</div>
+
+  <div class="card">
+    <h2>1. 单次请求时序图</h2>
+    <svg viewBox="0 0 720 500" role="img" aria-label="混合信封加密请求时序图">
+      <defs>
+        <marker id="arrBlue" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
+          <path d="M0,0 L10,5 L0,10 z" fill="#185FA5"/>
+        </marker>
+        <marker id="arrGreen" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
+          <path d="M0,0 L10, 5 L0,10 z" fill="#0F6E56"/>
+        </marker>
+      </defs>
+
+      <!-- 泳道头 -->
+      <rect x="40" y="20" width="180" height="36" rx="8" fill="#E6F1FB" stroke="#185FA5"/>
+      <text x="130" y="43" fill="#1a1a1a" font-size="14" font-weight="600" text-anchor="middle">客户端 Client</text>
+      <rect x="270" y="20" width="180" height="36" rx="8" fill="#FAEEDA" stroke="#854F0B"/>
+      <text x="360" y="43" fill="#1a1a1a" font-size="14" font-weight="600" text-anchor="middle">网络 / 抓包者</text>
+      <rect x="500" y="20" width="180" height="36" rx="8" fill="#E1F5EE" stroke="#0F6E56"/>
+      <text x="590" y="43" fill="#1a1a1a" font-size="14" font-weight="600" text-anchor="middle">服务端 Server</text>
+
+      <!-- 垂线 -->
+      <line x1="130" y1="56" x2="130" y2="470" stroke="#5f5e5a" stroke-width="1.5"/>
+      <line x1="360" y1="56" x2="360" y2="470" stroke="#5f5e5a" stroke-width="1.5"/>
+      <line x1="590" y1="56" x2="590" y2="470" stroke="#5f5e5a" stroke-width="1.5"/>
+
+      <!-- 客户端自述 -->
+      <rect x="50" y="78" width="160" height="22" rx="6" fill="#B5D4F4"/>
+      <text x="130" y="93" fill="#1a1a1a" font-size="12" text-anchor="middle">1 生成随机 AES-256 密钥 K</text>
+      <rect x="50" y="110" width="160" height="22" rx="6" fill="#B5D4F4"/>
+      <text x="130" y="125" fill="#1a1a1a" font-size="12" text-anchor="middle">2 AES-GCM 加密 body → ct+tag</text>
+      <rect x="50" y="142" width="160" height="22" rx="6" fill="#B5D4F4"/>
+      <text x="130" y="157" fill="#1a1a1a" font-size="12" text-anchor="middle">3 RSA-OAEP 公钥加密 K</text>
+
+      <!-- 请求箭头 -->
+      <line x1="130" y1="194" x2="590" y2="194" stroke="#185FA5" stroke-width="2" marker-end="url(#arrBlue)"/>
+      <rect x="250" y="178" width="280" height="20" rx="4" fill="#E6F1FB"/>
+      <text x="390" y="192" fill="#185FA5" font-size="12" text-anchor="middle">POST { encKey, nonce, tag, ct, ts }</text>
+
+      <!-- 抓包注释 -->
+      <rect x="270" y="216" width="180" height="22" rx="6" fill="#F5C4B3"/>
+      <text x="360" y="231" fill="#712B13" font-size="12" text-anchor="middle">抓包者：只见密文，无解密</text>
+
+      <!-- 服务端自述 -->
+      <rect x="510" y="256" width="160" height="22" rx="6" fill="#9FE1CB"/>
+      <text x="590" y="271" fill="#1a1a1a" font-size="12" text-anchor="middle">4 私钥解密 encKey → K</text>
+      <rect x="510" y="288" width="160" height="22" rx="6" fill="#9FE1CB"/>
+      <text x="590" y="303" fill="#1a1a1a" font-size="12" text-anchor="middle">5 GCM 解密 + 校验 ts</text>
+
+      <!-- 响应箭头 -->
+      <line x1="590" y1="340" x2="130" y2="340" stroke="#0F6E56" stroke-width="2" marker-end="url(#arrGreen)"/>
+      <rect x="250" y="324" width="280" height="20" rx="4" fill="#E1F5EE"/>
+      <text x="390" y="338" fill="#0F6E56" font-size="12" text-anchor="middle">响应体（同样加密返回）</text>
+
+      <!-- 底部说明 -->
+      <rect x="40" y="380" width="640" height="78" rx="8" fill="#f1f3f5"/>
+      <text x="56" y="404" fill="#444441" font-size="12">要点：RSA 仅加密 32 字节的 K，开销极小；body 全程 AES-GCM。服务端持有私钥，公钥可公开/下发。</text>
+      <text x="56" y="426" fill="#444441" font-size="12">时间戳 ts + 随机 nonce 防重放；encKey=ciphertext(K)，无私钥无法还原 K，故无法解密 body。</text>
+      <text x="56" y="448" fill="#444441" font-size="12">响应对称回传：服务端用同一 K（或新 K）加密响应，客户端用 K 解密。</text>
+    </svg>
+  </div>
+
+  <div class="card">
+    <h2>2. 三种方案：计算量对比</h2>
+    <table>
+      <thead>
+        <tr><th>方案</th><th>每请求非对称运算</th><th>对称运算</th><th>实现难度</th><th>适用</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>明文（现状）</td><td>无</td><td>无</td><td>最简单</td><td><span class="tag t-amber">不加密，风险高</span></td></tr>
+        <tr><td>AES-GCM 预共享密钥</td><td>无</td><td>1 次</td><td>简单</td><td>密钥需安全分发</td></tr>
+        <tr><td><b>RSA-2048-OAEP 信封</b>（默认）</td><td>1 次（仅 32 字节）</td><td>1 次</td><td>中等</td><td><span class="tag t-blue">通用、易落地</span></td></tr>
+        <tr><td>会话级（握手 1 次 + 复用）</td><td>仅握手 1 次</td><td>每请求 1 次</td><td>中等</td><td><span class="tag t-green">高 QPS / 最省资源</span></td></tr>
+        <tr><td>ECDH P-256 + AES-GCM</td><td>1 次（更轻）</td><td>1 次</td><td>中等</td><td>密钥更短、移动端友好</td></tr>
+      </tbody>
+    </table>
+    <ul>
+      <li><b>推荐默认</b>：AES-256-GCM + RSA-2048-OAEP 信封，开关 <code>optional</code> 灰度。</li>
+      <li><b>极致省资源</b>：采用「会话级」——登录后下发/协商会话密钥，后续纯 AES-GCM，非对称开销≈0。</li>
+      <li><b>合规导向</b>：可调为 国密 SM2 + SM4（文档已涵盖）。</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2>3. 与现有方案的关系</h2>
+    <ul>
+      <li>现有 <code>AesByteFlipUtils</code>（时间戳派生 + 字节翻转）= 混淆，密钥可被推导，逆向后抓包即破 → 本次新方案让它仅作为兼容降级，最终下线。</li>
+      <li>新方案 = 真正加密：私钥在服务端、公钥钉扎在客户端，即使 HTTPS 被本地代理/MITM 穿透，body 仍是密文。</li>
+      <li>开关三态 <code>off / optional / force</code>：灰度期 <code>optional</code> 同时接受明文与密文，验证稳定后切 <code>force</code>。</li>
+    </ul>
+  </div>
+</div>
+</body>
+</html>

@@ -251,10 +251,10 @@ public class DeviceLicenseService {
         LocalDateTime before = license.getExpireAt();
         LocalDateTime base = before != null && before.isAfter(now) ? before : now;
         LocalDateTime after = base.plusHours(plan.getDurationHours());
-        int addedCalls = plan.getCallsPerAccount();
         // 次数已是「按到期时间计费」的无限值，续费只延长时间。继续累加会整数溢出成负数，
-        // 反而让 remaining_calls <= 0 的校验把许可证锁死，必须跳过。
+        // 反而让 remaining_calls <= 0 的校验把许可证锁死，必须跳过；此时续费记录里的 addedCalls 记为 0。
         boolean counted = !unlimited(value(license.getTotalCalls()));
+        int addedCalls = counted ? plan.getCallsPerAccount() : 0;
         license.setPackageId(plan.getId().longValue()); license.setPackageNameSnapshot(plan.getName());
         license.setExpireAt(after);
         if (counted) {
