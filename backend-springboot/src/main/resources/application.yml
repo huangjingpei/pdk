@@ -58,6 +58,8 @@ mybatis-plus:
     log-impl: org.apache.ibatis.logging.slf4j.Slf4jImpl
 
 logging:
+  charset:
+    console: GBK
   level:
     com.pdk.mapper: ${PDK_MAPPER_LOG_LEVEL:WARN}
 
