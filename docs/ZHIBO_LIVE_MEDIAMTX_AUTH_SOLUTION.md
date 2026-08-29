@@ -9,7 +9,7 @@
 
 该方案可行，适用于当前 `appId=3 / bizId=3 / bizCode=ZHIBO_LIVE`，但要把三个职责分开：
 
-1. **客户端业务登录**：继续使用现有业务服务器的手机号、密码、设备 UUID 和 Sa-Token 鉴权。
+1. **客户端业务登录**：使用手机号、密码、设备 UUID 和设备卡密许可证鉴权；已绑定设备可省略卡密，Sa-Token 主体为 `license:{id}`。
 2. **RTMP 推流准入**：登录后的客户端向业务服务器申请短效、专用、可撤销的推流票据；MediaMTX 在收到 publish 连接时通过 HTTP auth 向业务服务器同步核验。
 3. **推流生命周期**：HTTP auth 只说明“允许连接”，不说明流已经可用。真正上线和下线使用 MediaMTX 的 `runOnAvailable`、`runOnUnavailable` 事件；中途停权使用 Control API 主动踢流。
 
@@ -24,10 +24,10 @@ sequenceDiagram
     participant R as Redis/MySQL
     participant M as MediaMTX
 
-    C->>B: 登录(appId=3, 手机号, 密码, deviceId)
-    B-->>C: Sa-Token
+    C->>B: 登录(appId=3, 手机号, 密码, deviceId, 首次可选cardKey)
+    B-->>C: 设备许可证级 Sa-Token
     C->>B: POST /client/zhibo-live/publish-tickets
-    B->>R: 校验业务/用户/设备/套餐/并发并预占槽位
+    B->>R: 校验业务/用户/设备许可证/独立到期与次数并预占槽位
     B-->>C: rtmps URL + 短效 publishTicket
     C->>M: RTMPS publish(path, token=publishTicket)
     M->>B: POST /internal/mediamtx/auth
@@ -55,9 +55,9 @@ sequenceDiagram
 
 - `X-PDK-App-ID=3`；
 - Sa-Token 已登录；
-- Token 对应用户的 `biz_id=3`；
+- Token 对应 `pdk_device_license.biz_id=3` 且许可证属于当前用户；
 - `X-PDK-Phone` 与用户一致；
-- `X-PDK-Device-ID` 与当前绑定设备一致；
+- `X-PDK-Device-ID` 与当前许可证绑定的 `pdk_user_device` 一致；
 - `pdk_business` 中 `ZHIBO_LIVE` 为 `ACTIVE`；
 - 当前部署 allowlist 包含 `ZHIBO_LIVE` 或聚合别名 `ZHIBO`；
 - `ZhiboBusinessHandler` 健康。
@@ -115,10 +115,10 @@ satoken: ...
 业务服务器依次校验：
 
 1. 当前业务必须是 `ZHIBO_LIVE`，不能让 `ZHIBO_AI` 申请推流。
-2. 用户未冻结、凭证有效、设备仍绑定。
-3. 套餐已生效且未过期。
-4. 用户拥有直播权限、剩余开播次数或可用直播分钟数。
-5. 当前 `ISSUED/AUTHORIZED/LIVE` 会话没有超过套餐并发数。
+2. 用户未冻结、凭证有效、许可证和设备仍绑定。
+3. 当前设备许可证为 ACTIVE 且独立 `expire_at` 未到期。
+4. 当前设备许可证拥有剩余开播次数。
+5. 当前许可证没有其他 `ISSUED/AUTHORIZED/LIVE` 会话。
 6. 分配到健康且已启用的 MediaMTX 节点。
 7. 原子预占一个推流槽位并创建会话。
 
@@ -150,7 +150,7 @@ zhibo-live/{streamSessionNo}
 - 使用安全随机数生成至少 32 字节，Base64URL 编码后约 43 字符。
 - 数据库和 Redis 只存 `SHA-256(ticket)`，不存明文。
 - 默认 90 秒过期，只授权 `protocol=rtmp`、`action=publish` 和一个固定 path。
-- 绑定 `bizId=3 + userId + deviceId + mediaNodeId + streamSessionNo`。
+- 绑定 `bizId=3 + userId + userDeviceId + deviceLicenseId + deviceIdHash + mediaNodeId + streamSessionNo`。
 - 第一次 HTTP auth 成功时原子绑定 MediaMTX `id`。
 - 相同票据和相同连接 ID 的重复鉴权可幂等成功；不同连接 ID 重放必须拒绝。
 - 客户端重连必须重新申请票据，不能长期复用旧地址。
@@ -493,7 +493,7 @@ POST /api/v1/admin/zhibo-live/media-nodes/{nodeId}/health-check
 
 ### 第一阶段：准入 MVP
 
-- 推流票据、HTTP auth、单用户单流；
+- 推流票据、HTTP auth、单许可证单流；
 - `ISSUED/AUTHORIZED/LIVE/ENDED` 状态；
 - available/unavailable Hook；
 - 管理后台在线流和手工踢流；

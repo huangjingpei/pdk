@@ -31,6 +31,7 @@ public class ClientAccountController {
     private final IDispatchGatewayService gatewayService;
     private final AccountAssignmentMapper assignmentMapper;
     private final CardKeyMapper cardKeyMapper;
+    private final com.pdk.service.DeviceLicenseService deviceLicenseService;
 
     @GetMapping("/account/profile")
     public CommonResult<Map<String, Object>> profile(HttpServletRequest request) {
@@ -42,6 +43,7 @@ public class ClientAccountController {
         data.put("bizCode", business.bizCode());
         data.put("businessName", business.businessName());
         data.put("businessDescription", business.businessDescription());
+        data.put("authorizationMode", business.authorizationMode());
         data.put("phone", user.getPhone());
         data.put("status", user.getStatus());
         data.put("deviceId", user.getDeviceId());
@@ -50,6 +52,13 @@ public class ClientAccountController {
         data.put("remainingCalls", user.getRemainingCalls());
         data.put("dailyCallsLimit", user.getDailyCallsLimit());
         data.put("maxAccounts", user.getMaxAccounts());
+        if (request.getAttribute("pdkClientLicense") instanceof com.pdk.domain.entity.DeviceLicense license) {
+            data.put("deviceLicense", deviceLicenseService.view(license));
+            data.put("deviceId", ((com.pdk.domain.entity.UserDevice) request.getAttribute("pdkClientDevice")).getDeviceId());
+            data.put("packageName", license.getPackageNameSnapshot());
+            data.put("expireTime", license.getExpireAt());
+            data.put("remainingCalls", license.getRemainingCalls());
+        }
         return CommonResult.success(data);
     }
 
@@ -71,7 +80,13 @@ public class ClientAccountController {
                         .orderByDesc(PdkDispatchLog::getCreatedAt));
 
         Map<String, Object> data = new LinkedHashMap<>();
-        data.put("remainingCalls", user.getRemainingCalls());
+        if (request.getAttribute("pdkClientLicense") instanceof com.pdk.domain.entity.DeviceLicense license) {
+            data.put("remainingCalls", license.getRemainingCalls());
+            data.put("deviceLicenseId", license.getId());
+            data.put("licenseExpireAt", license.getExpireAt());
+        } else {
+            data.put("remainingCalls", user.getRemainingCalls());
+        }
         data.put("totalReported", total);
         data.put("successCount", successes);
         data.put("failureCount", failures);
@@ -101,6 +116,12 @@ public class ClientAccountController {
     @GetMapping("/account/card")
     public CommonResult<Map<String, Object>> card(HttpServletRequest request) {
         User user = currentUser(request);
+        if (request.getAttribute("pdkClientLicense") instanceof com.pdk.domain.entity.DeviceLicense license) {
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("current", deviceLicenseService.view(license));
+            data.put("licenses", deviceLicenseService.listByUser(user.getBizId(), user.getId()));
+            return CommonResult.success(data);
+        }
         CardKey card = cardKeyMapper.selectOne(new LambdaQueryWrapper<CardKey>()
                 .eq(CardKey::getBizId, user.getBizId()).eq(CardKey::getActivatedByUserId, user.getId())
                 .orderByDesc(CardKey::getActivatedAt)
@@ -117,6 +138,12 @@ public class ClientAccountController {
                 .eq(AccountAssignment::getStatus, "ACTIVE")
                 .orderByAsc(AccountAssignment::getSlotIndex)));
         return CommonResult.success(data);
+    }
+
+    @GetMapping("/devices")
+    public CommonResult<java.util.List<com.pdk.domain.vo.DeviceLicenseVO>> devices(HttpServletRequest request) {
+        User user = currentUser(request);
+        return CommonResult.success(deviceLicenseService.listByUser(user.getBizId(), user.getId()));
     }
 
     @PostMapping("/resources/acquire")

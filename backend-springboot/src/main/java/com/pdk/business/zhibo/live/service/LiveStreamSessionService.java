@@ -11,6 +11,8 @@ import com.pdk.business.zhibo.live.vo.LiveStreamSessionVO;
 import com.pdk.business.zhibo.live.vo.PublishTicketVO;
 import com.pdk.common.exception.BusinessException;
 import com.pdk.domain.entity.User;
+import com.pdk.domain.entity.DeviceLicense;
+import com.pdk.domain.entity.UserDevice;
 import com.pdk.platform.business.BusinessContext;
 import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DuplicateKeyException;
@@ -36,12 +38,19 @@ public class LiveStreamSessionService {
 
     @Transactional(rollbackFor = Exception.class)
     public PublishTicketVO issue(BusinessContext business, User user, CreatePublishTicketDTO dto, String clientIp) {
+        return issue(business, user, null, null, dto, clientIp);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public PublishTicketVO issue(BusinessContext business, User user, DeviceLicense license, UserDevice device,
+                                 CreatePublishTicketDTO dto, String clientIp) {
         requireLiveBusiness(business);
         if (!properties.isEnabled()) {
             throw new BusinessException(50370, "当前部署尚未启用 MediaMTX 推流服务");
         }
-        validateEntitlement(user, business.bizId());
-        expireUnusedTickets(user.getId());
+        if (business.usesDeviceLicense()) validateLicenseEntitlement(user, license, device, business.bizId());
+        else validateEntitlement(user, business.bizId());
+        expireUnusedTickets(user.getId(), license == null ? null : license.getId());
 
         String requestId = dto == null || dto.clientRequestId() == null || dto.clientRequestId().isBlank()
                 ? UUID.randomUUID().toString() : dto.clientRequestId().trim();
@@ -61,6 +70,8 @@ public class LiveStreamSessionService {
         LiveStreamSession session = new LiveStreamSession();
         session.setBizId(business.bizId());
         session.setUserId(user.getId());
+        session.setUserDeviceId(device == null ? null : device.getId());
+        session.setDeviceLicenseId(license == null ? null : license.getId());
         session.setStreamSessionNo(sessionNo);
         session.setClientRequestId(requestId);
         session.setMediaNodeCode(properties.getNodeCode());
@@ -69,7 +80,8 @@ public class LiveStreamSessionService {
         session.setStatus("ISSUED");
         session.setTicketHash(LiveStreamSecurity.sha256(ticket));
         session.setTicketExpiresAt(now.plusSeconds(ttl));
-        session.setDeviceIdHash(LiveStreamSecurity.sha256(user.getDeviceId()));
+        session.setDeviceIdHash(device == null
+                ? LiveStreamSecurity.sha256(user.getDeviceId()) : device.getDeviceIdHash());
         session.setClientIp(clientIp);
         session.setBilledUnits(0);
         session.setCreatedAt(now);
@@ -93,6 +105,14 @@ public class LiveStreamSessionService {
                 .stream().map(LiveStreamSessionVO::from).toList();
     }
 
+    public List<LiveStreamSessionVO> listOwnedLicense(long bizId, long userId, long licenseId) {
+        return sessionMapper.selectList(new LambdaQueryWrapper<LiveStreamSession>()
+                        .eq(LiveStreamSession::getBizId, bizId).eq(LiveStreamSession::getUserId, userId)
+                        .eq(LiveStreamSession::getDeviceLicenseId, licenseId)
+                        .orderByDesc(LiveStreamSession::getId).last("LIMIT 100"))
+                .stream().map(LiveStreamSessionVO::from).toList();
+    }
+
     public List<LiveStreamSessionVO> listForAdmin(long bizId, String status) {
         LambdaQueryWrapper<LiveStreamSession> query = new LambdaQueryWrapper<LiveStreamSession>()
                 .eq(LiveStreamSession::getBizId, bizId)
@@ -109,6 +129,15 @@ public class LiveStreamSessionService {
     }
 
     @Transactional(rollbackFor = Exception.class)
+    public void stopOwnedLicense(long bizId, long userId, long licenseId, String sessionNo, String reason) {
+        LiveStreamSession session = requireSession(bizId, sessionNo);
+        if (!session.getUserId().equals(userId) || !Long.valueOf(licenseId).equals(session.getDeviceLicenseId())) {
+            throw new BusinessException(40370, "无权停止其他设备许可证的推流");
+        }
+        stop(session, reason);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
     public void stopByAdmin(long bizId, String sessionNo, String reason) {
         stop(requireSession(bizId, sessionNo), reason);
     }
@@ -117,6 +146,14 @@ public class LiveStreamSessionService {
     public void revokeUserSessions(long bizId, long userId, String reason) {
         List<LiveStreamSession> sessions = sessionMapper.selectList(new LambdaQueryWrapper<LiveStreamSession>()
                 .eq(LiveStreamSession::getBizId, bizId).eq(LiveStreamSession::getUserId, userId)
+                .in(LiveStreamSession::getStatus, ACTIVE_STATUSES));
+        for (LiveStreamSession session : sessions) stop(session, reason);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public void revokeLicenseSessions(long bizId, long licenseId, String reason) {
+        List<LiveStreamSession> sessions = sessionMapper.selectList(new LambdaQueryWrapper<LiveStreamSession>()
+                .eq(LiveStreamSession::getBizId, bizId).eq(LiveStreamSession::getDeviceLicenseId, licenseId)
                 .in(LiveStreamSession::getStatus, ACTIVE_STATUSES));
         for (LiveStreamSession session : sessions) stop(session, reason);
     }
@@ -145,9 +182,11 @@ public class LiveStreamSessionService {
         return session;
     }
 
-    private void expireUnusedTickets(long userId) {
-        sessionMapper.update(null, new LambdaUpdateWrapper<LiveStreamSession>()
-                .eq(LiveStreamSession::getUserId, userId)
+    private void expireUnusedTickets(long userId, Long licenseId) {
+        LambdaUpdateWrapper<LiveStreamSession> update = new LambdaUpdateWrapper<LiveStreamSession>()
+                .eq(LiveStreamSession::getUserId, userId);
+        if (licenseId != null) update.eq(LiveStreamSession::getDeviceLicenseId, licenseId);
+        sessionMapper.update(null, update
                 .eq(LiveStreamSession::getStatus, "ISSUED")
                 .lt(LiveStreamSession::getTicketExpiresAt, LocalDateTime.now())
                 .set(LiveStreamSession::getStatus, "EXPIRED")
@@ -174,6 +213,27 @@ public class LiveStreamSessionService {
             throw new BusinessException(40373, "套餐未开通或已过期，禁止推流");
         }
         if (user.getRemainingCalls() == null || user.getRemainingCalls() <= 0) {
+            throw new BusinessException(40374, "直播可用次数不足，禁止推流");
+        }
+    }
+
+    public static void validateLicenseEntitlement(User user, DeviceLicense license, UserDevice device, long bizId) {
+        if (user == null || user.getBizId() == null || user.getBizId() != bizId || "FROZEN".equals(user.getStatus())) {
+            throw new BusinessException(40371, "账号不存在、跨业务或已冻结，禁止推流");
+        }
+        if (license == null || license.getBizId() == null || license.getBizId() != bizId
+                || !user.getId().equals(license.getUserId())) {
+            throw new BusinessException(40385, "当前设备没有许可证");
+        }
+        if (device == null || !"ACTIVE".equals(device.getStatus())
+                || !device.getId().equals(license.getUserDeviceId())) {
+            throw new BusinessException(40372, "许可证设备绑定无效，禁止推流");
+        }
+        if (!"ACTIVE".equals(license.getStatus())) throw new BusinessException(40384, "许可证已暂停、过期或作废");
+        if (license.getExpireAt() == null || !license.getExpireAt().isAfter(LocalDateTime.now())) {
+            throw new BusinessException(40381, "当前设备许可证已到期");
+        }
+        if (license.getRemainingCalls() == null || license.getRemainingCalls() <= 0) {
             throw new BusinessException(40374, "直播可用次数不足，禁止推流");
         }
     }

@@ -65,6 +65,7 @@ public class AdminUserController {
     private final LoginLogService loginLogService;
     private final LoginLogMapper loginLogMapper;
     private final BusinessService businessService;
+    private final com.pdk.service.DeviceLicenseService deviceLicenseService;
     private final com.pdk.security.AdminBusinessScope businessScope;
     @Qualifier("clientStpLogic")
     private final StpLogic clientStpLogic;
@@ -301,6 +302,7 @@ public class AdminUserController {
         String before = user.getStatus();
         user.setStatus(status);
         userMapper.updateById(user);
+        if ("FROZEN".equals(status)) deviceLicenseService.kickUserLicenses(user.getBizId(), user.getId(), "USER_FROZEN");
         AdminPrincipal admin = (AdminPrincipal) request.getAttribute("pdkAdminPrincipal");
         adminAuditService.record(admin, user.getBizId(), "CHANGE_USER_STATUS", "USER", user.getPhone(),
                 "{\"status\":\"" + before + "\"}", "{\"status\":\"" + status + "\"}",
@@ -328,6 +330,7 @@ public class AdminUserController {
         credentialMapper.updateById(credential);
         // 吊销全部在线会话，强制用新密码重新登录
         clientStpLogic.kickout(user.getId());
+        deviceLicenseService.kickUserLicenses(user.getBizId(), user.getId(), "PASSWORD_RESET");
         AdminPrincipal admin = principal(request);
         adminAuditService.record(admin, user.getBizId(), "RESET_USER_PASSWORD", "USER", user.getPhone(),
                 before, snapshotCredential(credential), "管理员重置用户密码并强制改密", request);
@@ -352,6 +355,7 @@ public class AdminUserController {
         // 开启强制改密时吊销在线会话，使其下次登录即触发改密；取消强制则不动会话
         if (dto.isMustChange()) {
             clientStpLogic.kickout(user.getId());
+            deviceLicenseService.kickUserLicenses(user.getBizId(), user.getId(), "PASSWORD_CHANGE_REQUIRED");
         }
         AdminPrincipal admin = principal(request);
         adminAuditService.record(admin, user.getBizId(),

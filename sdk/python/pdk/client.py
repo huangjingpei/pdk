@@ -393,21 +393,31 @@ class PdkApiClient:
             "invitationCode": invitation_code or None,
         })
         if self.is_ok(body):
-            self._apply_session(body, phone, password)
-            self._emit_state(State.Registered, f"注册成功并登录：{phone}")
+            if (body.get("data") or {}).get("licenseRequired"):
+                self._emit_state(State.Registered, f"注册成功：{phone}；登录时需要设备卡密")
+            else:
+                self._apply_session(body, phone, password)
+                self._emit_state(State.Registered, f"注册成功并登录：{phone}")
         else:
             self._emit_state(State.Error, body.get("message", ""))
         return body
 
-    def login(self, phone, password):
+    def login(self, phone, password, card_key="", device_name="", client_version="2.0.0"):
         self._emit_state(State.LoggingIn, f"正在登录 {phone}")
-        body = self.request("POST", "/api/v1/client/auth/login", json_body={
+        payload = {
             "appId": self.app_id, "phone": phone, "password": password,
             "deviceId": self.session.device_id,
-        })
+            "deviceName": device_name or platform.node(), "platform": platform.system(),
+            "clientVersion": client_version,
+        }
+        if str(card_key).strip():
+            payload["cardKey"] = str(card_key).strip()
+        body = self.request("POST", "/api/v1/client/auth/login", json_body=payload)
         if self.is_ok(body):
             self._apply_session(body, phone, password)
             self._emit_state(State.LoggedIn, f"登录成功：{phone}")
+        elif body.get("code") == ResultCode.DEVICE_LICENSE_REQUIRED:
+            self._emit_state(State.DeviceLicenseRequired, body.get("message", ""))
         elif body.get("code") == ResultCode.DEVICE_KICK_OUT:
             self._emit_state(State.Kicked, body.get("message", ""))
         else:
@@ -437,8 +447,9 @@ class PdkApiClient:
     def unbind_device(self):
         body = self.request("POST", "/api/v1/client/auth/unbind-device", authenticated=True)
         if self.is_ok(body):
-            self.session.token_value = ""  # 方案A：保留 deviceId，仅清登录态
-            self._emit_state(State.DeviceUnbound, "已解绑当前会话，账号设备标识保持不变")
+            # 服务端清空账号绑定；本地安装实例保留稳定 deviceId，供本机将来重新绑定。
+            self.session.token_value = ""
+            self._emit_state(State.DeviceUnbound, "账号已解除设备绑定，可在新电脑重新登录")
         else:
             self._emit_state(State.Error, body.get("message", ""))
         return body
@@ -564,6 +575,21 @@ class PdkApiClient:
 
     def card_list(self):
         return self.request("GET", "/api/v1/client/account/card", authenticated=True)
+
+    def current_device_license(self):
+        return self.request("GET", "/api/v1/client/device-license/current", authenticated=True)
+
+    def device_licenses(self):
+        return self.request("GET", "/api/v1/client/device-license/devices", authenticated=True)
+
+    def device_license_renewals(self):
+        return self.request("GET", "/api/v1/client/device-license/renewal-history", authenticated=True)
+
+    def unbind_device_license(self):
+        body = self.request("POST", "/api/v1/client/device-license/unbind", authenticated=True)
+        if self.is_ok(body):
+            self.session.token_value = ""
+        return body
 
     # ---------------------------------------------------------------- ZHIBO_LIVE
     def create_live_publish_ticket(self, title="", client_request_id="", requested_protocol="RTMP"):

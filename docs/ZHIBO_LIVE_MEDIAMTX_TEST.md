@@ -16,11 +16,12 @@
 - Controller 拒绝一定保持非 2xx，允许使用裸 204；
 - 客户端明文 JSON 经加密 Advice 检查后仍可被 Jackson 正常读取。
 
-本次最终实测结果：`59 tests, 0 failures, 0 errors, BUILD SUCCESS`。
+当前全量实测结果：`68 tests, 0 failures, 0 errors, BUILD SUCCESS`。
 
 ## 2. 后端真实 HTTP 契约测试
 
-准备一个属于 bizId=3 的 ACTIVE 用户，绑定设备、设置未来到期时间且 `remaining_calls > 0`，启用业务和 MediaMTX 配置后运行：
+准备一个属于 bizId=3 的 ACTIVE 用户，为测试设备分配并绑定一张 ACTIVE 许可证，确保许可证
+`expire_at` 在未来且 `remaining_calls > 0`，启用业务和 MediaMTX 配置后运行：
 
 ```powershell
 ./scripts/verify-zhibo-live-auth.ps1 `
@@ -94,5 +95,11 @@ python client-pyqt/live_push_demo.py --api http://127.0.0.1:8080 `
 - 搜索应用日志，不得出现完整 `publishUrl`、ticket、`MTX_QUERY`。
 - 将内部服务令牌改错，auth/event 必须返回 403。
 - 把 ZHIBO_LIVE 关闭或移出部署 allowlist，新票据签发和 auth 均应失败。
-- 用户冻结、到期、剩余次数为 0、设备 UUID 变化时均应失败。
+- 用户冻结、许可证到期/暂停/作废、许可证次数为 0、设备 UUID 或绑定关系变化时均应失败。
+
+## 6. 多设备许可证专项验收
+
+专项测试以 [多设备许可证解决方案](./ZHIBO_LIVE_MULTI_DEVICE_LICENSE_SOLUTION.md) 第 16、20 节为准。
+本次真实 MySQL 已验证同手机号 10 张卡/10 台设备登录成功，第 11 台无卡返回 40380、复用旧卡返回
+40383，续费保留原卡和 licenseId，解绑换机不重算到期时间。
 - MediaMTX API 9997 不应映射到公网；公网防火墙只开放必要的 RTMP/RTMPS 端口。

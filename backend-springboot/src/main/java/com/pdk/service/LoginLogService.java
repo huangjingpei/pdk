@@ -51,9 +51,48 @@ public class LoginLogService {
         record(bizId, "CLIENT", userId, phone, "LOGIN", "SUCCESS", null, deviceId, request);
     }
 
+    public void recordClientSuccess(Long bizId, Long userId, String phone, String deviceId,
+                                    ClientLicenseContext context, HttpServletRequest request) {
+        if (context == null) {
+            recordClientSuccess(bizId, userId, phone, deviceId, request);
+            return;
+        }
+        try {
+            LoginLog entry = new LoginLog();
+            entry.setBizId(bizId); entry.setActorType("CLIENT"); entry.setActorId(userId);
+            entry.setActorAccount(truncate(phone, 50)); entry.setEventType("LOGIN"); entry.setResult("SUCCESS");
+            entry.setIpAddress(clientIp(request)); entry.setDeviceId(truncate(deviceId, 200));
+            entry.setUserDeviceId(context.device().getId()); entry.setDeviceLicenseId(context.license().getId());
+            entry.setLicenseStatus(context.license().getStatus()); entry.setLicenseExpireAt(context.license().getExpireAt());
+            entry.setUserAgent(truncate(request == null ? null : request.getHeader("User-Agent"), MAX_UA));
+            entry.setCreatedAt(LocalDateTime.now()); loginLogMapper.insert(entry);
+        } catch (Exception e) {
+            log.warn("写入许可证登录日志失败，已忽略 userId={} reason={}", userId, e.getMessage());
+        }
+    }
+
     public void recordClientFailure(Long bizId, Long userId, String phone, String reason,
                                     String deviceId, HttpServletRequest request) {
         record(bizId, "CLIENT", userId, phone, "LOGIN", "FAIL", reason, deviceId, request);
+    }
+
+    public void recordLicenseAction(Long bizId, Long userId, String phone, String eventType,
+                                    ClientLicenseContext context, String reason, HttpServletRequest request) {
+        try {
+            LoginLog entry = new LoginLog();
+            entry.setBizId(bizId); entry.setActorType("CLIENT"); entry.setActorId(userId);
+            entry.setActorAccount(truncate(phone, 50)); entry.setEventType(eventType); entry.setResult("SUCCESS");
+            entry.setFailReason(truncate(reason, MAX_REASON)); entry.setIpAddress(clientIp(request));
+            if (context != null) {
+                entry.setDeviceId(truncate(context.device().getDeviceId(), 200));
+                entry.setUserDeviceId(context.device().getId()); entry.setDeviceLicenseId(context.license().getId());
+                entry.setLicenseStatus(context.license().getStatus()); entry.setLicenseExpireAt(context.license().getExpireAt());
+            }
+            entry.setUserAgent(truncate(request == null ? null : request.getHeader("User-Agent"), MAX_UA));
+            entry.setCreatedAt(LocalDateTime.now()); loginLogMapper.insert(entry);
+        } catch (Exception e) {
+            log.warn("写入许可证动作日志失败，已忽略 userId={} eventType={} reason={}", userId, eventType, e.getMessage());
+        }
     }
 
     public void recordAdminLogin(Long adminId, String username, boolean success, String reason,

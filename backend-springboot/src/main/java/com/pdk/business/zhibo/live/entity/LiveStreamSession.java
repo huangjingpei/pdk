@@ -14,6 +14,8 @@ public class LiveStreamSession {
     private Long id;
     private Long bizId;
     private Long userId;
+    private Long userDeviceId;
+    private Long deviceLicenseId;
     private String streamSessionNo;
     private String clientRequestId;
     private String mediaNodeCode;

@@ -115,8 +115,9 @@ ENDPOINTS: list[EndpointDef] = [
             FieldDef("phone", "手机号", placeholder="从顶部配置带入", required=True),
             FieldDef("password", "密码", placeholder="从顶部配置带入", required=True, password=True),
             FieldDef("deviceId", "设备ID", placeholder="从顶部配置带入", required=True),
+            FieldDef("cardKey", "设备卡密（新设备）", placeholder="服务端返回40380后填写", required=False, password=True),
         ],
-        expects="code=200；返回 token 并完成设备绑定",
+        expects="已绑定设备 code=200；新设备无卡 code=40380；有效卡首次绑定 code=200",
         scenario_id="S2",
         scenario_name="客户端登录（绑设备）",
     ),
@@ -200,6 +201,38 @@ ENDPOINTS: list[EndpointDef] = [
         method="GET",
         path="/api/v1/client/account/profile",
         expects="code=200 返回当前账号信息",
+        requires_auth=True,
+    ),
+    EndpointDef(
+        eid="current_device_license",
+        name="当前设备许可证",
+        method="GET",
+        path="/api/v1/client/device-license/current",
+        expects="code=200；返回当前 licenseId、脱敏卡密、独立到期时间、次数和 serverTime",
+        requires_auth=True,
+    ),
+    EndpointDef(
+        eid="device_licenses",
+        name="手机号设备许可证列表",
+        method="GET",
+        path="/api/v1/client/devices",
+        expects="code=200；返回该手机号各设备许可证，当前卡过期时仍允许查询",
+        requires_auth=True,
+    ),
+    EndpointDef(
+        eid="device_license_renewals",
+        name="当前许可证续费历史",
+        method="GET",
+        path="/api/v1/client/device-license/renewal-history",
+        expects="code=200；返回原卡历次续费的前后到期时间、增加次数和订单号",
+        requires_auth=True,
+    ),
+    EndpointDef(
+        eid="unbind_device_license",
+        name="解绑当前设备许可证",
+        method="POST",
+        path="/api/v1/client/device-license/unbind",
+        expects="code=200；停止当前许可证推流并解绑；有效期不暂停，其他设备不受影响",
         requires_auth=True,
     ),
     EndpointDef(
@@ -480,7 +513,7 @@ class EndpointCard(QWidget):
                     values["smsCode"], values.get("invitationCode", "")
                 )
             elif eid == "login":
-                resp = client.login(values["phone"], values["password"], values["deviceId"])
+                resp = client.login(values["phone"], values["password"], values["deviceId"], values.get("cardKey", ""))
             elif eid == "logout":
                 resp = client.logout()
             elif eid == "unbind_device":
@@ -499,6 +532,14 @@ class EndpointCard(QWidget):
                 )
             elif eid == "profile":
                 resp = client.profile()
+            elif eid == "current_device_license":
+                resp = client.current_device_license()
+            elif eid == "device_licenses":
+                resp = client.device_licenses()
+            elif eid == "device_license_renewals":
+                resp = client.device_license_renewals()
+            elif eid == "unbind_device_license":
+                resp = client.unbind_device_license()
             elif eid == "usage":
                 resp = client.usage()
             elif eid == "resource_status":
@@ -726,6 +767,9 @@ class MainWindow(QMainWindow):
         self.device_id = QLineEdit(self.runner.device_id)
         self.sms_code = QLineEdit("")
         self.sms_code.setPlaceholderText("注册用验证码；fixed-code 模式点「发送验证码」自动回填")
+        self.license_card = QLineEdit("")
+        self.license_card.setEchoMode(QLineEdit.EchoMode.Password)
+        self.license_card.setPlaceholderText("仅许可证业务新电脑首次登录需要；不会保存或打印")
         self.login_state = QLabel("未登录")
         self.login_state.setStyleSheet("color:#dc2626;font-weight:600")
         self.business_state = QLabel("业务信息待加载")
@@ -756,16 +800,18 @@ class MainWindow(QMainWindow):
         grid.addWidget(self.device_id, 2, 1)
         grid.addWidget(QLabel("短信验证码"), 2, 2)
         grid.addWidget(self.sms_code, 2, 3)
-        grid.addWidget(self.send_sms_btn, 3, 0)
-        grid.addWidget(slots_btn, 3, 1)
+        grid.addWidget(QLabel("设备许可证卡密"), 3, 0)
+        grid.addWidget(self.license_card, 3, 1, 1, 3)
+        grid.addWidget(self.send_sms_btn, 4, 0)
+        grid.addWidget(slots_btn, 4, 1)
         btn_row = QHBoxLayout()
         btn_row.addWidget(login)
         btn_row.addWidget(logout)
         btn_row.addWidget(unbind)
         btn_row.addWidget(self.login_state)
         btn_row.addStretch()
-        grid.addLayout(btn_row, 4, 0, 1, 4)
-        grid.addWidget(self.business_state, 5, 0, 1, 4)
+        grid.addLayout(btn_row, 5, 0, 1, 4)
+        grid.addWidget(self.business_state, 6, 0, 1, 4)
         QTimer.singleShot(0, self._refresh_business_info)
         return box
 
@@ -1011,8 +1057,8 @@ class MainWindow(QMainWindow):
         if not phone or not password:
             QMessageBox.warning(self, "提示", "请填写手机号与密码")
             return
-        self.runner.client.expectation = "code=200 返回 token 并完成设备绑定"
-        body = self.runner.client.login(phone, password, self.device_id.text().strip())
+        self.runner.client.expectation = "已绑定设备 code=200；新设备未填卡 code=40380；卡密与手机号不匹配 code=40382"
+        body = self.runner.client.login(phone, password, self.device_id.text().strip(), self.license_card.text().strip())
         if body.get("code") == 200:
             # 服务端权威：把输入框同步成服务端返回的 deviceId（账号级稳定标识）
             self.device_id.setText(self.runner.client.session.device_id)
@@ -1021,7 +1067,11 @@ class MainWindow(QMainWindow):
         else:
             self.refresh_login_state()
             self.append_log("login", body)
-            QMessageBox.warning(self, "登录失败", str(body.get("message", "未知错误")))
+            if body.get("code") == 40380:
+                self.license_card.setFocus()
+                QMessageBox.information(self, "需要设备卡密", "当前电脑尚未绑定许可证。请填写代理分配给此手机号的一张卡密后再次登录。")
+            else:
+                QMessageBox.warning(self, "登录失败", str(body.get("message", "未知错误")))
 
     def do_logout(self) -> None:
         self.runner.client.expectation = "code=200 注销当前会话"

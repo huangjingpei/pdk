@@ -22,11 +22,32 @@ public class CardRenewalService {
     private final PackagePlanMapper packagePlanMapper;
     private final FinancialIncomeMapper incomeMapper;
     private final AccountAssignmentService assignmentService;
+    private final BusinessMapper businessMapper;
+    private final DeviceLicenseMapper deviceLicenseMapper;
+    private final DeviceLicenseService deviceLicenseService;
 
     @Transactional(rollbackFor = Exception.class)
     public FinancialIncome renew(String cardValue, RenewCardDTO dto, AdminPrincipal principal) {
         PackagePlan plan = packagePlanMapper.selectById(dto.getPackageId());
         if (plan == null || !"ACTIVE".equals(plan.getStatus())) throw new BusinessException(40020, "续费套餐不存在或已停用");
+        Business business = businessMapper.selectById(plan.getBizId());
+        if (business != null && "DEVICE_LICENSE".equals(business.getAuthorizationMode())) {
+            CardKey card = cardKeyMapper.selectOne(new LambdaQueryWrapper<CardKey>()
+                    .eq(CardKey::getBizId, plan.getBizId()).eq(CardKey::getCardKey, cardValue).last("LIMIT 1"));
+            if (card == null || "VOID".equals(card.getStatus())) {
+                throw new BusinessException(40040, "卡密不存在、业务不匹配或已作废");
+            }
+            assertOwner(card, principal);
+            DeviceLicense license = deviceLicenseMapper.selectOne(new LambdaQueryWrapper<DeviceLicense>()
+                    .eq(DeviceLicense::getCardKeyId, card.getId()).last("LIMIT 1"));
+            if (license == null) throw new BusinessException(40480, "卡密对应的设备许可证不存在");
+            com.pdk.domain.dto.RenewDeviceLicenseDTO renewal = new com.pdk.domain.dto.RenewDeviceLicenseDTO();
+            renewal.setPackageId(dto.getPackageId()); renewal.setPaymentTxnNo(dto.getPaymentTxnNo()); renewal.setRemark(dto.getRemark());
+            deviceLicenseService.renew(license.getId(), renewal, principal);
+            return incomeMapper.selectOne(new LambdaQueryWrapper<FinancialIncome>()
+                    .eq(FinancialIncome::getCardKeyId, card.getId()).eq(FinancialIncome::getOrderType, "RENEWAL")
+                    .orderByDesc(FinancialIncome::getId).last("LIMIT 1"));
+        }
         CardKey card = cardKeyMapper.selectOneForUpdate(plan.getBizId(), cardValue);
         if (card == null || !"ACTIVATED".equals(card.getStatus())) throw new BusinessException(40040, "卡密不存在、业务不匹配或未激活");
         assertOwner(card, principal);
@@ -79,6 +100,20 @@ public class CardRenewalService {
 
     @Transactional(rollbackFor = Exception.class)
     public void voidCard(Long bizId, String cardValue, AdminPrincipal principal) {
+        Business business = businessMapper.selectOne(new LambdaQueryWrapper<Business>()
+                .eq(Business::getId, bizId).last("LIMIT 1"));
+        if (business != null && "DEVICE_LICENSE".equals(business.getAuthorizationMode())) {
+            CardKey value = cardKeyMapper.selectOne(new LambdaQueryWrapper<CardKey>()
+                    .eq(CardKey::getBizId, bizId).eq(CardKey::getCardKey, cardValue).last("LIMIT 1"));
+            if (value == null) throw new BusinessException(40403, "卡密不存在");
+            assertOwner(value, principal);
+            if ("VOID".equals(value.getStatus())) return;
+            DeviceLicense license = deviceLicenseMapper.selectOne(new LambdaQueryWrapper<DeviceLicense>()
+                    .eq(DeviceLicense::getCardKeyId, value.getId()).last("LIMIT 1"));
+            if (license == null) throw new BusinessException(40480, "卡密对应的设备许可证不存在");
+            deviceLicenseService.setStatus(license.getId(), "REVOKED", "CARD_VOID");
+            return;
+        }
         CardKey card = cardKeyMapper.selectOneForUpdate(bizId, cardValue);
         if (card == null) throw new BusinessException(40403, "卡密不存在");
         assertOwner(card, principal);

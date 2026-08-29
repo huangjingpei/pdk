@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import getpass
 import shutil
 import subprocess
 import sys
@@ -29,6 +30,9 @@ def main() -> int:
 
     client = PdkApiClient(args.api, app_id=3)
     login = client.login(args.phone, args.password, args.device_id)
+    if login.get("code") == 40380:
+        card_key = getpass.getpass("当前电脑需要设备许可证卡密（输入不回显）：").strip()
+        login = client.login(args.phone, args.password, args.device_id, card_key)
     if not client.is_ok(login):
         print(f"登录失败: {login.get('code')} {login.get('message')}", file=sys.stderr)
         return 3

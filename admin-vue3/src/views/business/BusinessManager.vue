@@ -21,6 +21,11 @@
           {{ s.row.registrationMode === 'SELF_SERVICE' ? '手机短信自助' : '管理员建号' }}
         </el-tag></template>
       </el-table-column>
+      <el-table-column label="授权模型" width="135">
+        <template #default="s"><el-tag :type="s.row.authorizationMode === 'DEVICE_LICENSE' ? 'primary' : 'info'">
+          {{ s.row.authorizationMode === 'DEVICE_LICENSE' ? '一机一卡许可证' : '用户级套餐' }}
+        </el-tag></template>
+      </el-table-column>
       <el-table-column label="试用" width="110">
         <template #default="s">{{ s.row.trialEnabled ? `${s.row.trialDurationHours}小时` : '关闭' }}</template>
       </el-table-column>
@@ -64,6 +69,13 @@
         <el-form-item label="注册策略" required>
           <el-radio-group v-model="form.registrationMode"><el-radio value="SELF_SERVICE">手机短信自助</el-radio><el-radio value="ADMIN_ONLY">仅管理员建号</el-radio></el-radio-group>
         </el-form-item>
+        <el-form-item label="授权模型" required>
+          <el-radio-group v-model="form.authorizationMode">
+            <el-radio value="USER_SUBSCRIPTION">用户级套餐（PDD 兼容）</el-radio>
+            <el-radio value="DEVICE_LICENSE">设备许可证（一卡一机）</el-radio>
+          </el-radio-group>
+          <div class="model-help">单手机号 1 张或多张卡均使用设备许可证模型；卡数就是可绑定设备数。</div>
+        </el-form-item>
         <el-form-item label="开放试用"><el-switch v-model="form.trialEnabled" /></el-form-item>
         <template v-if="form.trialEnabled">
           <el-form-item label="试用时长(小时)"><el-input-number v-model="form.trialDurationHours" :min="1" /></el-form-item>
@@ -84,13 +96,13 @@ import { api, type ApiResult } from '../../api';
 import type { BusinessRuntime } from '../../types';
 
 const rows = ref<BusinessRuntime[]>([]); const loading = ref(false); const visible = ref(false); const saving = ref(false); const editingId = ref<number | null>(null);
-const form = reactive({ appId: 4, bizCode: '', bizName: '', description: '', registrationMode: 'ADMIN_ONLY' as 'SELF_SERVICE'|'ADMIN_ONLY', trialEnabled: false, trialDurationHours: 0, trialAccountCount: 0, trialCallsPerAccount: 0, forceInitialPasswordChange: true });
+const form = reactive({ appId: 4, bizCode: '', bizName: '', description: '', registrationMode: 'ADMIN_ONLY' as 'SELF_SERVICE'|'ADMIN_ONLY', authorizationMode: 'USER_SUBSCRIPTION' as 'USER_SUBSCRIPTION'|'DEVICE_LICENSE', trialEnabled: false, trialDurationHours: 0, trialAccountCount: 0, trialCallsPerAccount: 0, forceInitialPasswordChange: true });
 async function load(){ loading.value=true; try { const r=await api.get<ApiResult<BusinessRuntime[]>>('/api/v1/admin/business/list'); rows.value=r.data.data; } catch(e){ ElMessage.error(e instanceof Error?e.message:'加载失败'); } finally { loading.value=false; } }
-function reset(){ Object.assign(form,{appId:4,bizCode:'',bizName:'',description:'',registrationMode:'ADMIN_ONLY',trialEnabled:false,trialDurationHours:0,trialAccountCount:0,trialCallsPerAccount:0,forceInitialPasswordChange:true}); }
+function reset(){ Object.assign(form,{appId:4,bizCode:'',bizName:'',description:'',registrationMode:'ADMIN_ONLY',authorizationMode:'USER_SUBSCRIPTION',trialEnabled:false,trialDurationHours:0,trialAccountCount:0,trialCallsPerAccount:0,forceInitialPasswordChange:true}); }
 function openCreate(){ editingId.value=null; reset(); visible.value=true; }
-function openEdit(row:BusinessRuntime){ editingId.value=row.bizId; Object.assign(form,{appId:row.appId,bizCode:row.bizCode,bizName:row.businessName,description:row.businessDescription||'',registrationMode:row.registrationMode,trialEnabled:row.trialEnabled,trialDurationHours:row.trialDurationHours,trialAccountCount:row.trialAccountCount,trialCallsPerAccount:row.trialCallsPerAccount,forceInitialPasswordChange:row.forceInitialPasswordChange}); visible.value=true; }
+function openEdit(row:BusinessRuntime){ editingId.value=row.bizId; Object.assign(form,{appId:row.appId,bizCode:row.bizCode,bizName:row.businessName,description:row.businessDescription||'',registrationMode:row.registrationMode,authorizationMode:row.authorizationMode,trialEnabled:row.trialEnabled,trialDurationHours:row.trialDurationHours,trialAccountCount:row.trialAccountCount,trialCallsPerAccount:row.trialCallsPerAccount,forceInitialPasswordChange:row.forceInitialPasswordChange}); visible.value=true; }
 async function save(){ saving.value=true; try { const body={...form}; if(editingId.value) await api.put(`/api/v1/admin/business/${editingId.value}`,body); else await api.post('/api/v1/admin/business',body); ElMessage.success('业务配置已保存'); visible.value=false; await load(); } catch(e){ ElMessage.error(e instanceof Error?e.message:'保存失败'); } finally { saving.value=false; } }
 async function toggle(row:BusinessRuntime){ const enabled=row.configuredStatus!=='ACTIVE'; let reason=''; try { const r=await ElMessageBox.prompt(`请输入${enabled?'启用':'关闭'} ${row.bizCode} 的原因`, '业务开关审计', {inputPattern:/.{2,}/,inputErrorMessage:'至少输入2个字符',type:'warning'}); reason=r.value; } catch { return; } try { await api.put(`/api/v1/admin/business/${row.bizId}/status`,null,{params:{enabled,reason}}); ElMessage.success(enabled?'业务已启用':'业务已关闭'); await load(); } catch(e){ ElMessage.error(e instanceof Error?e.message:'操作失败'); } }
 onMounted(load);
 </script>
-<style scoped>.header{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;gap:16px}.header h2{margin:0;color:#1e293b}.header p{margin:6px 0 0;color:#64748b;font-size:13px}.mb{margin-bottom:16px}</style>
+<style scoped>.header{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;gap:16px}.header h2{margin:0;color:#1e293b}.header p{margin:6px 0 0;color:#64748b;font-size:13px}.mb{margin-bottom:16px}.model-help{font-size:12px;color:#64748b;line-height:1.5;margin-top:6px}</style>

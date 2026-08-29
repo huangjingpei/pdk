@@ -15,6 +15,8 @@ public class CreateBusinessDTO {
     private String description;
     @NotBlank @Pattern(regexp = "SELF_SERVICE|ADMIN_ONLY")
     private String registrationMode;
+    @NotBlank @Pattern(regexp = "USER_SUBSCRIPTION|DEVICE_LICENSE")
+    private String authorizationMode = "USER_SUBSCRIPTION";
     private Boolean trialEnabled = false;
     @PositiveOrZero private Integer trialDurationHours = 0;
     @PositiveOrZero private Integer trialAccountCount = 0;

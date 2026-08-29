@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS `pdk_business` (
     `biz_name` VARCHAR(64) NOT NULL,
     `description` VARCHAR(255) DEFAULT NULL,
     `registration_mode` VARCHAR(20) NOT NULL DEFAULT 'ADMIN_ONLY' COMMENT 'SELF_SERVICE, ADMIN_ONLY',
+    `authorization_mode` VARCHAR(24) NOT NULL DEFAULT 'USER_SUBSCRIPTION' COMMENT 'USER_SUBSCRIPTION, DEVICE_LICENSE',
     `trial_enabled` TINYINT(1) NOT NULL DEFAULT 0,
     `trial_duration_hours` INT NOT NULL DEFAULT 0,
     `trial_account_count` INT NOT NULL DEFAULT 0,
@@ -22,12 +23,12 @@ CREATE TABLE IF NOT EXISTS `pdk_business` (
     UNIQUE KEY `uk_business_code` (`biz_code`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='业务主数据与运行策略';
 
-INSERT INTO `pdk_business` (`id`, `app_id`, `biz_code`, `biz_name`, `description`, `registration_mode`,
+INSERT INTO `pdk_business` (`id`, `app_id`, `biz_code`, `biz_name`, `description`, `registration_mode`, `authorization_mode`,
  `trial_enabled`, `trial_duration_hours`, `trial_account_count`, `trial_calls_per_account`,
  `force_initial_password_change`, `status`) VALUES
-(1, 1, 'PDD', '拼多多业务', '拼多多账号与下单资源服务', 'SELF_SERVICE', 1, 24, 1, 20, 0, 'ACTIVE'),
-(2, 2, 'ZHIBO_AI', '直播 AI', '直播智能内容生成能力；与直播矩阵共用 zhibo 聚合实现', 'ADMIN_ONLY', 0, 0, 0, 0, 1, 'DISABLED'),
-(3, 3, 'ZHIBO_LIVE', '直播矩阵', '直播场控与账号能力；与直播 AI 共用 zhibo 聚合实现', 'ADMIN_ONLY', 0, 0, 0, 0, 1, 'DISABLED')
+(1, 1, 'PDD', '拼多多业务', '拼多多账号与下单资源服务', 'SELF_SERVICE', 'USER_SUBSCRIPTION', 1, 24, 1, 20, 0, 'ACTIVE'),
+(2, 2, 'ZHIBO_AI', '直播 AI', '直播智能内容生成能力；与直播矩阵共用 zhibo 聚合实现', 'ADMIN_ONLY', 'USER_SUBSCRIPTION', 0, 0, 0, 0, 1, 'DISABLED'),
+(3, 3, 'ZHIBO_LIVE', '直播矩阵', '直播场控与账号能力；与直播 AI 共用 zhibo 聚合实现', 'ADMIN_ONLY', 'DEVICE_LICENSE', 0, 0, 0, 0, 1, 'DISABLED')
 ON DUPLICATE KEY UPDATE `biz_name` = VALUES(`biz_name`), `description` = VALUES(`description`);
 
 
@@ -52,22 +53,49 @@ CREATE TABLE IF NOT EXISTS `pdk_user` (
     INDEX `idx_user_biz_status` (`biz_id`, `status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户主表';
 
+CREATE TABLE IF NOT EXISTS `pdk_login_log` (
+    `id` BIGINT AUTO_INCREMENT PRIMARY KEY,
+    `biz_id` BIGINT NULL,
+    `actor_type` VARCHAR(10) NOT NULL COMMENT 'CLIENT/ADMIN',
+    `actor_id` BIGINT NULL,
+    `actor_account` VARCHAR(50) NOT NULL,
+    `event_type` VARCHAR(30) NOT NULL,
+    `result` VARCHAR(10) NOT NULL,
+    `fail_reason` VARCHAR(200) NULL,
+    `ip_address` VARCHAR(64) NULL,
+    `device_id` VARCHAR(200) NULL,
+    `user_device_id` BIGINT NULL,
+    `device_license_id` BIGINT NULL,
+    `license_status` VARCHAR(20) NULL,
+    `license_expire_at` DATETIME NULL,
+    `user_agent` VARCHAR(500) NULL,
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX `idx_login_actor` (`actor_type`, `actor_id`, `created_at`),
+    INDEX `idx_login_account` (`actor_account`, `created_at`),
+    INDEX `idx_login_biz` (`biz_id`, `created_at`),
+    INDEX `idx_login_license` (`biz_id`, `device_license_id`, `created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='登录、设备和许可证安全审计';
+
 -- 2. 卡密凭证表 (纯生命周期与卡密状态)
 CREATE TABLE IF NOT EXISTS `pdk_card_key` (
     `id` BIGINT AUTO_INCREMENT PRIMARY KEY COMMENT '卡密ID',
     `biz_id` BIGINT NOT NULL DEFAULT 1 COMMENT '所属业务',
     `card_key` VARCHAR(64) NOT NULL COMMENT '业务内唯一卡密序列号',
     `package_id` INT NOT NULL COMMENT '绑定套餐模版ID',
-    `status` VARCHAR(20) NOT NULL DEFAULT 'UNUSED' COMMENT '状态: UNUSED(待售), ACTIVATED(已激活), VOID(作废)',
+    `status` VARCHAR(20) NOT NULL DEFAULT 'UNUSED' COMMENT 'UNUSED(库存), ASSIGNED(已分配), ACTIVATED(已绑设备), VOID(作废)',
     `generated_by_admin` VARCHAR(64) NOT NULL COMMENT '制卡管理员或代理商账号',
     `agent_id` BIGINT DEFAULT NULL COMMENT '所属代理商ID',
+    `assigned_user_id` BIGINT DEFAULT NULL COMMENT '预分配用户ID（设备许可证模式）',
+    `assigned_phone` VARCHAR(20) DEFAULT NULL COMMENT '预分配手机号快照',
+    `assigned_at` DATETIME DEFAULT NULL COMMENT '预分配时间',
     `activated_by_phone` VARCHAR(20) DEFAULT NULL COMMENT '激活绑定的用户手机号',
     `activated_by_user_id` BIGINT DEFAULT NULL COMMENT '激活用户ID',
     `activated_at` DATETIME DEFAULT NULL COMMENT '激活核销时间',
     `activated_device_id` VARCHAR(128) DEFAULT NULL COMMENT '核销时绑定的设备UUID',
     `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '制卡时间',
     UNIQUE KEY `uk_card_biz_key` (`biz_id`, `card_key`),
-    INDEX `idx_card_biz_status` (`biz_id`, `status`)
+    INDEX `idx_card_biz_status` (`biz_id`, `status`),
+    INDEX `idx_card_assigned_user` (`biz_id`, `assigned_user_id`, `status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='卡密凭证表';
 
 -- 3. 财务独立实收流水表 (与卡密物理拆分)
@@ -84,7 +112,7 @@ CREATE TABLE IF NOT EXISTS `pdk_financial_income` (
     `face_value` DECIMAL(10,2) NOT NULL COMMENT '官方标价面值',
     `amount` DECIMAL(10,2) NOT NULL COMMENT '实际记账收入金额',
     `discount_amount` DECIMAL(10,2) NOT NULL DEFAULT 0.00 COMMENT '优惠让利金额',
-    `order_type` VARCHAR(30) NOT NULL COMMENT '类型: NORMAL_SALE(正价售卖), DISCOUNT_SALE(折价销售), GIFT_FREE(商务赠送)',
+    `order_type` VARCHAR(30) NOT NULL COMMENT '类型: NORMAL_SALE(正价售卖), DISCOUNT_SALE(折价销售), GIFT_FREE(商务赠送), RENEWAL(续费)',
     `payment_channel` VARCHAR(30) NOT NULL COMMENT '支付通道: ALIPAY, WECHAT_PAY, BANK_TRANSFER, OFFLINE',
     `payment_txn_no` VARCHAR(128) DEFAULT NULL COMMENT '外部第三方支付流水号',
     `audit_admin` VARCHAR(64) NOT NULL COMMENT '审核/制卡操作人',
@@ -332,11 +360,81 @@ CREATE TABLE IF NOT EXISTS `pdk_user_referral` (
     INDEX `idx_referral_partner` (`biz_id`, `partner_user_id`, `created_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='客户注册渠道归属';
 
--- 16. ZHIBO_LIVE MediaMTX 推流会话。票据只保存 SHA-256；活动用户生成列保证单用户单流。
+-- 16. 多设备授权：设备是登录终端，许可证是一张卡对应的独立授权席位。
+CREATE TABLE IF NOT EXISTS `pdk_user_device` (
+    `id` BIGINT AUTO_INCREMENT PRIMARY KEY,
+    `biz_id` BIGINT NOT NULL,
+    `user_id` BIGINT NOT NULL,
+    `device_id` VARCHAR(128) NOT NULL,
+    `device_id_hash` CHAR(64) NOT NULL,
+    `device_name` VARCHAR(128) DEFAULT NULL,
+    `platform` VARCHAR(32) DEFAULT NULL,
+    `client_version` VARCHAR(32) DEFAULT NULL,
+    `status` VARCHAR(20) NOT NULL DEFAULT 'ACTIVE' COMMENT 'ACTIVE/UNBOUND/BLOCKED',
+    `first_bound_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `last_login_at` DATETIME DEFAULT NULL,
+    `last_seen_at` DATETIME DEFAULT NULL,
+    `unbound_at` DATETIME DEFAULT NULL,
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY `uk_user_device` (`biz_id`, `user_id`, `device_id_hash`),
+    INDEX `idx_device_user_status` (`biz_id`, `user_id`, `status`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户设备；DEVICE_LICENSE 业务允许一用户多设备';
+
+CREATE TABLE IF NOT EXISTS `pdk_device_license` (
+    `id` BIGINT AUTO_INCREMENT PRIMARY KEY,
+    `biz_id` BIGINT NOT NULL,
+    `user_id` BIGINT NOT NULL,
+    `card_key_id` BIGINT NOT NULL,
+    `user_device_id` BIGINT DEFAULT NULL,
+    `package_id` BIGINT NOT NULL,
+    `package_name_snapshot` VARCHAR(64) NOT NULL,
+    `status` VARCHAR(20) NOT NULL DEFAULT 'UNBOUND' COMMENT 'UNBOUND/ACTIVE/EXPIRED/SUSPENDED/REVOKED',
+    `activated_at` DATETIME DEFAULT NULL,
+    `effective_at` DATETIME DEFAULT NULL,
+    `expire_at` DATETIME DEFAULT NULL,
+    `remaining_calls` INT NOT NULL DEFAULT 0,
+    `total_calls` INT NOT NULL DEFAULT 0,
+    `last_used_at` DATETIME DEFAULT NULL,
+    `version` INT NOT NULL DEFAULT 0,
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    `active_device_guard` BIGINT GENERATED ALWAYS AS (
+        CASE WHEN `status` IN ('ACTIVE','SUSPENDED') THEN `user_device_id` ELSE NULL END
+    ) STORED,
+    UNIQUE KEY `uk_license_card` (`card_key_id`),
+    UNIQUE KEY `uk_license_active_device` (`biz_id`, `active_device_guard`),
+    INDEX `idx_license_user_status` (`biz_id`, `user_id`, `status`, `expire_at`),
+    INDEX `idx_license_expiry` (`status`, `expire_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='一张卡一个设备许可证，独立期限和次数';
+
+CREATE TABLE IF NOT EXISTS `pdk_license_renewal` (
+    `id` BIGINT AUTO_INCREMENT PRIMARY KEY,
+    `biz_id` BIGINT NOT NULL,
+    `license_id` BIGINT NOT NULL,
+    `card_key_id` BIGINT NOT NULL,
+    `user_id` BIGINT NOT NULL,
+    `renewal_order_no` VARCHAR(64) NOT NULL,
+    `before_expire_at` DATETIME DEFAULT NULL,
+    `duration_hours` INT NOT NULL,
+    `after_expire_at` DATETIME NOT NULL,
+    `added_calls` INT NOT NULL DEFAULT 0,
+    `amount` DECIMAL(10,2) NOT NULL DEFAULT 0,
+    `payment_channel` VARCHAR(30) NOT NULL DEFAULT 'OFFLINE',
+    `operator_id` VARCHAR(64) NOT NULL,
+    `remark` VARCHAR(255) DEFAULT NULL,
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY `uk_license_renewal_order` (`renewal_order_no`),
+    INDEX `idx_license_renewal` (`biz_id`, `license_id`, `created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='设备许可证续费历史；原卡不变，每次续费新增记录';
+
+-- 17. ZHIBO_LIVE MediaMTX 推流会话。票据只保存 SHA-256；活动许可证生成列保证单席位单流。
 CREATE TABLE IF NOT EXISTS `pdk_live_stream_session` (
     `id` BIGINT AUTO_INCREMENT PRIMARY KEY,
     `biz_id` BIGINT NOT NULL COMMENT '固定归属 ZHIBO_LIVE 业务',
     `user_id` BIGINT NOT NULL,
+    `user_device_id` BIGINT DEFAULT NULL,
+    `device_license_id` BIGINT DEFAULT NULL,
     `stream_session_no` VARCHAR(48) NOT NULL,
     `client_request_id` VARCHAR(64) NOT NULL,
     `media_node_code` VARCHAR(64) NOT NULL,
@@ -357,15 +455,17 @@ CREATE TABLE IF NOT EXISTS `pdk_live_stream_session` (
     `end_reason` VARCHAR(64) DEFAULT NULL,
     `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    `active_user_guard` BIGINT GENERATED ALWAYS AS (
-        CASE WHEN `status` IN ('ISSUED','AUTHORIZED','LIVE','KICK_REQUESTED') THEN `user_id` ELSE NULL END
+    `active_subject_guard` VARCHAR(80) GENERATED ALWAYS AS (
+        CASE WHEN `status` IN ('ISSUED','AUTHORIZED','LIVE','KICK_REQUESTED')
+             THEN CONCAT(`user_id`, ':', IFNULL(`device_license_id`, 0)) ELSE NULL END
     ) STORED,
     UNIQUE KEY `uk_live_session_no` (`stream_session_no`),
     UNIQUE KEY `uk_live_ticket_hash` (`ticket_hash`),
     UNIQUE KEY `uk_live_client_request` (`biz_id`, `user_id`, `client_request_id`),
-    UNIQUE KEY `uk_live_active_user` (`biz_id`, `active_user_guard`),
+    UNIQUE KEY `uk_live_active_subject` (`biz_id`, `active_subject_guard`),
     UNIQUE KEY `uk_live_mediamtx_conn` (`media_node_code`, `mediamtx_connection_id`),
     INDEX `idx_live_user_status` (`biz_id`, `user_id`, `status`, `created_at`),
+    INDEX `idx_live_license_status` (`biz_id`, `device_license_id`, `status`, `created_at`),
     INDEX `idx_live_ticket_expire` (`status`, `ticket_expires_at`),
     INDEX `idx_live_path` (`path`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='ZHIBO_LIVE 推流会话与短效票据';

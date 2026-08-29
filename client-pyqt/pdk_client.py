@@ -321,6 +321,9 @@ class PdkApiClient:
         })
         if self.is_ok(body):
             data = body.get("data") or {}
+            if data.get("licenseRequired"):
+                self.session.token_value = ""
+                return body
             self.session.token_name = data.get("tokenName", "satoken")
             self.session.token_value = data.get("tokenValue", "")
             self.session.phone = phone
@@ -331,13 +334,20 @@ class PdkApiClient:
             self.session.password = password
         return body
 
-    def login(self, phone: str, password: str, device_id: str) -> dict[str, Any]:
-        body = self.request("POST", "/api/v1/client/auth/login", json={
+    def login(self, phone: str, password: str, device_id: str, card_key: str = "",
+              device_name: str = "", client_version: str = "2.0.0") -> dict[str, Any]:
+        payload = {
             "appId": self.app_id,
             "phone": phone,
             "password": password,
             "deviceId": device_id,
-        })
+            "deviceName": device_name or platform.node(),
+            "platform": platform.system(),
+            "clientVersion": client_version,
+        }
+        if card_key.strip():
+            payload["cardKey"] = card_key.strip()
+        body = self.request("POST", "/api/v1/client/auth/login", json=payload)
         if self.is_ok(body):
             data = body.get("data") or {}
             self.session.token_name = data.get("tokenName", "satoken")
@@ -359,8 +369,8 @@ class PdkApiClient:
     def unbind_device(self) -> dict[str, Any]:
         body = self.request("POST", "/api/v1/client/auth/unbind-device", authenticated=True)
         if self.is_ok(body):
-            # 方案A：device_id 为账号级稳定标识，解绑仅清登录态，保留 device_id
-            # （与服务端不再置空 user.device_id 的语义一致），下次登录复用同一标识
+            # 服务端会清空账号设备绑定并注销会话。本地安装实例仍保留自己的稳定 device_id；
+            # 若用户在本机再次登录，它会重新绑定本机；换电脑登录则绑定新电脑的 device_id。
             self.session.token_value = ""
         return body
 
@@ -416,6 +426,21 @@ class PdkApiClient:
 
     def card_list(self) -> dict[str, Any]:
         return self.request("GET", "/api/v1/client/account/card", authenticated=True)
+
+    def current_device_license(self) -> dict[str, Any]:
+        return self.request("GET", "/api/v1/client/device-license/current", authenticated=True)
+
+    def device_licenses(self) -> dict[str, Any]:
+        return self.request("GET", "/api/v1/client/device-license/devices", authenticated=True)
+
+    def device_license_renewals(self) -> dict[str, Any]:
+        return self.request("GET", "/api/v1/client/device-license/renewal-history", authenticated=True)
+
+    def unbind_device_license(self) -> dict[str, Any]:
+        body = self.request("POST", "/api/v1/client/device-license/unbind", authenticated=True)
+        if self.is_ok(body):
+            self.session.token_value = ""
+        return body
 
     # ------------------------------------------------------------------ ZHIBO_LIVE 推流
     def create_live_publish_ticket(

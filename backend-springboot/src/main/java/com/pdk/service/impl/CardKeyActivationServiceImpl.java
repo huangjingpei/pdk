@@ -39,6 +39,9 @@ public class CardKeyActivationServiceImpl implements ICardKeyActivationService {
     @Override
     @Transactional(rollbackFor = Exception.class, isolation = Isolation.READ_COMMITTED, propagation = Propagation.REQUIRED)
     public ActivationResultVO activateCardKeyAtomic(ActivateCardDTO dto, BusinessContext business) {
+        if (business.usesDeviceLicense()) {
+            throw new BusinessException(40008, "当前业务使用设备许可证；请在登录接口携带卡密完成设备绑定");
+        }
         log.info("开始处理卡密核销原子事务: cardKey={}, phone={}, deviceId={}", dto.getCardKey(), dto.getUserPhone(), dto.getDeviceId());
 
         // 1. 悲观行锁锁定卡密记录

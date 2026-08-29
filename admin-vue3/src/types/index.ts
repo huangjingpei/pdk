@@ -10,7 +10,7 @@ export interface FinancialIncome {
   faceValue: number;
   amount: number;
   discountAmount: number;
-  orderType: 'NORMAL_SALE' | 'DISCOUNT_SALE' | 'GIFT_FREE';
+  orderType: 'NORMAL_SALE' | 'DISCOUNT_SALE' | 'GIFT_FREE' | 'RENEWAL';
   paymentChannel: 'ALIPAY' | 'WECHAT_PAY' | 'BANK_TRANSFER' | 'OFFLINE';
   paymentTxnNo?: string;
   auditAdmin: string;
@@ -37,7 +37,7 @@ export interface CardKeyItem {
   bizId: number;
   cardKey: string;
   packageId: number;
-  status: 'UNUSED' | 'ACTIVATED' | 'VOID';
+  status: 'UNUSED' | 'ASSIGNED' | 'ACTIVATED' | 'VOID';
   generatedByAdmin: string;
   agentId?: number;
   activatedByPhone?: string;
@@ -185,6 +185,7 @@ export interface BusinessRuntime {
   businessName: string;
   businessDescription?: string;
   registrationMode: 'SELF_SERVICE' | 'ADMIN_ONLY';
+  authorizationMode: 'USER_SUBSCRIPTION' | 'DEVICE_LICENSE';
   trialEnabled: boolean;
   trialDurationHours: number;
   trialAccountCount: number;
@@ -201,4 +202,25 @@ export interface BusinessRuntime {
   packageCount?: number;
   resourceCount?: number;
   availableResourceCount?: number;
+}
+
+export interface DeviceLicenseItem {
+  licenseId: number;
+  bizId: number;
+  userId: number;
+  cardKeyId: number;
+  cardKeyMasked: string;
+  userDeviceId?: number;
+  deviceId?: string;
+  deviceName?: string;
+  status: 'UNBOUND' | 'ACTIVE' | 'EXPIRED' | 'SUSPENDED' | 'REVOKED';
+  packageId: number;
+  packageName: string;
+  activatedAt?: string;
+  effectiveAt?: string;
+  expireAt?: string;
+  remainingCalls: number;
+  totalCalls: number;
+  lastLoginAt?: string;
+  serverTime: string;
 }

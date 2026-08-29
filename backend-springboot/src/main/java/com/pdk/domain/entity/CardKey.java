@@ -13,9 +13,12 @@ public class CardKey implements Serializable {
     private Long bizId;
     private String cardKey;
     private Integer packageId;
-    private String status; // UNUSED, ACTIVATED, VOID
+    private String status; // UNUSED, ASSIGNED, ACTIVATED, VOID
     private String generatedByAdmin;
     private Long agentId;
+    private Long assignedUserId;
+    private String assignedPhone;
+    private LocalDateTime assignedAt;
     private String activatedByPhone;
     private Long activatedByUserId;
     private LocalDateTime activatedAt;

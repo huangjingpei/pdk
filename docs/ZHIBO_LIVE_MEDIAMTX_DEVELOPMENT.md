@@ -1,5 +1,7 @@
 # ZHIBO_LIVE MediaMTX 开发说明
 
+客户端接入开发者请先阅读 [ZHIBO_LIVE 客户端接入指南](./ZHIBO_LIVE_CLIENT_INTEGRATION_GUIDE.md)。
+
 ## 1. 已实现目标
 
 本次实现覆盖 `appId=3 / bizId=3 / ZHIBO_LIVE` 的推流准入闭环：

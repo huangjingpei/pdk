@@ -23,6 +23,11 @@ class State(IntEnum):
     ResultReporting = 13
     Kicked = 14
     Error = 15
+    DeviceLicenseRequired = 16
+    LicenseActive = 17
+    LicenseExpired = 18
+    LicenseSuspended = 19
+    LicenseRevoked = 20
 
 
 class Event(IntEnum):
@@ -51,5 +56,14 @@ class ResultCode:
     DEVICE_KICK_OUT = 40103
     SUBSCRIPTION_EXPIRED = 40301
     QUOTA_EXHAUSTED = 40302
+    DEVICE_LICENSE_REQUIRED = 40380
+    DEVICE_LICENSE_EXPIRED = 40381
+    CARD_NOT_ASSIGNED_TO_USER = 40382
+    CARD_BOUND_OTHER_DEVICE = 40383
+    DEVICE_LICENSE_UNAVAILABLE = 40384
+    DEVICE_LICENSE_MISSING = 40385
+    DEVICE_ALREADY_HAS_LICENSE = 40980
+    LICENSE_BIND_CONFLICT = 40981
+    RENEWAL_IDEMPOTENCY_CONFLICT = 40982
     NO_AVAILABLE_TOKEN = 50301
     NETWORK_ERROR = 0

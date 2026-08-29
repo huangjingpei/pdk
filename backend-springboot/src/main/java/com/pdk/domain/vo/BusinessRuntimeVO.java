@@ -15,6 +15,7 @@ public class BusinessRuntimeVO {
     private String businessName;
     private String businessDescription;
     private String registrationMode;
+    private String authorizationMode;
     private Boolean trialEnabled;
     private Integer trialDurationHours;
     private Integer trialAccountCount;

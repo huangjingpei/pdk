@@ -21,6 +21,8 @@ import com.pdk.service.LoginLogService;
 import com.pdk.service.SmsCodeService;
 import com.pdk.service.AccountAssignmentService;
 import com.pdk.service.InvitationService;
+import com.pdk.service.DeviceLicenseService;
+import com.pdk.service.ClientLicenseContext;
 import com.pdk.domain.entity.InvitationCode;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
@@ -45,6 +47,7 @@ public class ClientAuthController {
     private final InvitationService invitationService;
     private final BusinessRequestResolver businessRequestResolver;
     private final LoginLogService loginLogService;
+    private final DeviceLicenseService deviceLicenseService;
     @Qualifier("clientStpLogic")
     private final StpLogic clientStpLogic;
 
@@ -108,15 +111,25 @@ public class ClientAuthController {
         invitationService.bind(business.bizId(), user.getId(), invitation);
         boolean resourceAllocated = !business.trialEnabled() || assignmentService.allocateTrial(user,
                 business.trialAccountCount(), business.trialCallsPerAccount());
-        clientStpLogic.login(user.getId());
-        deviceBindingService.bind(user.getBizId(), user.getId(), user.getDeviceId());
-        Map<String, Object> result = payload(user, credential, business);
+        Map<String, Object> result;
+        if (business.usesDeviceLicense()) {
+            result = new LinkedHashMap<>();
+            result.put("bizId", business.bizId()); result.put("appId", business.appId());
+            result.put("bizCode", business.bizCode()); result.put("phone", user.getPhone());
+            result.put("authorizationMode", business.authorizationMode()); result.put("licenseRequired", true);
+        } else {
+            clientStpLogic.login(user.getId());
+            deviceBindingService.bind(user.getBizId(), user.getId(), user.getDeviceId());
+            result = payload(user, credential, business);
+        }
         result.put("resourceAllocated", resourceAllocated);
         result.put("resourceMessage", resourceAllocated
                 ? "试用小号已分配"
                 : "注册和试用权益已开通，当前小号库存不足，请联系平台补充后再领取资源");
         result.put("invitedByPartner", invitation == null ? null : invitation.getOwnerUserId());
-        return CommonResult.success(result, resourceAllocated
+        return CommonResult.success(result, business.usesDeviceLicense()
+                ? "注册成功；当前电脑需要使用分配给您的卡密登录并绑定许可证"
+                : resourceAllocated
                 ? "注册成功，免费试用已开通"
                 : "注册成功，免费试用已开通；小号资源等待平台补充");
     }
@@ -145,21 +158,32 @@ public class ClientAuthController {
                     "手机号或密码错误", dto.getDeviceId(), request);
             throw new BusinessException(40105, "手机号或密码错误");
         }
-        if (user.getDeviceId() != null && !user.getDeviceId().equals(dto.getDeviceId())) {
+        ClientLicenseContext licenseContext = null;
+        if (business.usesDeviceLicense()) {
+            try {
+                licenseContext = deviceLicenseService.authenticateAndBind(business, user, dto);
+            } catch (BusinessException e) {
+                loginLogService.recordClientFailure(business.bizId(), user.getId(), dto.getPhone(),
+                        "许可证登录失败[" + e.getCode() + "]: " + e.getMessage(), dto.getDeviceId(), request);
+                throw e;
+            }
+        } else if (user.getDeviceId() != null && !user.getDeviceId().equals(dto.getDeviceId())) {
             loginLogService.recordClientFailure(business.bizId(), user.getId(), dto.getPhone(),
                     "设备不匹配，账号已绑定其他电脑", dto.getDeviceId(), request);
             throw new BusinessException(40103, "账号已绑定其他电脑，请在原电脑解绑或联系管理员");
         }
-        if (user.getDeviceId() == null) {
+        if (!business.usesDeviceLicense() && user.getDeviceId() == null) {
             user.setDeviceId(dto.getDeviceId());
             userMapper.updateById(user);
         }
 
-        clientStpLogic.login(user.getId());
-        deviceBindingService.bind(user.getBizId(), user.getId(), dto.getDeviceId());
+        clientStpLogic.login(licenseContext == null ? user.getId() : licenseContext.loginId());
+        if (!business.usesDeviceLicense()) deviceBindingService.bind(user.getBizId(), user.getId(), dto.getDeviceId());
         loginLogService.recordClientSuccess(business.bizId(), user.getId(), user.getPhone(),
-                dto.getDeviceId(), request);
-        return CommonResult.success(payload(user, credential, business), "客户端登录成功");
+                dto.getDeviceId(), licenseContext, request);
+        Map<String, Object> result = payload(user, credential, business);
+        if (licenseContext != null) result.put("deviceLicense", deviceLicenseService.view(licenseContext.license()));
+        return CommonResult.success(result, "客户端登录成功");
     }
 
     @PostMapping("/change-password")
@@ -181,6 +205,8 @@ public class ClientAuthController {
         credential.setPasswordHash(passwordEncoder.encode(dto.getNewPassword()));
         credential.setMustChangePassword(0);
         credentialMapper.updateById(credential);
+        clientStpLogic.kickout(user.getId());
+        deviceLicenseService.kickUserLicenses(user.getBizId(), user.getId(), "PASSWORD_CHANGED");
         loginLogService.record(business.bizId(), "CLIENT", user.getId(), user.getPhone(),
                 "PASSWORD_RESET", "SUCCESS", "用户自助修改密码", null, request);
         return CommonResult.success("密码修改成功，请使用新密码登录");
@@ -212,6 +238,7 @@ public class ClientAuthController {
         credentialMapper.updateById(credential);
         // 重置成功后吊销该用户全部在线会话，强制用新密码重新登录，避免旧会话残留
         clientStpLogic.kickout(user.getId());
+        deviceLicenseService.kickUserLicenses(user.getBizId(), user.getId(), "PASSWORD_RESET");
         loginLogService.record(business.bizId(), "CLIENT", user.getId(), user.getPhone(),
                 "PASSWORD_RESET", "SUCCESS", "短信验证码自助找回密码", null, request);
         return CommonResult.success("密码已重置，请使用新密码登录");
@@ -220,7 +247,7 @@ public class ClientAuthController {
     @PostMapping("/logout")
     public CommonResult<String> logout(HttpServletRequest request) {
         User user = (User) request.getAttribute("pdkClientUser");
-        deviceBindingService.unbind(user.getBizId(), user.getId());
+        if (request.getAttribute("pdkClientLicense") == null) deviceBindingService.unbind(user.getBizId(), user.getId());
         clientStpLogic.logout();
         return CommonResult.success("已注销当前会话");
     }
@@ -228,6 +255,15 @@ public class ClientAuthController {
     @PostMapping("/unbind-device")
     public CommonResult<String> unbindDevice(HttpServletRequest request) {
         User user = (User) request.getAttribute("pdkClientUser");
+        Object licenseValue = request.getAttribute("pdkClientLicense");
+        if (licenseValue instanceof com.pdk.domain.entity.DeviceLicense license) {
+            var device = (com.pdk.domain.entity.UserDevice) request.getAttribute("pdkClientDevice");
+            ClientLicenseContext context = new ClientLicenseContext(license, device);
+            deviceLicenseService.unbind(license.getId(), "CLIENT_UNBIND");
+            loginLogService.recordLicenseAction(user.getBizId(), user.getId(), user.getPhone(),
+                    "DEVICE_UNBIND", context, "客户端主动解绑", request);
+            return CommonResult.success("当前许可证已解绑，可在新电脑输入原卡密继续使用；有效期不会暂停");
+        }
         userMapper.update(null, new com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper<User>()
                 .eq("id", user.getId())
                 .eq("biz_id", user.getBizId())
@@ -244,6 +280,7 @@ public class ClientAuthController {
         data.put("bizCode", business.bizCode());
         data.put("businessName", business.businessName());
         data.put("businessDescription", business.businessDescription());
+        data.put("authorizationMode", business.authorizationMode());
         data.put("tokenName", clientStpLogic.getTokenName());
         data.put("tokenValue", clientStpLogic.getTokenValue());
         data.put("phone", user.getPhone());

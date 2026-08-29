@@ -66,6 +66,11 @@
           <span>用户管理</span>
         </el-menu-item>
 
+        <el-menu-item v-if="hasPermission('card:view')" index="/license/manager">
+          <el-icon><Key /></el-icon>
+          <span>设备许可证</span>
+        </el-menu-item>
+
         <el-menu-item v-if="hasPermission('dispatch:view')" index="/testing/workbench">
           <el-icon><Aim /></el-icon>
           <span>测试平台</span>

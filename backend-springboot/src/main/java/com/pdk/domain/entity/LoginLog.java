@@ -43,6 +43,10 @@ public class LoginLog {
 
     /** 客户端登录携带的设备指纹。 */
     private String deviceId;
+    private Long userDeviceId;
+    private Long deviceLicenseId;
+    private String licenseStatus;
+    private LocalDateTime licenseExpireAt;
 
     private String userAgent;
 

@@ -20,4 +20,16 @@ public class ClientLoginDTO {
     @NotBlank(message = "登录密码不能为空")
     @Size(min = 8, max = 64, message = "密码长度必须为8到64位")
     private String password;
+
+    @Size(max = 64, message = "卡密长度不能超过64位")
+    private String cardKey;
+
+    @Size(max = 128, message = "设备名称不能超过128位")
+    private String deviceName;
+
+    @Size(max = 32, message = "客户端版本不能超过32位")
+    private String clientVersion;
+
+    @Size(max = 32, message = "设备平台不能超过32位")
+    private String platform;
 }

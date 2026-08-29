@@ -91,13 +91,20 @@ curl -fsS http://127.0.0.1:8080/actuator/health
 
 数据库账号首次建库时需要 `CREATE` 权限；如果生产环境禁止应用账号建库，应由 DBA 预先创建空的 `pdk_biz_db` 并授予该库全部 DDL/DML 权限。当前基线不包含旧表 ALTER：已有旧结构时先备份并重建为空库，再启动新版本。
 
+如果启动在第 2 条种子 SQL 报 `Unknown column 'authorization_mode' in 'field list'`，说明连接到的仍是旧版
+`pdk_business`，不是 Bean 或 MediaMTX 故障。确认 `DB_URL` 指向的准确库名，备份后删除该旧库并重新启动；
+空库会由上述机制完整创建。不要把 `continue-on-error` 改成 `true` 来掩盖结构不一致。
+
 当前机制适合原型与全新部署。产生必须保留的正式生产数据后，应在下一次结构变化前迁移到 Flyway/Liquibase 版本化迁移。
 
 ### IDEA 启动日志说明
 
 运行 `compile spring-boot:run` 后出现 `Started PdkApplication` 就表示后端已经启动。Maven 任务会持续占用运行窗口来承载 Web 服务，这不是卡住；停止服务时使用 IDEA 的停止按钮。
 
-项目通过 `.mvn/jvm.config`、Maven 编码属性和 Spring Boot 运行参数统一使用 UTF-8。如果控制台仍显示 `Picked up JAVA_TOOL_OPTIONS: -Dfile.encoding=GBK`，说明 IDEA 运行配置或 Windows 环境变量仍注入了 GBK；应在 IDEA 的 Maven Runner/运行配置中删除该环境变量，或改为 `-Dfile.encoding=UTF-8`。
+项目通过 `.mvn/jvm.config`、Maven 编码属性和 Spring Boot 运行参数统一使用 UTF-8，并显式约束标准输出/错误输出编码。
+如果控制台仍显示 `Picked up JAVA_TOOL_OPTIONS: -Dfile.encoding=GBK`，说明 IDEA 运行配置或 Windows 环境变量仍注入了 GBK；
+项目参数会覆盖实际运行编码，但建议仍在 IDEA 的 Maven Runner/运行配置中删除该环境变量，或改为
+`-Dfile.encoding=UTF-8 -Dsun.stdout.encoding=UTF-8 -Dsun.stderr.encoding=UTF-8`，避免 IDEA 控制台先按错误编码解码。
 
 MyBatis 默认不再逐条打印 SqlSession、JDBC 和定时清理 SQL。需要临时检查完整 SQL 时，在 IDEA 运行配置增加：
 

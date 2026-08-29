@@ -17,6 +17,7 @@ public class Business {
     private String bizName;
     private String description;
     private String registrationMode;
+    private String authorizationMode;
     private Integer trialEnabled;
     private Integer trialDurationHours;
     private Integer trialAccountCount;

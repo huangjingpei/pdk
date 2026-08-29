@@ -105,6 +105,7 @@ public class BusinessService {
                 .bizId(business.getId()).appId(business.getAppId()).bizCode(code)
                 .businessName(business.getBizName()).businessDescription(business.getDescription())
                 .registrationMode(business.getRegistrationMode())
+                .authorizationMode(business.getAuthorizationMode())
                 .trialEnabled(Integer.valueOf(1).equals(business.getTrialEnabled()))
                 .trialDurationHours(business.getTrialDurationHours())
                 .trialAccountCount(business.getTrialAccountCount())
@@ -131,6 +132,7 @@ public class BusinessService {
         business.setBizName(dto.getBizName().trim());
         business.setDescription(dto.getDescription());
         business.setRegistrationMode(dto.getRegistrationMode());
+        business.setAuthorizationMode(dto.getAuthorizationMode());
         business.setTrialEnabled(Boolean.TRUE.equals(dto.getTrialEnabled()) ? 1 : 0);
         business.setTrialDurationHours(dto.getTrialDurationHours());
         business.setTrialAccountCount(dto.getTrialAccountCount());
@@ -145,9 +147,18 @@ public class BusinessService {
     @Transactional
     public Business update(long bizId, UpdateBusinessDTO dto) {
         Business business = requireById(bizId);
+        if (!java.util.Objects.equals(business.getAuthorizationMode(), dto.getAuthorizationMode())) {
+            if ("ACTIVE".equals(business.getStatus())) {
+                throw new BusinessException(40952, "切换授权模型前必须先关闭业务");
+            }
+            if (userMapper.selectCount(new LambdaQueryWrapper<User>().eq(User::getBizId, bizId)) > 0) {
+                throw new BusinessException(40953, "该业务已有用户，不能直接切换授权模型；请新建业务或完成专项迁移");
+            }
+        }
         business.setBizName(dto.getBizName().trim());
         business.setDescription(dto.getDescription());
         business.setRegistrationMode(dto.getRegistrationMode());
+        business.setAuthorizationMode(dto.getAuthorizationMode());
         business.setTrialEnabled(Boolean.TRUE.equals(dto.getTrialEnabled()) ? 1 : 0);
         business.setTrialDurationHours(dto.getTrialDurationHours());
         business.setTrialAccountCount(dto.getTrialAccountCount());
@@ -177,6 +188,10 @@ public class BusinessService {
     }
 
     private void validateTrial(Business business) {
+        if ("DEVICE_LICENSE".equals(business.getAuthorizationMode())
+                && Integer.valueOf(1).equals(business.getTrialEnabled())) {
+            throw new BusinessException(40054, "设备许可证业务暂不支持用户级试用；请分配试用卡密许可证");
+        }
         if (Integer.valueOf(1).equals(business.getTrialEnabled())
                 && (business.getTrialDurationHours() == null || business.getTrialDurationHours() <= 0
                 || business.getTrialAccountCount() == null || business.getTrialAccountCount() <= 0

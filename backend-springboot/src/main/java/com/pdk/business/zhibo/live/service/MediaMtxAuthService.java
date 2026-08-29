@@ -7,7 +7,11 @@ import com.pdk.business.zhibo.live.dto.MediaMtxAuthRequest;
 import com.pdk.business.zhibo.live.entity.LiveStreamSession;
 import com.pdk.business.zhibo.live.mapper.LiveStreamSessionMapper;
 import com.pdk.domain.entity.User;
+import com.pdk.domain.entity.DeviceLicense;
+import com.pdk.domain.entity.UserDevice;
 import com.pdk.mapper.UserMapper;
+import com.pdk.mapper.DeviceLicenseMapper;
+import com.pdk.mapper.UserDeviceMapper;
 import com.pdk.platform.business.BusinessContext;
 import com.pdk.platform.business.BusinessService;
 import lombok.RequiredArgsConstructor;
@@ -21,14 +25,21 @@ import java.util.Set;
 
 @Slf4j
 @Service
-@RequiredArgsConstructor
+@RequiredArgsConstructor(onConstructor_ = @org.springframework.beans.factory.annotation.Autowired)
 public class MediaMtxAuthService {
     private static final Set<String> ALLOWED_STATES = Set.of("AUTHORIZED", "LIVE");
 
     private final LiveStreamSessionMapper sessionMapper;
     private final UserMapper userMapper;
+    private final DeviceLicenseMapper licenseMapper;
+    private final UserDeviceMapper deviceMapper;
     private final BusinessService businessService;
     private final MediaMtxProperties properties;
+
+    public MediaMtxAuthService(LiveStreamSessionMapper sessionMapper, UserMapper userMapper,
+                               BusinessService businessService, MediaMtxProperties properties) {
+        this(sessionMapper, userMapper, null, null, businessService, properties);
+    }
 
     @Transactional(rollbackFor = Exception.class)
     public MediaMtxAuthResult authorize(String serviceToken, MediaMtxAuthRequest request) {
@@ -73,12 +84,26 @@ public class MediaMtxAuthService {
         }
 
         User user = userMapper.selectById(session.getUserId());
+        String activeDeviceHash;
         try {
-            LiveStreamSessionService.validateEntitlement(user, session.getBizId());
+            if (session.getDeviceLicenseId() != null) {
+                DeviceLicense license = licenseMapper.selectById(session.getDeviceLicenseId());
+                UserDevice device = license == null || license.getUserDeviceId() == null
+                        ? null : deviceMapper.selectById(license.getUserDeviceId());
+                LiveStreamSessionService.validateLicenseEntitlement(user, license, device, session.getBizId());
+                if (!session.getDeviceLicenseId().equals(license.getId())
+                        || !session.getUserDeviceId().equals(device.getId())) {
+                    return denied(HttpStatus.FORBIDDEN, "LICENSE_BINDING_CHANGED", request);
+                }
+                activeDeviceHash = device.getDeviceIdHash();
+            } else {
+                LiveStreamSessionService.validateEntitlement(user, session.getBizId());
+                activeDeviceHash = LiveStreamSecurity.sha256(user.getDeviceId());
+            }
         } catch (RuntimeException e) {
             return denied(HttpStatus.FORBIDDEN, "USER_ENTITLEMENT_INVALID", request);
         }
-        if (!LiveStreamSecurity.sha256(user.getDeviceId()).equals(session.getDeviceIdHash())) {
+        if (!activeDeviceHash.equals(session.getDeviceIdHash())) {
             return denied(HttpStatus.FORBIDDEN, "DEVICE_BINDING_CHANGED", request);
         }
 

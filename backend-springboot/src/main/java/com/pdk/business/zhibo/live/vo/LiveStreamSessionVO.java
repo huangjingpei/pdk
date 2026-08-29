@@ -8,6 +8,8 @@ public record LiveStreamSessionVO(
         String streamSessionNo,
         Long bizId,
         Long userId,
+        Long userDeviceId,
+        Long deviceLicenseId,
         String path,
         String protocol,
         String status,
@@ -23,6 +25,7 @@ public record LiveStreamSessionVO(
 
     public static LiveStreamSessionVO from(LiveStreamSession session) {
         return new LiveStreamSessionVO(session.getStreamSessionNo(), session.getBizId(), session.getUserId(),
+                session.getUserDeviceId(), session.getDeviceLicenseId(),
                 session.getPath(), session.getProtocol(), session.getStatus(), session.getMediaNodeCode(),
                 session.getTicketExpiresAt(), session.getAuthorizedAt(), session.getStartedAt(),
                 session.getEndedAt(), session.getDurationSeconds(), session.getBilledUnits(),

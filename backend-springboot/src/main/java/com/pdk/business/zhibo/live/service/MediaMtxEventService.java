@@ -6,6 +6,8 @@ import com.pdk.business.zhibo.live.config.MediaMtxProperties;
 import com.pdk.business.zhibo.live.entity.LiveStreamSession;
 import com.pdk.business.zhibo.live.mapper.LiveStreamSessionMapper;
 import com.pdk.mapper.UserMapper;
+import com.pdk.mapper.DeviceLicenseMapper;
+import com.pdk.domain.entity.DeviceLicense;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -18,6 +20,7 @@ import java.time.LocalDateTime;
 public class MediaMtxEventService {
     private final LiveStreamSessionMapper sessionMapper;
     private final UserMapper userMapper;
+    private final DeviceLicenseMapper licenseMapper;
     private final MediaMtxProperties properties;
 
     public boolean trusted(String token) {
@@ -32,6 +35,16 @@ public class MediaMtxEventService {
         if ("LIVE".equals(session.getStatus())) return true;
         if (!"AUTHORIZED".equals(session.getStatus())) return false;
         LocalDateTime now = LocalDateTime.now();
+        if (session.getDeviceLicenseId() != null) {
+            int billed = licenseMapper.update(null, new LambdaUpdateWrapper<DeviceLicense>()
+                    .eq(DeviceLicense::getId, session.getDeviceLicenseId())
+                    .eq(DeviceLicense::getBizId, session.getBizId())
+                    .eq(DeviceLicense::getStatus, "ACTIVE")
+                    .gt(DeviceLicense::getExpireAt, now)
+                    .gt(DeviceLicense::getRemainingCalls, 0)
+                    .setSql("remaining_calls = remaining_calls - 1, last_used_at = NOW(), version = version + 1"));
+            if (billed != 1) throw new IllegalStateException("直播许可证次数扣减失败");
+        }
         int activated = sessionMapper.update(null, new LambdaUpdateWrapper<LiveStreamSession>()
                 .eq(LiveStreamSession::getId, session.getId())
                 .eq(LiveStreamSession::getStatus, "AUTHORIZED")
@@ -40,13 +53,21 @@ public class MediaMtxEventService {
                 .set(LiveStreamSession::getStartedAt, now)
                 .set(LiveStreamSession::getBilledUnits, 1)
                 .set(LiveStreamSession::getUpdatedAt, now));
-        if (activated != 1) return false;
+        if (activated != 1) {
+            if (session.getDeviceLicenseId() != null) throw new IllegalStateException("直播会话并发激活失败");
+            return false;
+        }
 
-        int billed = userMapper.update(null, new LambdaUpdateWrapper<com.pdk.domain.entity.User>()
-                .eq(com.pdk.domain.entity.User::getId, session.getUserId())
-                .eq(com.pdk.domain.entity.User::getBizId, session.getBizId())
-                .gt(com.pdk.domain.entity.User::getRemainingCalls, 0)
-                .setSql("remaining_calls = remaining_calls - 1"));
+        int billed;
+        if (session.getDeviceLicenseId() != null) {
+            billed = 1; // 已按 license -> session 的固定锁顺序扣减，避免与到期踢流形成反向锁死。
+        } else {
+            billed = userMapper.update(null, new LambdaUpdateWrapper<com.pdk.domain.entity.User>()
+                    .eq(com.pdk.domain.entity.User::getId, session.getUserId())
+                    .eq(com.pdk.domain.entity.User::getBizId, session.getBizId())
+                    .gt(com.pdk.domain.entity.User::getRemainingCalls, 0)
+                    .setSql("remaining_calls = remaining_calls - 1"));
+        }
         if (billed != 1) {
             // 抛异常使事务整体回滚，避免出现“会话已 LIVE 但次数未扣”或并发重复扣减。
             throw new IllegalStateException("直播次数扣减失败");
