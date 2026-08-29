@@ -5,7 +5,8 @@
       <el-button @click="loadBusinesses">刷新</el-button>
     </div>
     <el-alert type="info" :closable="false" class="mb"
-      title="PDD 的用户级套餐不在此页管理；这里只显示授权模型为 DEVICE_LICENSE 的业务。解绑不会暂停有效期，续费保留原卡密。" />
+      title="这里只显示授权模型为 DEVICE_LICENSE 的业务；用户级套餐业务请去「激活码池」。解绑不会暂停有效期，续费保留原卡密。"
+      description="到期时间不是分配时确定的，而是客户第一次用这张卡密登录并绑定电脑的那一刻才开始计算——所以刚分配完显示「未激活 · 暂不计时」是正常的。注意：对尚未激活的许可证续费，时长会从续费时刻起算。" />
     <el-card shadow="never" class="mb">
       <div class="filters">
         <el-select v-model="bizId" placeholder="选择许可证业务" style="width:220px" @change="loadUsers">
@@ -32,7 +33,12 @@
         <el-table-column prop="deviceName" label="设备名称" min-width="130" />
         <el-table-column prop="deviceId" label="设备UUID" min-width="200" show-overflow-tooltip />
         <el-table-column prop="activatedAt" label="激活时间" width="175" />
-        <el-table-column prop="expireAt" label="独立到期时间" width="175" />
+        <el-table-column label="独立到期时间" width="185">
+          <template #default="s">
+            <span v-if="s.row.expireAt">{{ s.row.expireAt }}</span>
+            <span v-else class="text-slate-400">未激活 · 暂不计时</span>
+          </template>
+        </el-table-column>
         <el-table-column prop="remainingCalls" label="剩余次数" width="95" />
         <el-table-column label="操作" width="300" fixed="right">
           <template #default="s">
@@ -68,6 +74,8 @@
 
     <el-dialog v-model="renewVisible" :title="batchRenewMode ? `批量续费 ${selectedRows.length} 个许可证` : '原卡密续费'" width="500px">
       <el-form label-width="110px">
+        <el-alert v-if="!batchRenewMode && !renewTarget?.expireAt" type="warning" :closable="false" class="mb-3"
+          title="该许可证尚未激活，续费时长会从当前时刻起算，客户还未用就已开始消耗有效期。" />
         <template v-if="!batchRenewMode">
           <el-form-item label="卡密">{{ renewTarget?.cardKeyMasked }}</el-form-item>
           <el-form-item label="当前到期">{{ renewTarget?.expireAt || '尚未激活' }}</el-form-item>

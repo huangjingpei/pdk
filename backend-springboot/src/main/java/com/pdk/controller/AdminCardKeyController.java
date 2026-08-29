@@ -3,6 +3,7 @@ package com.pdk.controller;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.pdk.common.api.CommonResult;
+import com.pdk.common.exception.BusinessException;
 import com.pdk.domain.dto.CreateCardBatchDTO;
 import com.pdk.domain.entity.CardKey;
 import com.pdk.security.AdminPrincipal;
@@ -48,8 +49,14 @@ public class AdminCardKeyController {
             @Valid @RequestBody CreateCardBatchDTO dto,
             HttpServletRequest request) {
         AdminPrincipal admin = (AdminPrincipal) request.getAttribute("pdkAdminPrincipal");
-        List<String> keys = activationService.createCardKeyBatch(dto, admin);
         Long bizId = packagePlanMapper.selectById(dto.getPackageId()).getBizId();
+        // 设备许可证模式下，卡密必须与许可证成对存在且预分配给手机号。
+        // 这里裸生成的卡密没有对应许可证，客户登录后必然报 40382，等于发出去一批废卡。
+        if ("DEVICE_LICENSE".equals(businessService.requireById(bizId).getAuthorizationMode())) {
+            throw new BusinessException(40059,
+                    "该业务使用设备许可证授权模式，请到「设备许可证」页面分配卡密/席位");
+        }
+        List<String> keys = activationService.createCardKeyBatch(dto, admin);
         adminAuditService.record(admin, bizId, "GENERATE_CARD", "CARD", "BATCH-" + keys.get(0),
                 null, "{\"packageId\":" + dto.getPackageId() + ",\"count\":" + keys.size() + "}",
                 dto.getBatchRemark(), request);

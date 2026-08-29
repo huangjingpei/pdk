@@ -7,8 +7,11 @@
           管理激活码的生成、售卖与激活状态，本表与财务实收表完全解耦
         </p>
       </div>
-      <div><el-select v-model="businessFilter" clearable placeholder="全部业务" style="width:180px;margin-right:8px" @change="load"><el-option v-for="b in businesses" :key="b.bizId" :label="`${b.businessName} (${b.appId})`" :value="b.bizId" /></el-select><el-button type="primary" :icon="Key" @click="openGenerate">批量生成新激活码</el-button></div>
+      <div><el-select v-model="businessFilter" clearable placeholder="全部业务" style="width:180px;margin-right:8px" @change="load"><el-option v-for="b in businesses" :key="b.bizId" :label="`${b.businessName} (${b.appId})`" :value="b.bizId" /></el-select><el-button type="primary" :icon="Key" :disabled="isLicenseMode" @click="openGenerate">批量生成新激活码</el-button></div>
     </div>
+
+    <el-alert v-if="isLicenseMode" type="warning" :closable="false" class="mb-3"
+      title="当前业务使用「设备许可证」授权模式：卡密必须与许可证成对生成并预分配给手机号，本页只能查看、续费和作废。要发新卡请到「设备许可证」页面点「分配卡密/席位」。" />
 
     <!-- 卡密列表 -->
     <el-card shadow="never" class="border-slate-200">
@@ -27,6 +30,7 @@
         <el-table-column prop="status" label="使用状态" width="110">
           <template #default="scope">
             <el-tag v-if="scope.row.status === 'UNUSED'" type="success">待售未使用</el-tag>
+            <el-tag v-else-if="scope.row.status === 'ASSIGNED'" type="warning">已分配给客户</el-tag>
             <el-tag v-else-if="scope.row.status === 'ACTIVATED'" type="info">已激活</el-tag>
             <el-tag v-else type="danger">已作废</el-tag>
           </template>
@@ -57,7 +61,7 @@
       <el-form :model="form" label-width="100px">
         <el-form-item label="套餐模板">
           <el-select v-model="form.packageId" style="width: 100%" placeholder="请选择你在套餐模板中心建立的模板">
-            <el-option v-for="p in plans" :key="p.id" :value="p.id" :label="`${p.name} ¥${p.salePrice}`" />
+            <el-option v-for="p in generatablePlans" :key="p.id" :value="p.id" :label="`${p.name} ¥${p.salePrice}`" />
           </el-select>
         </el-form-item>
         <el-form-item label="生成数量">
@@ -82,7 +86,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue';
+import { ref, reactive, computed, onMounted } from 'vue';
 import { Key } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
 import type { CardKeyItem } from '../../types';
@@ -98,6 +102,10 @@ interface Plan { id:number; bizId:number; name:string; versionNo:number; salePri
 const plans = ref<Plan[]>([]);
 const businesses=ref<BusinessRuntime[]>([]); const businessFilter=ref<number|''>('');
 const businessName=(id:number)=>businesses.value.find(b=>b.bizId===id)?.businessName||`业务#${id}`;
+// 设备许可证模式下本页不能制卡：卡密必须带许可证且预分配给手机号，否则客户登录会报「卡密尚未生成设备许可证」
+const isLicenseMode=computed(()=>businesses.value.find(b=>b.bizId===businessFilter.value)?.authorizationMode==='DEVICE_LICENSE');
+// 选「全部业务」时套餐会跨业务混入，把许可证模式的套餐剔掉，避免选中后后端才拒绝
+const generatablePlans=computed(()=>plans.value.filter(p=>businesses.value.find(b=>b.bizId===p.bizId)?.authorizationMode!=='DEVICE_LICENSE'));
 
 const form = reactive({
   packageId: undefined as number | undefined,
