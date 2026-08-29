@@ -35,6 +35,7 @@
         <el-table-column prop="purchaser" label="经办采购人" width="110" />
         <el-table-column prop="purchasedAt" label="采购发生时间" width="170" />
       </el-table>
+      <Pagination class="mt-3" v-model:page="page" v-model:page-size="pageSize" :total="total" @change="(q) => load(q.page)" />
     </el-card>
 
     <!-- 录入对话框 -->
@@ -65,6 +66,7 @@ import { Plus } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
 import type { CompanyExpense } from '../../types';
 import { api, type ApiResult, type PageResult } from '../../api';
+import Pagination from '../../components/Pagination.vue';
 
 const dialogVisible = ref(false);
 
@@ -75,11 +77,15 @@ const form = reactive({
 });
 
 const tableData = ref<CompanyExpense[]>([]);
+const total = ref(0);
+const page = ref(1);
+const pageSize = ref(20);
 
-async function load(): Promise<void> {
+async function load(p: number = 1): Promise<void> {
   try {
-    const response = await api.get<ApiResult<PageResult<CompanyExpense>>>('/api/v1/admin/finance/expenses', { params: { size: 100 } });
+    const response = await api.get<ApiResult<PageResult<CompanyExpense>>>('/api/v1/admin/finance/expenses', { params: { page: p, size: pageSize.value } });
     tableData.value = response.data.data.records;
+    total.value = response.data.data.total;
   } catch (error) { ElMessage.error(error instanceof Error ? error.message : '采购支出加载失败'); }
 }
 

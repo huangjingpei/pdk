@@ -67,8 +67,7 @@
 
       <div class="mt-3 flex items-center justify-between">
         <span class="text-xs text-slate-400">共 {{ total }} 条</span>
-        <el-pagination layout="total, sizes, prev, pager, next, jumper" :total="total" :page-size="pageSize"
-          :page-sizes="[20, 50, 100]" :current-page="page" @current-change="onPageChange" @size-change="onSizeChange" />
+        <Pagination v-model:page="page" v-model:page-size="pageSize" :total="total" :page-sizes="[20, 50, 100]" @change="(q) => load(q.page)" />
       </div>
     </el-card>
   </div>
@@ -79,6 +78,7 @@ import { onMounted, ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import { Refresh, RefreshLeft, Search } from '@element-plus/icons-vue';
 import { api, type ApiResult, type PageResult } from '../../api';
+import Pagination from '../../components/Pagination.vue';
 import type { LoginLog } from '../../types';
 
 const rows = ref<LoginLog[]>([]);
@@ -133,9 +133,6 @@ function resetFilter(): void {
   range.value = null;
   load(1);
 }
-const onPageChange = (p: number) => load(p);
-const onSizeChange = (s: number) => { pageSize.value = s; load(1); };
-
 onMounted(() => { load(1); });
 </script>
 

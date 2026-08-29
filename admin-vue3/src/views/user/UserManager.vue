@@ -93,8 +93,7 @@
       </el-table>
       <div class="mt-3 flex items-center justify-between">
         <span class="text-xs text-slate-400">已加载 {{ rows.length }} 条</span>
-        <el-pagination layout="total, sizes, prev, pager, next, jumper" :total="total" :page-size="pageSize"
-          :page-sizes="[20, 50, 100]" :current-page="page" @current-change="onPageChange" @size-change="onSizeChange" />
+        <Pagination v-model:page="page" v-model:page-size="pageSize" :total="total" :page-sizes="[20, 50, 100]" @change="(q) => load(q.page)" />
       </div>
     </el-card>
 
@@ -255,6 +254,7 @@ import { computed, onMounted, ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Plus, Search, Refresh, RefreshLeft } from '@element-plus/icons-vue';
 import { api, type ApiResult, type PageResult } from '../../api';
+import Pagination from '../../components/Pagination.vue';
 import { hasPermission, authState } from '../../auth';
 import type { ClientUser, PackagePlanLite, UserAssignmentDetail, BusinessRuntime, LoginLog } from '../../types';
 
@@ -300,9 +300,6 @@ async function load(p: unknown = 1): Promise<void> {
 
 function onSearch(): void { load(1); }
 function resetFilter(): void { keyword.value = ''; statusFilter.value = ''; businessFilter.value = ''; load(1); }
-const onPageChange = (p: number) => load(p);
-const onSizeChange = (s: number) => { pageSize.value = s; load(1); };
-
 // ---- 登录记录抽屉 ----
 const logVisible = ref(false);
 const logLoading = ref(false);

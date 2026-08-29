@@ -54,9 +54,7 @@
           </template>
         </el-table-column>
       </el-table>
-      <el-pagination class="mt-3" background layout="total, sizes, prev, pager, next, jumper"
-        :total="total" :current-page="current" :page-size="pageSize" :page-sizes="[10,20,50,100]"
-        @current-change="handlePageChange" @size-change="handleSizeChange" />
+      <Pagination class="mt-3" v-model:page="current" v-model:page-size="pageSize" :total="total" :page-sizes="[10,20,50,100]" @change="load" />
     </el-card>
 
     <!-- 批量生成对话框 -->
@@ -95,6 +93,7 @@ import { ElMessage } from 'element-plus';
 import type { CardKeyItem } from '../../types';
 import { api, type ApiResult, type PageResult } from '../../api';
 import { ElMessageBox } from 'element-plus';
+import Pagination from '../../components/Pagination.vue';
 
 const dialogVisible = ref(false);
 const renewVisible = ref(false);
@@ -132,8 +131,6 @@ async function load(): Promise<void> {
   }
 }
 
-function handlePageChange(page: number): void { current.value = page; load(); }
-function handleSizeChange(size: number): void { pageSize.value = size; current.value = 1; load(); }
 function onBusinessChange(): void { current.value = 1; load(); }
 
 async function loadPlans(bizId?: number): Promise<void> {

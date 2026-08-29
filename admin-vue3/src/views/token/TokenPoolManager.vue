@@ -95,14 +95,7 @@
       </el-table>
       <div class="mt-3 flex items-center justify-between">
         <span class="text-xs text-slate-400">已选 {{ selectedRows.length }} 条</span>
-        <el-pagination
-          layout="total, sizes, prev, pager, next, jumper"
-          :total="total"
-          :page-size="pageSize"
-          :page-sizes="[20, 50, 100]"
-          :current-page="page"
-          @current-change="onPageChange"
-          @size-change="onSizeChange" />
+        <Pagination v-model:page="page" v-model:page-size="pageSize" :total="total" :page-sizes="[20, 50, 100]" @change="(q) => load(q.page)" />
       </div>
     </el-card>
 
@@ -164,6 +157,7 @@ import { Plus, Upload, UploadFilled, Delete, Search, RefreshLeft, CopyDocument }
 import { ElMessage, ElMessageBox } from 'element-plus';
 import type { TokenPoolItem, BusinessRuntime } from '../../types';
 import { api, type ApiResult, type PageResult } from '../../api';
+import Pagination from '../../components/Pagination.vue';
 
 const dialogVisible = ref(false);
 const importDialogVisible = ref(false);
@@ -207,9 +201,6 @@ async function load(p = 1): Promise<void> {
 
 function onSearch(): void { load(1); }
 function resetFilter(): void { keyword.value = ''; statusFilter.value = ''; discardFilter.value = ''; businessFilter.value=''; load(1); }
-const onPageChange = (p: number) => load(p);
-const onSizeChange = (s: number) => { pageSize.value = s; load(1); };
-
 function handleSelectionChange(rows: TokenPoolItem[]): void {
   selectedRows.value = rows;
 }

@@ -68,9 +68,7 @@
         <el-table-column prop="auditAdmin" label="制卡归属" width="100" />
       </el-table>
 
-      <div class="mt-4 flex justify-end">
-        <el-pagination background layout="prev, pager, next" :total="tableData.length" :page-size="10" />
-      </div>
+      <Pagination class="mt-4" v-model:page="page" v-model:page-size="pageSize" :total="total" @change="(q) => handleSearch(q.page)" />
     </el-card>
   </div>
 </template>
@@ -80,6 +78,7 @@ import { ref, reactive, onMounted } from 'vue';
 import { Search, Refresh } from '@element-plus/icons-vue';
 import type { FinancialIncome, BusinessRuntime } from '../../types';
 import { api, type ApiResult, type PageResult } from '../../api';
+import Pagination from '../../components/Pagination.vue';
 import { ElMessage } from 'element-plus';
 import { useRoute } from 'vue-router';
 
@@ -94,13 +93,17 @@ const queryForm = reactive({
 const businesses=ref<BusinessRuntime[]>([]); const businessName=(id:number)=>businesses.value.find(b=>b.bizId===id)?.businessName||`业务#${id}`;
 
 const tableData = ref<FinancialIncome[]>([]);
+const total = ref(0);
+const page = ref(1);
+const pageSize = ref(20);
 
-async function handleSearch(): Promise<void> {
+async function handleSearch(p: number = 1): Promise<void> {
   try {
-    const params = { size: 100, orderType: queryForm.orderType || undefined, searchKey: queryForm.searchKey || undefined, bizId: queryForm.bizId || undefined };
+    const params = { page: p, size: pageSize.value, orderType: queryForm.orderType || undefined, searchKey: queryForm.searchKey || undefined, bizId: queryForm.bizId || undefined };
     const endpoint = partnerView ? '/api/v1/admin/sales/list' : '/api/v1/admin/finance/incomes';
     const response = await api.get<ApiResult<PageResult<FinancialIncome>>>(endpoint, { params });
     tableData.value = response.data.data.records;
+    total.value = response.data.data.total;
   } catch (error) { ElMessage.error(error instanceof Error ? error.message : '收入流水加载失败'); }
 }
 
