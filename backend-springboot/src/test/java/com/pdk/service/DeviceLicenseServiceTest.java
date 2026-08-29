@@ -27,6 +27,7 @@ class DeviceLicenseServiceTest {
     private PackagePlanMapper packageMapper;
     private LiveStreamSessionService liveStreamService;
     private StpLogic stpLogic;
+    private LicenseExportStubMapper stubMapper;
     private DeviceLicenseService service;
 
     @BeforeEach
@@ -38,9 +39,10 @@ class DeviceLicenseServiceTest {
         packageMapper = mock(PackagePlanMapper.class);
         liveStreamService = mock(LiveStreamSessionService.class);
         stpLogic = mock(StpLogic.class);
+        stubMapper = mock(LicenseExportStubMapper.class);
         service = new DeviceLicenseService(deviceMapper, licenseMapper, renewalMapper,
                 cardMapper, packageMapper, mock(UserMapper.class), mock(FinancialIncomeMapper.class),
-                liveStreamService, stpLogic);
+                liveStreamService, stpLogic, stubMapper);
     }
 
     @Test
