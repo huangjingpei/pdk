@@ -432,6 +432,21 @@ CREATE TABLE IF NOT EXISTS `pdk_license_renewal` (
     INDEX `idx_license_renewal` (`biz_id`, `license_id`, `created_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='设备许可证续费历史；原卡不变，每次续费新增记录';
 
+-- 17b. 卡密导出存根。管理员从后台导出某用户在某业务下的卡密后，原文留档在服务器，便于追溯与客户核对。
+CREATE TABLE IF NOT EXISTS `pdk_license_export_stub` (
+    `id` BIGINT AUTO_INCREMENT PRIMARY KEY,
+    `biz_id` BIGINT NOT NULL,
+    `user_id` BIGINT NOT NULL,
+    `phone` VARCHAR(32) DEFAULT NULL COMMENT '导出时的客户手机号',
+    `operator` VARCHAR(64) NOT NULL COMMENT '操作管理员账号',
+    `file_name` VARCHAR(128) NOT NULL COMMENT '导出文件名',
+    `record_count` INT NOT NULL DEFAULT 0 COMMENT '导出卡密条数',
+    `content` MEDIUMTEXT NOT NULL COMMENT '导出的 CSV 原文（含明文卡密），UTF-8 BOM',
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX `idx_stub_biz_user` (`biz_id`, `user_id`),
+    INDEX `idx_stub_created` (`created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='卡密导出存根，服务器留存原文以备追溯';
+
 -- 17. ZHIBO_LIVE MediaMTX 推流会话。票据只保存 SHA-256；活动许可证生成列保证单席位单流。
 CREATE TABLE IF NOT EXISTS `pdk_live_stream_session` (
     `id` BIGINT AUTO_INCREMENT PRIMARY KEY,

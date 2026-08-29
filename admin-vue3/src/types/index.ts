@@ -224,3 +224,9 @@ export interface DeviceLicenseItem {
   lastLoginAt?: string;
   serverTime: string;
 }
+
+export interface LicenseExportResult {
+  fileName: string;
+  csv: string;
+  recordCount: number;
+}

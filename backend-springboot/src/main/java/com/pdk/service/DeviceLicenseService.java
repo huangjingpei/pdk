@@ -10,6 +10,7 @@ import com.pdk.domain.dto.ClientLoginDTO;
 import com.pdk.domain.dto.RenewDeviceLicenseDTO;
 import com.pdk.domain.entity.*;
 import com.pdk.domain.vo.DeviceLicenseVO;
+import com.pdk.domain.vo.LicenseExportResult;
 import com.pdk.mapper.*;
 import com.pdk.platform.business.BusinessContext;
 import com.pdk.security.AdminPrincipal;
@@ -23,6 +24,7 @@ import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.List;
@@ -40,6 +42,7 @@ public class DeviceLicenseService {
     private final FinancialIncomeMapper incomeMapper;
     private final LiveStreamSessionService liveStreamService;
     @Qualifier("clientStpLogic") private final StpLogic clientStpLogic;
+    private final LicenseExportStubMapper stubMapper;
 
     /**
      * 设备许可证按授权到期时间计费，次数不再作为售卖口径。
@@ -274,6 +277,76 @@ public class DeviceLicenseService {
         return renewal;
     }
 
+    /**
+     * 导出某用户在某业务下的全部设备许可证卡密（明文），并留存服务器存根。
+     * 导出本就是管理员发给客户的动作，故仅需 CARD_VIEW；存根 + 审计双重留痕便于追溯。
+     */
+    public LicenseExportResult exportCards(long bizId, long userId, AdminPrincipal operator) {
+        User user = userMapper.selectById(userId);
+        if (user == null) throw new BusinessException(40402, "用户不存在");
+        List<DeviceLicense> licenses = licenseMapper.selectList(new LambdaQueryWrapper<DeviceLicense>()
+                .eq(DeviceLicense::getBizId, bizId).eq(DeviceLicense::getUserId, userId)
+                .orderByDesc(DeviceLicense::getId));
+        StringBuilder sb = new StringBuilder();
+        sb.append('\uFEFF'); // Excel 打开 UTF-8 CSV 需要 BOM
+        sb.append(csvLine("手机号", "卡密", "套餐", "状态", "独立到期时间"));
+        int count = 0;
+        for (DeviceLicense lic : licenses) {
+            CardKey card = cardMapper.selectById(lic.getCardKeyId());
+            String cardKey = card == null ? "" : card.getCardKey();
+            String expire = lic.getExpireAt() == null ? "未激活" : lic.getExpireAt().format(CSV_DTF);
+            sb.append(csvLine(user.getPhone(), cardKey, lic.getPackageNameSnapshot(), lic.getStatus(), expire));
+            count++;
+        }
+        String csv = sb.toString();
+        String fileName = String.format("卡密导出_%s_%d_%s.csv", user.getPhone(), bizId, LocalDateTime.now().format(CSV_TS));
+        LicenseExportStub stub = new LicenseExportStub();
+        stub.setBizId(bizId); stub.setUserId(userId); stub.setPhone(user.getPhone());
+        stub.setOperator(operator.username()); stub.setFileName(fileName);
+        stub.setRecordCount(count); stub.setContent(csv);
+        stubMapper.insert(stub);
+        LicenseExportResult result = new LicenseExportResult();
+        result.setFileName(fileName); result.setCsv(csv); result.setRecordCount(count);
+        return result;
+    }
+
+    /**
+     * 禁用某客户在某业务下的全部授权：撤销其所有设备许可证、作废对应卡密（含该用户在该业务下尚未 Void 的卡密）、踢掉在线会话。
+     * 操作不可逆，需重新分配才能恢复。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public int revokeUserBusiness(long bizId, long userId, String reason, AdminPrincipal operator) {
+        List<DeviceLicense> licenses = licenseMapper.selectList(new LambdaQueryWrapper<DeviceLicense>()
+                .eq(DeviceLicense::getBizId, bizId).eq(DeviceLicense::getUserId, userId)
+                .ne(DeviceLicense::getStatus, "REVOKED"));
+        int revoked = 0;
+        for (DeviceLicense lic : licenses) {
+            if (lic.getUserDeviceId() != null) {
+                liveStreamService.revokeLicenseSessions(bizId, lic.getId(), "USER_BUSINESS_DISABLED");
+            }
+            lic.setStatus("REVOKED");
+            lic.setVersion(value(lic.getVersion()) + 1);
+            licenseMapper.updateById(lic);
+            CardKey card = cardMapper.selectById(lic.getCardKeyId());
+            if (card != null && !"VOID".equals(card.getStatus())) {
+                card.setStatus("VOID");
+                cardMapper.updateById(card);
+            }
+            clientStpLogic.kickout("license:" + lic.getId());
+            revoked++;
+        }
+        // 一并作废该用户在此业务下、尚未 Void 的卡密（覆盖 USER_SUBSCRIPTION 模式或尚未生成许可证的预分配卡）
+        List<CardKey> cards = cardMapper.selectList(new LambdaQueryWrapper<CardKey>()
+                .eq(CardKey::getBizId, bizId).eq(CardKey::getAssignedUserId, userId)
+                .ne(CardKey::getStatus, "VOID"));
+        for (CardKey c : cards) {
+            c.setStatus("VOID");
+            cardMapper.updateById(c);
+        }
+        kickUserLicenses(bizId, userId, "USER_BUSINESS_DISABLED");
+        return revoked;
+    }
+
     @Transactional(rollbackFor = Exception.class)
     public void unbind(long licenseId, String reason) {
         DeviceLicense license = licenseMapper.selectByIdForUpdate(licenseId);
@@ -403,6 +476,20 @@ public class DeviceLicenseService {
     }
 
     private static int value(Integer v) { return v == null ? 0 : v; }
+    private static final DateTimeFormatter CSV_DTF = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+    private static final DateTimeFormatter CSV_TS = DateTimeFormatter.ofPattern("yyyyMMddHHmmss");
+    private static String csvCell(String v) {
+        if (v == null) v = "";
+        return "\"" + v.replace("\"", "\"\"") + "\"";
+    }
+    private static String csvLine(String... cells) {
+        StringBuilder b = new StringBuilder();
+        for (int i = 0; i < cells.length; i++) {
+            if (i > 0) b.append(',');
+            b.append(csvCell(cells[i]));
+        }
+        return b.append('\n').toString();
+    }
     private static String randomCard() {
         String raw = UUID.randomUUID().toString().replace("-", "").substring(0, 12).toUpperCase();
         return "PDK-" + raw.substring(0, 4) + "-" + raw.substring(4, 8) + "-" + raw.substring(8);
