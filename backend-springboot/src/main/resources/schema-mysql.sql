@@ -73,7 +73,11 @@ CREATE TABLE IF NOT EXISTS `pdk_login_log` (
     INDEX `idx_login_actor` (`actor_type`, `actor_id`, `created_at`),
     INDEX `idx_login_account` (`actor_account`, `created_at`),
     INDEX `idx_login_biz` (`biz_id`, `created_at`),
-    INDEX `idx_login_license` (`biz_id`, `device_license_id`, `created_at`)
+    INDEX `idx_login_license` (`biz_id`, `device_license_id`, `created_at`),
+    -- 登录日志页默认无筛选、只按时间倒序分页，缺此索引会全表扫描 + filesort
+    INDEX `idx_login_created` (`created_at`),
+    -- 许可证登录历史只按 device_license_id 过滤，不带 biz_id，用不上上面的复合索引
+    INDEX `idx_login_license_id` (`device_license_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='登录、设备和许可证安全审计';
 
 -- 2. 卡密凭证表 (纯生命周期与卡密状态)
