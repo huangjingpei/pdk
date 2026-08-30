@@ -51,12 +51,14 @@
 
 ### 3.2 ZHIBO_LIVE 发布矩阵
 
-| 版本 | 状态 | 最低支持版本 | 灰度 | 构件 |
-| --- | --- | --- | ---: | --- |
-| 1.7.0 | ARCHIVED | 1.7.0 | 100% | Windows x64 ZIP |
-| 1.8.0 | PUBLISHED | 1.7.0 | 100% | Windows x64 ZIP |
-| 1.9.0 | PUBLISHED | 1.8.0 | 20% | Windows x64 ZIP |
-| 2.0.0 | DRAFT | 1.9.0 | 0% | 上传中，不完整 |
+策略：`STABLE/WINDOWS/X64`，`updateEnabled=true`，`minimumSupportedVersion=1.8.0`，`mandatoryRelease=1.8.0`，`serverEnforcementEnabled=true`。
+
+| 版本 | 状态 | 灰度 | 构件 |
+| --- | --- | ---: | --- |
+| 1.7.0 | ARCHIVED | 100% | Windows x64 ZIP |
+| 1.8.0 | PUBLISHED | 100% | Windows x64 ZIP |
+| 1.9.0 | PUBLISHED | 20% | Windows x64 ZIP |
+| 2.0.0 | DRAFT | 0% | 上传中，不完整 |
 
 另外为 appId=1 创建同版本号但不同内容的 1.9.0，用于证明不同业务可以拥有相同版本号且不会串包。
 
@@ -82,7 +84,7 @@
 检查接口：
 
 ```http
-GET /api/v1/client/updates/check?currentVersion=1.7.0&platform=WINDOWS&arch=X64&channel=STABLE
+GET /api/v1/client/updates/check?currentVersion=1.7.0&platform=WINDOWS&arch=X64&channel=STABLE&protocolVersion=1&updaterVersion=1.0.0
 X-PDK-App-ID: 3
 X-PDK-Device-ID: TEST-PC-001
 ```
@@ -93,7 +95,9 @@ X-PDK-Device-ID: TEST-PC-001
 - appId 非正整数返回 `40050`；
 - 不存在的 appId 返回 `40450`；
 - 非法版本、平台、架构或 channel 返回 `40090/42290`；
+- 不支持的 protocolVersion 或过低 updaterVersion 不得返回其无法安装的构件，应返回兼容桥接包或明确升级器不兼容原因；
 - 响应符合 `CommonResult`，包含服务端时间和 checkRequestId；
+- 策略签名覆盖固定策略字段，不覆盖 checkRequestId、eventToken 和短效 downloadUrl；
 - appId=3 只能返回 bizId=3 的发布和构件；
 - 请求 Header 中出现登录 Token 时也不能改变 appId 的权威映射。
 
@@ -115,15 +119,25 @@ X-PDK-Device-ID: TEST-PC-001
 - BETA 版本不能下发给 STABLE 客户端；
 - 业务处于 DISABLED 或未部署 Handler 时，升级检查仍能按独立升级策略返回；
 - 升级功能对该 appId 单独关闭时返回明确状态，不能误报“业务不存在”。
+- 新增一个 appId=4 的测试业务但不创建升级策略，必须返回“升级服务未配置”，不能修改代码白名单后才能识别；
+- 暂停 1.9.0 后最低支持版本仍为策略中的 1.8.0，不能自动降回 1.7.0；
+- 如果策略最低版本不存在可下载的兼容 PUBLISHED 构件，策略变更必须被拒绝。
+- 1.7.0 的 REQUIRED 目标必须是策略指定的全量 1.8.0，不能绕过灰度直接下发 1.9.0；
+- REQUIRED 响应允许 `latestVersion=1.9.0`，但 `targetVersion/releaseId/artifact` 必须全部指向 1.8.0；客户端实际下载 targetVersion，不能自行选择 latestVersion；
+- mandatoryRelease 指向灰度、SUSPENDED、ARCHIVED、其他业务或缺少 Windows x64 构件时，策略保存必须失败；
+- 暂停当前 mandatoryRelease 前必须原子切换合格替代版本，否则暂停失败。
 
 ### 5.3 灰度稳定性
 
 - 同一 deviceId 连续检查 100 次结果一致；
 - 服务重启、Redis 清空和多实例切换后结果不变；
+- 多实例使用相同灰度 HMAC 密钥和密钥版本时结果一致；
 - 灰度从 20% 调到 50% 后，原 20% 已命中设备仍命中；
 - deviceId 缺失时不参与可选灰度；
 - 强制更新覆盖所有低于最低版本的设备；
 - appId 或 releaseId 变化后重新分桶，不沿用其他业务结果。
+- 数据库、事件和日志中只出现匿名设备标识，不出现测试原始 deviceId；
+- 未经迁移直接切换灰度密钥版本应被运维流程阻止，避免大面积设备重新分桶。
 
 ### 5.4 下载契约
 
@@ -135,6 +149,8 @@ X-PDK-Device-ID: TEST-PC-001
 - 响应文件名安全，不包含服务器目录；
 - SUSPENDED 后不再签发新地址，已签发地址在短有效期结束后失效；
 - 下载服务不可用时检查接口不返回虚假的可安装构件。
+- appId 或 deviceId 不能被测试报告描述成“付费用户认证”；安装后仍必须通过现有登录、许可证和套餐鉴权；
+- 如果实现 OEM 分发凭证，跨渠道、过期和吊销凭证必须拒绝，且不能改变 appId/bizId 归属。
 
 ### 5.5 事件上报
 
@@ -166,6 +182,7 @@ X-PDK-Device-ID: TEST-PC-001
 - PUBLISHED 后不能覆盖文件、版本、平台、哈希和签名；
 - PUBLISHED 可以 SUSPENDED；
 - SUSPENDED 恢复发布必须重新确认策略并写审计；
+- ARCHIVED 不允许恢复、编辑或删除；
 - 发布过的记录不能物理删除；
 - 只有无引用 DRAFT 可以删除；
 - 每次发布、暂停、归档、调整最低版本或灰度都记录操作人、bizId、前后值、原因、IP 和时间。
@@ -174,6 +191,8 @@ X-PDK-Device-ID: TEST-PC-001
 
 - 版本只接受三段数字；
 - 最低支持版本不能高于发布版本；
+- 最低支持版本属于策略，不随某个 Release 暂停而隐式变化；
+- 最低支持版本与 mandatoryRelease 必须一起校验、一起提交；
 - 灰度只能为 0～100；
 - appId 由业务选择器解析，不能手工输入任意 bizId；
 - 同一业务不能创建重复版本；
@@ -192,11 +211,24 @@ X-PDK-Device-ID: TEST-PC-001
 - 客户端对大小、SHA-256 或 Ed25519 任一不一致都禁止安装；
 - 只修改数据库哈希但没有合法私钥签名仍无法安装；
 - appId=1 的合法签名包不能作为 appId=3 的包安装；
+- 修改签名原文中的版本、平台、架构、文件大小或摘要任一字段都必须验证失败；
+- Java、Python 和 updater 对固定签名原文生成完全相同的字节序列；
 - 未知 signingKeyId 被拒绝并给出可诊断错误；
+- 修改 policyRevision、最低版本、mandatoryReleaseId、targetVersion、签发时间或失效时间任一字段，策略签名必须失败且不得覆盖本地可信缓存；
+- 文件签名 keyId 不能被当作策略签名 keyId 使用，反之亦然；
 - 旧公钥在支持周期内仍能验证历史包；
 - 日志不出现私钥、完整短效 URL、eventToken 或客户端敏感目录。
 
 ## 8. Windows 客户端端到端测试
+
+### 8.0 桥接版本兼容
+
+- 未实现升级协议的旧客户端在服务端拦截关闭时仍能运行；
+- 桥接版本能够登录前检查更新并携带版本 Header；
+- “仅记录不拦截”阶段能统计旧版但不影响业务；
+- mandatoryRelease 不可用时禁止打开服务端强制拦截；
+- 打开拦截后，旧客户端得到明确 HTTP 426，而更新检查、下载和诊断仍可访问；
+- 关闭缺少版本 Header 的兼容前已有书面覆盖率和人工迁移结论。
 
 ### 8.1 正常可选更新
 
@@ -228,6 +260,8 @@ X-PDK-Device-ID: TEST-PC-001
 - 新版本启动失败时 current 恢复旧版本；
 - 不出现两个主程序同时运行；
 - updater 自身不能被主程序升级包覆盖到不可执行状态。
+- 新 updater 采用旁路文件并在下一次启动切换，切换失败仍能运行旧 updater；
+- 需要更高 minimumUpdaterVersion 的发布不会下发给旧 updater。
 
 ### 8.4 本地异常
 
@@ -269,16 +303,21 @@ X-PDK-Device-ID: TEST-PC-001
 
 - 两名管理员同时创建同一业务同一版本，只有一个成功；
 - 同一构件并发上传或重复完成回调不会生成两条有效构件；
+- 同一个上传会话重复 complete 返回相同 artifact，服务端重新读取存储元数据而不是信任浏览器哈希；
+- 过期上传会话、未完成 multipart 和跨 bizId 上传凭证均不可完成；
 - 发布按钮重复提交只产生一次状态变化和一次有效审计；
 - 发布与暂停并发时最终状态确定，不出现客户端可见但文件未就绪；
 - 调整最低版本与客户端检查并发时，每次响应使用同一份策略快照；
+- 带旧 policyRevision 的并发策略更新失败并提示刷新，不能覆盖新策略；
 - 相同 checkRequestId 事件重试不重复计数；
 - 文件清理任务不删除仍被发布记录引用的构件；
+- 事件保留期清理不删除管理员发布审计，也不阻塞在线检查；
 - 多后端实例返回相同版本判定和灰度结果。
 
 ## 11. 数据库与隔离测试
 
 - 所有发布、构件和事件记录都有正确 bizId；
+- 升级策略按 `(biz_id, channel, platform, arch)` 唯一且新业务默认关闭；
 - 客户端 appId 只通过 `pdk_business` 解析，不直接作为外键写入明细表；
 - 唯一键允许 appId=1 和 appId=3 都有 1.9.0，但同一业务不能重复；
 - 版本排序使用数值段，1.10.0 正确高于 1.9.9；

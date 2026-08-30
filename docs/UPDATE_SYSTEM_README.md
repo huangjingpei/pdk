@@ -24,6 +24,8 @@
 - 管理后台上传、校验、发布、停用、查看统计和审计；
 - 客户端在登录前检查更新，下载后验证完整性与发布者签名，再交给独立安装器更新。
 
+这里列出的 1、2、3 是首批验收业务，不是代码白名单。以后在 `pdk_business` 新增 appId 后，只要为其创建升级策略和发布数据，同一套升级系统就应能够管理，不得增加 `if (appId == ...)` 分支。
+
 首期不包含：
 
 - 二进制差分更新；
@@ -68,12 +70,27 @@
 - 管理端分页沿用项目现有 MyBatis-Plus 页码约定，页码从 1 开始；
 - 所有升级数据表保存 `biz_id`，不在明细表重复保存客户端传入的 appId。
 
+### 2.4 新业务接入规则
+
+新增业务不会自动获得可发布升级能力。标准流程是：
+
+1. 先在 `pdk_business` 创建稳定 appId/bizCode；
+2. 为 STABLE（可选 BETA）创建默认关闭的客户端升级策略；
+3. 配置允许的平台、架构、公钥和存储范围；
+4. 上传并发布第一个完整版本；
+5. 验收通过后打开该 appId 的升级检查；
+6. 最后再按需要启用服务端最低版本拦截。
+
+新业务没有升级策略时，检查接口返回“升级服务未配置”，不能回落到 PDD，也不能读取其他业务版本。
+
 ## 3. 核心术语
 
 | 术语 | 定义 |
 | --- | --- |
 | 版本发布 Release | 某个 appId 的一个不可变版本，例如 1.8.0 |
 | 构件 Artifact | 版本对应的具体平台、架构和包类型文件 |
+| 升级协议版本 | 检查响应、签名原文和包清单的协议代号 |
+| updater 版本 | 独立安装器自身版本，与主程序版本分开 |
 | 版本线 Channel | `STABLE` 或 `BETA`；生产客户端默认只使用 STABLE |
 | 当前版本 | 客户端正在运行的版本 |
 | 最新版本 | 当前 appId、版本线下已发布且适配平台的最高版本 |
@@ -95,6 +112,8 @@
 - BETA 通过独立 `channel` 表达，不在版本号中使用 `-beta`；
 - 同一 appId 下版本号不可重复，也不能删除后重新使用。
 
+生产客户端的 channel 必须固化在构建配置或受签名配置中，普通用户不能在设置页把 STABLE 切换成 BETA。开发调试版可以选择 channel，但请求日志必须明确标识。
+
 如果以后需要完整 SemVer 预发布语义，必须统一升级服务端、管理端、Python SDK、PyQt 客户端和安装器后再开放，不能只修改服务端正则。
 
 ### 4.2 更新判定
@@ -103,21 +122,25 @@
 
 1. 按 appId 解析 bizId；
 2. 校验客户端版本、平台、架构和版本线；
-3. 查找适配该平台和架构的已发布版本及可下载构件；
-4. 如果当前版本低于 `minimumSupportedVersion`，返回 `REQUIRED`，且不受灰度比例限制；
-5. 否则，如果存在更高版本且设备命中灰度，返回 `OPTIONAL`；
-6. 其他情况返回 `NONE`。
+3. 读取当前 appId/版本线/平台策略及 `minimumSupportedVersion/mandatoryReleaseId`；
+4. 校验 mandatoryReleaseId 指向同业务、同版本线、平台构件完整且仍为 PUBLISHED 的全量稳定发布；
+5. 如果当前版本低于最低版本，返回 mandatoryReleaseId 对应构件和 `REQUIRED`，且不受其他灰度发布影响；
+6. 否则查找高于当前版本的最高兼容 PUBLISHED Release；设备命中该 Release 灰度时返回 `OPTIONAL`；
+7. 其他情况返回 `NONE`。
 
 不能仅用 `isMandatory=true` 表示强制更新。最低可运行版本能够准确表达“1.5.0 以下必须更新，1.5.0～1.7.0 可以稍后更新”。
 
 ### 4.3 灰度分桶
 
 - 灰度比例范围为 0～100；
-- 使用 `appId + releaseId + deviceIdHash` 做确定性分桶；
+- 服务端先用专用稳定密钥对 `bizId + 原始deviceId` 做 HMAC-SHA256，得到业务内匿名设备标识；
+- 再使用 `appId + releaseId + 匿名设备标识` 计算 0～9999 的确定性桶，灰度百分比按万分桶判断；
 - 同一设备重复检查必须得到相同结果；
 - 强制更新忽略灰度比例；
 - deviceId 缺失时不能随机抖动，首期按“不命中可选灰度”处理；
 - 灰度从低比例调高不会让已命中的设备退出。
+
+灰度 HMAC 密钥与客户端加密根盐、管理员 pepper 分离管理，并在所有后端实例保持一致。普通密钥轮换会改变分桶结果，因此必须提供密钥版本和专项迁移方案；数据库与日志只保存匿名标识及密钥版本，不保存原始 deviceId。
 
 ## 5. 发布生命周期
 
@@ -135,6 +158,16 @@ DRAFT -> READY -> PUBLISHED -> SUSPENDED -> ARCHIVED
 | `SUSPENDED` | 发现问题，停止向新设备推荐 | 已获得的短效下载地址可自然过期 |
 | `ARCHIVED` | 仅保留历史、审计和统计 | 否 |
 
+允许的状态转换必须固定：
+
+| 当前状态 | 允许进入 |
+| --- | --- |
+| `DRAFT` | `READY`；删除未发布草稿 |
+| `READY` | `DRAFT`（重新编辑）、`PUBLISHED` |
+| `PUBLISHED` | `SUSPENDED`、`ARCHIVED` |
+| `SUSPENDED` | `PUBLISHED`（重新确认后恢复）、`ARCHIVED` |
+| `ARCHIVED` | 无，禁止恢复和删除 |
+
 发布必须是显式动作。上传完成不等于发布，不能让客户端读到半上传、无签名或缺少目标平台构件的版本。
 
 发布后以下内容不可直接覆盖：版本号、文件内容、文件大小、SHA-256、数字签名、平台、架构和包类型。
@@ -143,9 +176,28 @@ DRAFT -> READY -> PUBLISHED -> SUSPENDED -> ARCHIVED
 
 ## 6. 数据模型规格
 
-后续实现建议增加三张核心表，名称使用当前项目 `pdk_` 前缀。本文只定义职责和约束，不提供可直接执行的 DDL。
+后续实现建议增加四张核心表，名称使用当前项目 `pdk_` 前缀。本文只定义职责和约束，不提供可直接执行的 DDL。
 
-### 6.1 `pdk_client_release`
+### 6.1 `pdk_client_update_policy`
+
+保存某个业务版本线的运行策略，而不是某个安装包的信息。建议策略维度为 `(biz_id, channel, platform, arch)`。
+
+| 字段 | 要求 |
+| --- | --- |
+| `biz_id` | 关联 `pdk_business.id` |
+| `channel/platform/arch` | 明确适用的客户端范围 |
+| `update_enabled` | 是否允许检查和签发下载地址，默认关闭 |
+| `minimum_supported_version` | 当前最低可运行版本，与具体最新 Release 解耦 |
+| `mandatory_release_id` | 低版本客户端必须安装的稳定目标；版本不得低于最低支持版本 |
+| `server_enforcement_enabled` | 服务端是否执行 HTTP 426 拦截，默认关闭 |
+| `offline_grace_hours` | 检查服务故障时允许的产品宽限期 |
+| `check_interval_seconds` | 客户端建议检查间隔，只是提示值 |
+| `policy_revision` | 每次策略变化递增，用于缓存、并发和审计 |
+| `updated_by/updated_at` | 最近变更操作人和时间 |
+
+唯一键：`(biz_id, channel, platform, arch)`。提高最低版本时必须同时指定可安装的 mandatoryReleaseId，两个字段在同一事务和同一审计动作中生效。强制目标必须为 100% 全量发布，不能指向灰度、暂停或归档版本。暂停当前强制目标前必须先原子切换到另一个合格发布，不能产生“服务端拒绝旧版，但客户端无包可装”的锁死状态。
+
+### 6.2 `pdk_client_release`
 
 一个 appId 的一个版本发布。
 
@@ -156,7 +208,8 @@ DRAFT -> READY -> PUBLISHED -> SUSPENDED -> ARCHIVED
 | `version` | 严格三段版本号 |
 | `version_major/minor/patch` | 用于可靠排序，禁止依赖字符串排序 |
 | `channel` | `STABLE/BETA` |
-| `minimum_supported_version` | 此发布生效时允许继续运行的最低版本 |
+| `minimum_protocol_version` | 能识别本发布的最低升级协议版本 |
+| `minimum_updater_version` | 能安全安装本发布的最低独立 updater 版本 |
 | `release_notes` | 用户可见更新说明，按纯文本或受限 Markdown 渲染 |
 | `status` | 发布生命周期状态 |
 | `rollout_percentage` | 0～100 |
@@ -168,10 +221,9 @@ DRAFT -> READY -> PUBLISHED -> SUSPENDED -> ARCHIVED
 
 - 唯一键：`(biz_id, version)`；
 - 查询索引：`(biz_id, channel, status, published_at)`；
-- 最低版本不能高于本次发布版本；
 - 同一个 appId 可以保留多个 PUBLISHED 历史版本，但更新判定只选择最高可用版本。
 
-### 6.2 `pdk_client_artifact`
+### 6.3 `pdk_client_artifact`
 
 一个 Release 可以有多个平台构件。关键字段包括 releaseId、bizId、platform、arch、packageType、原始文件名、安全存储键、文件大小、SHA-256、签名算法、签名值、签名公钥版本、上传状态和创建时间。
 
@@ -183,7 +235,7 @@ DRAFT -> READY -> PUBLISHED -> SUSPENDED -> ARCHIVED
 - 文件名只用于展示，不能作为服务器磁盘路径；
 - 删除发布记录时不得物理级联删除已发布构件。
 
-### 6.3 `pdk_client_update_event`
+### 6.4 `pdk_client_update_event`
 
 记录检查和安装关键事件，用于统计及故障定位：
 
@@ -197,7 +249,9 @@ INSTALL_SUCCEEDED, INSTALL_FAILED
 
 索引至少覆盖 `(biz_id, created_at)`、`(biz_id, release_id, event_type, created_at)`；checkRequestId 使用幂等唯一键或事件级组合唯一键。
 
-### 6.4 数据库初始化约定
+原始事件需要配置保留期，建议 90 天后汇总或删除；管理员发布审计不随事件清理。清理任务必须按时间和批次执行，不能长事务锁住在线检查。
+
+### 6.5 数据库初始化约定
 
 当前项目仍采用 `schema-mysql.sql` 空库自动初始化。后续实现时应把升级表的最终 `CREATE TABLE` 和索引直接加入该文件，不增加历史兼容 ALTER。
 
@@ -208,7 +262,7 @@ INSTALL_SUCCEEDED, INSTALL_FAILED
 ### 7.1 检查更新
 
 ```http
-GET /api/v1/client/updates/check?currentVersion=1.7.0&platform=WINDOWS&arch=X64&channel=STABLE
+GET /api/v1/client/updates/check?currentVersion=1.7.0&platform=WINDOWS&arch=X64&channel=STABLE&protocolVersion=1&updaterVersion=1.0.0
 X-PDK-App-ID: 3
 X-PDK-Device-ID: <稳定设备UUID>
 ```
@@ -223,14 +277,29 @@ X-PDK-Device-ID: <稳定设备UUID>
   "message": "操作成功",
   "data": {
     "checkRequestId": "UC-...",
+    "protocolVersion": 1,
     "appId": 3,
     "bizCode": "ZHIBO_LIVE",
+    "channel": "STABLE",
+    "platform": "WINDOWS",
+    "arch": "X64",
     "currentVersion": "1.7.0",
+    "updaterVersion": "1.0.0",
     "hasUpdate": true,
     "updatePolicy": "REQUIRED",
     "reason": "BELOW_MINIMUM_SUPPORTED_VERSION",
     "latestVersion": "1.9.0",
     "minimumSupportedVersion": "1.8.0",
+    "mandatoryReleaseId": 120,
+    "targetVersion": "1.8.0",
+    "policyRevision": 12,
+    "checkIntervalSeconds": 21600,
+    "offlineGraceHours": 24,
+    "policyIssuedAt": "2026-08-29T10:05:00+08:00",
+    "policyExpiresAt": "2026-08-30T10:05:00+08:00",
+    "policySignatureAlgorithm": "Ed25519",
+    "policySigningKeyId": "client-policy-2026-01",
+    "policySignature": "<Base64>",
     "releaseId": 120,
     "releaseNotes": "修复推流稳定性问题",
     "publishedAt": "2026-08-29T10:00:00+08:00",
@@ -255,7 +324,13 @@ X-PDK-Device-ID: <稳定设备UUID>
 }
 ```
 
+`targetVersion/releaseId/artifact` 始终描述本次实际要安装的同一个发布；`latestVersion` 只是当前版本线最高可见版本。强制场景下 targetVersion 可以低于正在灰度的 latestVersion，例如上例强制安装稳定的 1.8.0，而不是绕过灰度安装 1.9.0。客户端不得自行用 latestVersion 替换 targetVersion。
+
+策略签名至少覆盖协议版本、appId、channel、platform、arch、policyRevision、updatePolicy、minimumSupportedVersion、mandatoryReleaseId、targetVersion、policyIssuedAt 和 policyExpiresAt，不覆盖每次变化的 checkRequestId、eventToken 和短效 downloadUrl。客户端只有在策略签名、公钥用途和有效期都正确时才能写入本地策略缓存。
+
 无更新不是错误，返回 `code=200`、`hasUpdate=false`、`updatePolicy=NONE`、`artifact=null`。没有匹配平台构件也返回明确 `reason=NO_COMPATIBLE_ARTIFACT`，不能误发其他平台文件。
+
+升级策略未配置或 `updateEnabled=false` 同样返回 `code=200/updatePolicy=NONE`，reason 分别为 `UPDATE_POLICY_NOT_CONFIGURED`、`UPDATE_SERVICE_DISABLED`。此时不得启用服务端最低版本拦截。
 
 ### 7.2 下载构件
 
@@ -285,33 +360,64 @@ X-PDK-Arch
 
 服务端发现版本低于当前 appId 的最低可运行版本时返回 HTTP 426 和业务码 `42600`。更新检查、下载、事件上报、注销和必要的只读诊断接口必须在豁免名单内，避免客户端被彻底锁死。
 
+当前 `WebMvcConfig` 会统一拦截 `/api/v1/client/**`。后续实现时必须把检查和事件上报加入登录前排除项，下载则只校验短效下载凭证；不能要求用户先登录或先激活卡密才能获得强制升级包。
+
 ## 8. 管理端 API 与页面规格
 
-建议管理端路由统一放在 `/api/v1/admin/client-updates/**`，提供：
+建议管理端路由统一放在 `/api/v1/admin/client-updates/**`。建议契约如下，具体 DTO 命名可以在实现阶段确定，但职责不能重新合并：
+
+| 方法与路径 | 职责 |
+| --- | --- |
+| `GET /releases` | 按 bizId、channel、状态、版本和时间分页查询 |
+| `POST /releases` | 创建 DRAFT，只写发布元数据 |
+| `PUT /releases/{releaseId}` | 只允许编辑 DRAFT/READY 的可变元数据 |
+| `POST /releases/{releaseId}/artifacts/upload-session` | 创建短效上传会话和 artifact 草稿 |
+| `POST /artifacts/{artifactId}/complete` | 完成上传，触发服务端文件识别、摘要、扫描和签名 |
+| `POST /releases/{releaseId}/ready` | 校验构件集合完整并进入 READY |
+| `POST /releases/{releaseId}/publish` | 显式发布 READY 版本 |
+| `POST /releases/{releaseId}/suspend` | 暂停新检查和新下载地址签发 |
+| `POST /releases/{releaseId}/resume` | 重新确认后恢复发布 |
+| `POST /releases/{releaseId}/archive` | 归档历史版本 |
+| `GET/PUT /policies/{bizId}` | 查询或更新版本线/平台策略，使用 policyRevision 乐观锁 |
+| `GET /events`、`GET /statistics` | 查看升级事件和聚合统计 |
+
+所有创建、完成、状态变化和策略修改请求必须携带调用方生成的幂等 requestId；同一 requestId 重试返回原结果，不能重复创建构件、重复发布或重复写有效审计。
+
+管理能力包括：
 
 1. 按业务、版本线、状态、平台和时间分页查询发布；
 2. 创建草稿；
 3. 上传或登记构件；
 4. 读取服务端计算的大小、SHA-256、签名和文件识别结果；
 5. 将完整构件集合从 DRAFT 提交为 READY；
-6. 发布并设置最低支持版本、灰度比例和说明；
-7. 调整灰度比例；
-8. 暂停或归档发布；
-9. 查看检查、下载、验证和安装成功率；
-10. 查看完整操作审计。
+6. 发布版本并设置灰度比例和说明；
+7. 在确认存在兼容构件后，单独调整最低支持版本和服务端拦截开关；
+8. 调整灰度比例；
+9. 暂停或归档发布；
+10. 查看检查、下载、验证和安装成功率；
+11. 查看完整操作审计。
 
 删除接口只允许删除从未发布且没有审计依赖的 DRAFT。发布过的版本只能暂停或归档。
 
-### 8.1 页面布局
+### 8.1 上传模式
+
+- 本地开发：可以由 Spring Boot 接收 multipart 后写入隔离临时目录；
+- 生产：优先由后端创建短效上传会话，浏览器直传私有对象存储，完成后通知后端校验；
+- 无论哪种模式，SHA-256、文件大小、Magic、包清单和签名结果都必须由可信服务端或受控发布流水线确认，不能接受浏览器声称“已经校验”；
+- 对象存储 multipart 未完成分片必须有自动过期清理策略；
+- complete 重试必须幂等，不能生成多个 AVAILABLE 构件。
+
+### 8.2 页面布局
 
 - 顶部必须选择业务，显示 appId、bizCode 和业务描述；
 - 发布列表显示版本、渠道、最低支持版本、灰度、状态、发布时间和构件完整度；
+- 策略区单独显示升级开关、最低支持版本、服务端拦截、宽限期和策略 revision；
 - 版本详情按平台/架构列出文件大小、SHA-256、签名、公钥版本和存储状态；
 - 发布确认框明确展示“哪些旧版本将被强制更新”；
 - 暂停、归档、调整最低版本和紧急策略必须填写原因；
 - 不在浏览器回显服务器绝对路径、存储密钥或签名私钥。
 
-### 8.2 权限决策
+### 8.3 权限决策
 
 升级包等同于可在客户电脑执行的代码，风险高于制套餐或制卡。
 
@@ -333,7 +439,15 @@ X-PDK-Arch
 - 元数据响应禁止缓存或使用短缓存，带内容摘要的构件可以长期 immutable 缓存；
 - 数据库与对象存储需要定期对账，发现记录存在但文件丢失时自动禁止发布。
 
-### 9.2 完整性与真实性
+### 9.2 安装包访问边界
+
+appId、deviceId 和升级检查接口都是登录前信息，不能证明调用者已付费。短效下载 URL、限流和 eventToken 主要用于防盗链、降低滥用和关联事件，不等价于用户授权。
+
+首期应把安装包视为“可被获取但不可伪造”的分发物，真正的软件使用权继续由手机号登录、设备绑定、卡密许可证、套餐到期和服务端业务鉴权控制。安装包和客户端代码中不得包含可绕过这些鉴权的长期密钥。
+
+若未来代理 OEM 包必须限制在特定渠道，应引入独立、可吊销的 distributionCredential 和 distributionChannel，并纳入签名及下载令牌；appId 仍只选择业务，不能承担保密凭证职责。
+
+### 9.3 完整性与真实性
 
 SHA-256 只能发现传输损坏；如果攻击者同时替换文件和数据库哈希，客户端仍会信任恶意文件。因此每个构件还必须具备数字签名：
 
@@ -346,10 +460,16 @@ SHA-256 只能发现传输损坏；如果攻击者同时替换文件和数据库
 
 Windows 的 Authenticode 代码签名可以作为额外保护，但不能替代升级协议自己的签名校验。
 
-### 9.3 上传校验
+首期签名原文必须固定规范，避免服务端和不同语言客户端各自拼接。建议使用 UTF-8、LF 和固定字段顺序：协议标识、appId、version、platform、arch、packageType、fileSize、sha256；枚举统一大写，摘要统一 64 位小写十六进制，字段不做本地化。规范一旦发布必须通过协议版本升级才能改变。
+
+文件构件签名与升级策略签名可以使用同一签名服务，但建议使用不同用途的 keyId 和私钥权限，避免获得“修改强制策略”的权限同时能够签署任意程序文件。
+
+### 9.4 上传校验
 
 - 扩展名、声明 MIME、文件 Magic 和包内清单必须一致；
 - 文件名、版本、平台和 appId 不能只信任浏览器表单；
+- ZIP 根目录必须包含受签名元数据约束的 `update-manifest.json`，至少声明 appId、version、platform、arch、入口程序和允许写入的相对文件列表；
+- 包清单同时声明 protocolVersion、minimumUpdaterVersion 和安装布局版本；服务端不能向能力不足的 updater 下发不可安装构件；
 - 限制单文件大小和压缩解包后的总大小，防止压缩炸弹；
 - 禁止路径穿越、符号链接逃逸和覆盖已有对象；
 - 可执行文件进入发布区前执行恶意软件扫描；
@@ -394,6 +514,21 @@ app/
 
 安装步骤必须支持等待主进程退出、再次验证包、解压到新目录、原子切换 current、启动新版本、健康确认和失败回滚。不要直接在现有安装目录逐文件覆盖，否则断电或文件占用会留下半升级状态。
 
+updater 自身升级必须采用下一次运行生效的旁路替换或单独引导程序，不能让正在运行的 updater 覆盖自己。发布改变包布局、签名协议或入口规则前，必须先发布兼容旧格式的 updater 过渡版本。
+
+### 10.3 现有客户端首次接入
+
+当前已发布客户端尚未实现本升级协议，服务端无法凭空弹出升级窗口，也不能立即强制要求它携带版本 Header。首次上线必须分阶段：
+
+1. 先通过现有人工交付渠道发布“桥接版本”，内含更新检查、签名验证和独立 updater；
+2. 此阶段 `serverEnforcementEnabled=false`，业务接口继续兼容缺少版本 Header 的旧客户端；
+3. 统计桥接版本覆盖率，并为仍在使用旧版的客户提供明确人工升级期限；
+4. 覆盖率达到产品门槛后，先启用仅记录不拦截的版本监控；
+5. 确认 mandatoryRelease 可安装、下载服务健康后，再启用 HTTP 426 强制拦截；
+6. 最后才关闭缺少客户端版本 Header 的兼容行为。
+
+跳过桥接阶段会导致老客户端既不会检查更新，又被服务端拒绝全部业务请求。
+
 ## 11. 错误处理建议
 
 | 业务码 | 含义 |
@@ -415,7 +550,7 @@ app/
 
 ## 12. 配置边界
 
-后续实现至少需要以下配置域，但密钥不得写入仓库：升级功能总开关、本地或对象存储类型、临时上传区和发布区、外部下载 URL 前缀、签名服务或密钥引用、下载 URL 有效期、单文件最大大小、允许的平台/架构/包类型、接口限流以及构件保留周期。
+后续实现至少需要以下部署配置域，但密钥不得写入仓库：升级功能总开关、本地或对象存储类型、临时上传区和发布区、外部下载 URL 前缀、签名服务或密钥引用、下载 URL 有效期、单文件最大大小、允许的平台/架构/包类型、接口限流以及构件保留周期。每个 appId 的升级开关、最低版本、灰度和宽限期属于数据库运营策略，不放入 application.yml。
 
 当前 `spring.servlet.multipart.max-file-size=10MB` 不足以承载常见 PyQt 安装包。实现时需要单独评估并调整上传限制，不能照搬来源文档的固定 100MB，也不能无限制开放。
 
