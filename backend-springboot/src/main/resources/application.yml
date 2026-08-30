@@ -84,6 +84,11 @@ pdk:
     allow-legacy-missing-app-id: ${PDK_ALLOW_LEGACY_MISSING_APP_ID:true}
     # 部分业务部署允许数据库中其他 ACTIVE 业务呈现 NOT_IN_DEPLOYMENT；allowlist 自身缺 Handler 仍必定启动失败。
     fail-fast-active-unsupported: ${PDK_FAIL_FAST_ACTIVE_UNSUPPORTED:false}
+  # 设备指纹克隆检测：salted hash 的盐。生产务必通过 PDK_FP_SALT 环境变量配置为至少 32 字节随机值。
+  # 服务端用 sha256(salt + ":" + bizId) 派生「每租户盐」下发给客户端，避免跨租户指纹关联与预计算。
+  fingerprint:
+    salt: ${PDK_FP_SALT:change-me-fingerprint-salt-please-rotate}
+    version: "1"
   sms:
     provider: ${PDK_SMS_PROVIDER:local}
     code-expire-minutes: 5

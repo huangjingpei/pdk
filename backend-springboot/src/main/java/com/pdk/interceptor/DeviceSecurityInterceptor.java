@@ -49,8 +49,9 @@ public class DeviceSecurityInterceptor implements HandlerInterceptor {
 
         if (business.usesDeviceLicense()) {
             boolean requireActive = requiresPaidLicense(request.getRequestURI());
+            String requestFpHash = request.getHeader("X-PDK-FP");
             com.pdk.service.ClientLicenseContext context = deviceLicenseService.requireSubject(
-                    clientStpLogic.getLoginId(), business, currentDeviceId, requireActive);
+                    clientStpLogic.getLoginId(), business, currentDeviceId, requestFpHash, requireActive);
             User user = userMapper.selectById(context.license().getUserId());
             if (user == null || "FROZEN".equals(user.getStatus())) {
                 clientStpLogic.logout();

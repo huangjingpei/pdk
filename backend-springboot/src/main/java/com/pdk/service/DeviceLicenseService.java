@@ -3,9 +3,12 @@ package com.pdk.service;
 import cn.dev33.satoken.stp.StpLogic;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.pdk.business.zhibo.live.service.LiveStreamSessionService;
 import com.pdk.common.exception.BusinessException;
 import com.pdk.domain.dto.BatchAssignLicenseDTO;
+import com.pdk.domain.dto.ClientFingerprintDTO;
 import com.pdk.domain.dto.ClientLoginDTO;
 import com.pdk.domain.dto.RenewDeviceLicenseDTO;
 import com.pdk.domain.entity.*;
@@ -16,6 +19,7 @@ import com.pdk.platform.business.BusinessContext;
 import com.pdk.security.AdminPrincipal;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -27,7 +31,9 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.HexFormat;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -45,6 +51,9 @@ public class DeviceLicenseService {
     private final LiveStreamSessionService liveStreamService;
     @Qualifier("clientStpLogic") private final StpLogic clientStpLogic;
     private final LicenseExportStubMapper stubMapper;
+    private final DeviceFingerprintMapper fpMapper;
+    @Value("${pdk.fingerprint.salt:change-me-fingerprint-salt-please-rotate}") private String fpSalt;
+    @Value("${pdk.fingerprint.version:1}") private String fpVersion;
 
     /**
      * 设备许可证按授权到期时间计费，次数不再作为售卖口径。
@@ -63,6 +72,12 @@ public class DeviceLicenseService {
         UserDevice device = deviceMapper.selectOne(new LambdaQueryWrapper<UserDevice>()
                 .eq(UserDevice::getBizId, business.bizId()).eq(UserDevice::getUserId, user.getId())
                 .eq(UserDevice::getDeviceIdHash, hash).last("LIMIT 1"));
+        boolean firstBind = device == null;
+        // 设备指纹克隆检测（仅客户端上报指纹时；老客户端不上报则跳过，向后兼容）。
+        // 设备已存在（重登/激活）立即校验；首次绑定的情况延后到设备落库后再校验。
+        if (device != null && dto.getFingerprint() != null) {
+            checkAndStoreFingerprint(business, user, device, dto.getFingerprint());
+        }
         DeviceLicense existing = device == null ? null : licenseMapper.selectOne(new LambdaQueryWrapper<DeviceLicense>()
                 .eq(DeviceLicense::getBizId, business.bizId()).eq(DeviceLicense::getUserId, user.getId())
                 .eq(DeviceLicense::getUserDeviceId, device.getId())
@@ -113,6 +128,10 @@ public class DeviceLicenseService {
             throw new BusinessException(40981, "设备并发绑定冲突，请刷新后重试");
         }
 
+        if (firstBind && dto.getFingerprint() != null) {
+            checkAndStoreFingerprint(business, user, device, dto.getFingerprint());
+        }
+
         LocalDateTime now = LocalDateTime.now();
         if (license.getActivatedAt() == null) {
             PackagePlan plan = requirePlan(license.getPackageId().intValue(), business.bizId());
@@ -139,7 +158,7 @@ public class DeviceLicenseService {
     }
 
     public ClientLicenseContext requireSubject(Object loginId, BusinessContext business, String deviceId,
-                                                boolean requireActive) {
+                                                String requestFpHash, boolean requireActive) {
         String subject = String.valueOf(loginId);
         if (!subject.startsWith("license:")) throw new BusinessException(40106, "当前业务要求设备许可证登录会话");
         Long id;
@@ -152,6 +171,19 @@ public class DeviceLicenseService {
         UserDevice device = license.getUserDeviceId() == null ? null : deviceMapper.selectById(license.getUserDeviceId());
         if (device == null || !"ACTIVE".equals(device.getStatus()) || !device.getDeviceId().equals(deviceId)) {
             throw new BusinessException(40103, "许可证绑定设备已变化，本设备会话失效");
+        }
+        // 不做心跳的克隆/换机检测：每次受保护请求比对指纹哈希（仅当客户端上报且库中有指纹时）。
+        if (requestFpHash != null && device.getId() != null) {
+            DeviceFingerprint fpRow = fpMapper.selectOne(new LambdaQueryWrapper<DeviceFingerprint>()
+                    .eq(DeviceFingerprint::getUserDeviceId, device.getId()));
+            if (fpRow != null && fpRow.getFpHash() != null) {
+                if ("CLONE_CONFIRMED".equals(fpRow.getFpStatus())) {
+                    throw new BusinessException(40386, "设备指纹异常，许可证已被标记为克隆，请联系管理员");
+                }
+                if (!requestFpHash.equals(fpRow.getFpHash())) {
+                    throw new BusinessException(40103, "许可证绑定设备已变化，本设备会话失效");
+                }
+            }
         }
         refreshExpired(license);
         if (requireActive) requireActive(license, false);
@@ -491,6 +523,129 @@ public class DeviceLicenseService {
         String raw = UUID.randomUUID().toString().replace("-", "").substring(0, 12).toUpperCase();
         return "PDK-" + raw.substring(0, 4) + "-" + raw.substring(4, 8) + "-" + raw.substring(8);
     }
+    private static final org.slf4j.Logger fpLog = org.slf4j.LoggerFactory.getLogger(DeviceLicenseService.class);
+    // 归一化时视为“不可读/默认值”的硬件串，命中则不算有效组件（避免云/VM 返回空串导致所有人指纹相同）
+    private static final java.util.List<String> FP_DEFAULTS = java.util.List.of("", "none", "null", "unknown",
+            "default string", "to be filled by o.e.m.", "to be filled by oe.m.", "system serial number",
+            "system serialnumber", "0", "0000000000000000", "00000000", "na", "n/a");
+    private static final ObjectMapper FP_MAPPER = new ObjectMapper();
+
+    /** 派生每租户盐：sha256(全局盐 + ":" + bizId)，下发给客户端用于计算指纹哈希，避免跨租户关联与预计算。 */
+    public String fingerprintSalt(long bizId) {
+        return sha256(fpSalt + ":" + bizId);
+    }
+
+    /** 当前设备已落库的指纹哈希（服务端对原始组件做 salted hash 得到），用于登录响应下发给客户端回传。 */
+    public String currentFingerprintHash(BusinessContext business, User user, UserDevice device) {
+        if (device == null || device.getId() == null) return null;
+        DeviceFingerprint row = fpMapper.selectOne(new LambdaQueryWrapper<DeviceFingerprint>()
+                .eq(DeviceFingerprint::getUserDeviceId, device.getId()));
+        return row == null ? null : row.getFpHash();
+    }
+
+    private static final class FpEval {
+        final String json; final String hash; final int confidence;
+        FpEval(String json, String hash, int confidence) { this.json = json; this.hash = hash; this.confidence = confidence; }
+    }
+
+    private FpEval evaluateFingerprint(ClientFingerprintDTO fp, String tenantSalt) {
+        if (fp == null) return new FpEval(null, null, 0);
+        String mb = normalize(fp.getMotherboardSerial());
+        String disk = normalize(fp.getDiskSerial());
+        String cpu = normalize(fp.getCpuid());
+        int confidence = 0;
+        Map<String, String> comps = new LinkedHashMap<>();
+        if (mb != null) { comps.put("mb", sha256(mb + "|" + tenantSalt)); confidence++; }
+        if (disk != null) { comps.put("disk", sha256(disk + "|" + tenantSalt)); confidence++; }
+        if (cpu != null) { comps.put("cpu", sha256(cpu + "|" + tenantSalt)); confidence++; }
+        if (comps.isEmpty()) return new FpEval(null, null, 0);
+        try {
+            String json = FP_MAPPER.writeValueAsString(comps);
+            return new FpEval(json, sha256(json + "|" + tenantSalt), confidence);
+        } catch (Exception e) {
+            fpLog.warn("设备指纹序列化失败，跳过克隆检测: {}", e.getMessage());
+            return new FpEval(null, null, 0);
+        }
+    }
+
+    private static String normalize(String v) {
+        if (v == null) return null;
+        String t = v.trim();
+        if (t.isEmpty()) return null;
+        return FP_DEFAULTS.contains(t.toLowerCase()) ? null : t;
+    }
+
+    private double fingerprintSimilarity(String storedJson, String newJson) {
+        if (storedJson == null || newJson == null) return 0.0;
+        try {
+            Map<String, String> a = FP_MAPPER.readValue(storedJson, new TypeReference<Map<String, String>>() {});
+            Map<String, String> b = FP_MAPPER.readValue(newJson, new TypeReference<Map<String, String>>() {});
+            if (a.isEmpty() && b.isEmpty()) return 1.0;
+            int inter = 0;
+            for (Map.Entry<String, String> e : a.entrySet()) {
+                if (e.getValue() != null && e.getValue().equals(b.get(e.getKey()))) inter++;
+            }
+            int union = a.size() + b.size() - inter;
+            return union == 0 ? 1.0 : (double) inter / union;
+        } catch (Exception e) {
+            return 0.0;
+        }
+    }
+
+    /** 评估并落库设备指纹，同时执行克隆检测（跨设备碰撞 + 设备内剧变）。device 必须非 null。 */
+    private void checkAndStoreFingerprint(BusinessContext business, User user, UserDevice device, ClientFingerprintDTO fp) {
+        String tenantSalt = fingerprintSalt(business.bizId());
+        FpEval ev = evaluateFingerprint(fp, tenantSalt);
+        if (ev.hash == null) {
+            // 退化指纹：不依赖指纹做克隆判定，仅确保有一行（confidence=0、fp_hash=null），避免 per-request 误判
+            upsertFingerprint(business, user, device, null, null, 0, "OK");
+            return;
+        }
+        // 跨设备指纹碰撞：同业务内相同硬件指纹被“不同设备令牌”声明 -> 强克隆信号。
+        // 仅在 confidence>=2 时启用，规避单组件弱指纹偶发碰撞误杀合法用户（应对“指纹仍可能不唯一”的极端情况）。
+        if (ev.confidence >= 2) {
+            long collisions = fpMapper.selectCount(new LambdaQueryWrapper<DeviceFingerprint>()
+                    .eq(DeviceFingerprint::getBizId, business.bizId())
+                    .eq(DeviceFingerprint::getFpHash, ev.hash)
+                    .ne(DeviceFingerprint::getUserDeviceId, device.getId()));
+            if (collisions > 0) {
+                fpLog.warn("设备指纹跨设备碰撞(疑似克隆): bizId={}, deviceIdHash={}, fpHash={}",
+                        business.bizId(), device.getDeviceIdHash(), ev.hash);
+                throw new BusinessException(40386, "设备指纹异常，疑似克隆环境，请联系管理员");
+            }
+        }
+        // 设备内指纹剧变：同一令牌下硬件指纹大幅变化 -> 可能换机或克隆
+        DeviceFingerprint existing = device.getId() == null ? null :
+                fpMapper.selectOne(new LambdaQueryWrapper<DeviceFingerprint>().eq(DeviceFingerprint::getUserDeviceId, device.getId()));
+        String status = "OK";
+        if (existing != null && existing.getFpHash() != null && !existing.getFpHash().equals(ev.hash)) {
+            double ratio = fingerprintSimilarity(existing.getFpJson(), ev.json);
+            if (ratio < 0.5) {
+                fpLog.warn("设备内指纹剧变(疑似克隆): bizId={}, deviceIdHash={}, ratio={}", business.bizId(), device.getDeviceIdHash(), ratio);
+                throw new BusinessException(40386, "设备指纹异常，疑似克隆环境，请联系管理员");
+            } else if (ratio < 0.85) {
+                status = "CLONE_SUSPECT";
+                fpLog.warn("设备内指纹小幅变化(可疑): bizId={}, deviceIdHash={}, ratio={}", business.bizId(), device.getDeviceIdHash(), ratio);
+            }
+        }
+        upsertFingerprint(business, user, device, ev.json, ev.hash, ev.confidence, status);
+    }
+
+    private void upsertFingerprint(BusinessContext business, User user, UserDevice device, String json, String hash,
+                                   int confidence, String status) {
+        DeviceFingerprint row = device.getId() == null ? null :
+                fpMapper.selectOne(new LambdaQueryWrapper<DeviceFingerprint>().eq(DeviceFingerprint::getUserDeviceId, device.getId()));
+        if (row == null) {
+            row = new DeviceFingerprint();
+            row.setBizId(business.bizId()); row.setUserId(user.getId());
+            row.setUserDeviceId(device.getId()); row.setDeviceIdHash(device.getDeviceIdHash());
+            row.setCreatedAt(LocalDateTime.now());
+        }
+        row.setFpJson(json); row.setFpHash(hash); row.setFpVersion(fpVersion);
+        row.setFpConfidence(confidence); row.setFpStatus(status); row.setUpdatedAt(LocalDateTime.now());
+        if (row.getId() == null) fpMapper.insert(row); else fpMapper.updateById(row);
+    }
+
     public static String sha256(String value) {
         try { return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8))); }
         catch (Exception e) { throw new IllegalStateException(e); }

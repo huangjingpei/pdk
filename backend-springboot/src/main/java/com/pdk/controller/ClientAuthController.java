@@ -12,6 +12,7 @@ import com.pdk.domain.dto.ChangePasswordDTO;
 import com.pdk.domain.dto.ClientResetPasswordDTO;
 import com.pdk.domain.entity.User;
 import com.pdk.domain.entity.UserCredential;
+import com.pdk.domain.entity.UserDevice;
 import com.pdk.mapper.UserMapper;
 import com.pdk.mapper.UserCredentialMapper;
 import com.pdk.platform.business.BusinessRequestResolver;
@@ -182,7 +183,14 @@ public class ClientAuthController {
         loginLogService.recordClientSuccess(business.bizId(), user.getId(), user.getPhone(),
                 dto.getDeviceId(), licenseContext, request);
         Map<String, Object> result = payload(user, credential, business);
-        if (licenseContext != null) result.put("deviceLicense", deviceLicenseService.view(licenseContext.license()));
+        if (licenseContext != null) {
+            result.put("deviceLicense", deviceLicenseService.view(licenseContext.license()));
+            // 下发每租户盐与已落库的指纹哈希：客户端用 fingerprintHash 通过 X-PDK-FP 头回传，
+            // 服务端在每次受保护请求比对，实现“不做心跳的克隆/换机检测”。
+            result.put("fingerprintSalt", deviceLicenseService.fingerprintSalt(business.bizId()));
+            String fpHash = deviceLicenseService.currentFingerprintHash(business, user, licenseContext.device());
+            if (fpHash != null) result.put("fingerprintHash", fpHash);
+        }
         return CommonResult.success(result, "客户端登录成功");
     }
 

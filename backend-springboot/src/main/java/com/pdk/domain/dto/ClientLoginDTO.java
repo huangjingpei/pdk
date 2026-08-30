@@ -1,5 +1,7 @@
 package com.pdk.domain.dto;
 
+import com.pdk.domain.dto.ClientFingerprintDTO;
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Positive;
@@ -32,4 +34,8 @@ public class ClientLoginDTO {
 
     @Size(max = 32, message = "设备平台不能超过32位")
     private String platform;
+
+    /** 设备硬件指纹（可选）。上报后服务端做 salted hash 用于克隆检测；不报则跳过，向后兼容老客户端。 */
+    @Valid
+    private ClientFingerprintDTO fingerprint;
 }

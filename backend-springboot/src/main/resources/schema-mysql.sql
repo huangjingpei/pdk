@@ -385,6 +385,27 @@ CREATE TABLE IF NOT EXISTS `pdk_user_device` (
     INDEX `idx_device_user_status` (`biz_id`, `user_id`, `status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户设备；DEVICE_LICENSE 业务允许一用户多设备';
 
+-- 设备硬件指纹（克隆检测）。与 pdk_user_device 1:1（user_device_id 唯一），独立成表避免改动既有列。
+-- fp_hash 为 NULL 表示“退化指纹”（三个组件全空/默认值），此时不做指纹克隆判定，仅以 deviceId 令牌为主键。
+-- fp_confidence：可读硬件组件数 0..3；跨设备碰撞检测仅在 confidence>=2 时启用，避免单组件弱指纹偶发碰撞误杀合法用户。
+CREATE TABLE IF NOT EXISTS `pdk_device_fingerprint` (
+    `id` BIGINT AUTO_INCREMENT PRIMARY KEY,
+    `biz_id` BIGINT NOT NULL,
+    `user_id` BIGINT NOT NULL,
+    `user_device_id` BIGINT NOT NULL,
+    `device_id_hash` CHAR(64) NOT NULL,
+    `fp_json` TEXT DEFAULT NULL COMMENT '归一化各组件 salted hash 列表(JSON)，如 {"mb":"..","disk":"..","cpu":".."}',
+    `fp_hash` CHAR(64) DEFAULT NULL COMMENT '归一化 fp_json + 每租户盐 的 sha256；退化时为 NULL',
+    `fp_version` VARCHAR(16) DEFAULT NULL,
+    `fp_confidence` TINYINT NOT NULL DEFAULT 0,
+    `fp_status` VARCHAR(20) NOT NULL DEFAULT 'OK' COMMENT 'OK/CLONE_SUSPECT/CLONE_CONFIRMED',
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY `uk_user_device` (`user_device_id`),
+    INDEX `idx_biz_fphash` (`biz_id`, `fp_hash`),
+    INDEX `idx_biz_devhash` (`biz_id`, `device_id_hash`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='设备硬件指纹，用于克隆检测';
+
 CREATE TABLE IF NOT EXISTS `pdk_device_license` (
     `id` BIGINT AUTO_INCREMENT PRIMARY KEY,
     `biz_id` BIGINT NOT NULL,

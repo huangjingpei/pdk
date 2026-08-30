@@ -29,6 +29,9 @@ import random
 import string
 import time
 import uuid
+import hashlib
+import platform
+import subprocess
 from typing import Any, Optional
 
 import requests
@@ -65,21 +68,85 @@ class PdkClient:
         self.base_url = base_url.rstrip("/")
         self.app_id = int(app_id)
         self.phone = phone
-        # 真实客户端应使用稳定的机器指纹（主板序列号 / MAC 哈希）。这里给一个基于主机的回退。
-        self.device_id = device_id or self._stable_device_id()
+        # 设备 ID 持久化：优先写入 Windows 注册表（HKCU，重装/重启不丢、无需管理员）；
+        # 非 Windows 或注册表不可用时回退到用户主目录文件。注册表方案让 deviceId 稳定，
+        # 但「防克隆」的真正闭环需要服务端硬件指纹比对（见 collect_fingerprint / 后端克隆检测）。
+        self.device_id = device_id or self._load_or_create_device_id()
         self.use_crypto = use_crypto
         self.token = token
         self.token_name = token_name
+        # 设备指纹哈希：登录后由服务端下发（服务端对原始硬件组件做 salted hash 得到），
+        # 之后每次请求通过 X-PDK-FP 头回传给服务端做「不做心跳的克隆/换机检测」。
+        self.fingerprint_hash: Optional[str] = None
         # 加密相关（按需惰性拉取）
         self._server_pub_pem: Optional[str] = None
         self._kid: Optional[str] = None
         self._session_key: Optional[bytes] = None  # 最近一次信封会话密钥，用于解密响应
 
     # ------------------------------------------------------------------ 工具
-    @staticmethod
-    def _stable_device_id() -> str:
-        mac = uuid.getnode()
-        return "dev-" + uuid.UUID(int=mac).hex[:16]
+    def _load_or_create_device_id(self) -> str:
+        """稳定的设备 ID：写入 Windows 注册表 HKCU（重装不丢、无需管理员）；回退到主目录文件。"""
+        key_path = f"Software\\PDK\\{self.app_id}\\Device"
+        try:
+            import winreg
+            hk = winreg.CreateKey(winreg.HKEY_CURRENT_USER, key_path)
+            try:
+                val, _ = winreg.QueryValueEx(hk, "DeviceId")
+                if val:
+                    return val
+            except FileNotFoundError:
+                pass
+            new_id = "dev-" + uuid.uuid4().hex
+            winreg.SetValueEx(hk, "DeviceId", 0, winreg.REG_SZ, new_id)
+            winreg.CloseKey(hk)
+            return new_id
+        except Exception:
+            # 非 Windows / 注册表不可用：回退到用户主目录文件（跨平台可用）
+            path = os.path.join(os.path.expanduser("~"), f".pdk_device_id_{self.app_id}")
+            try:
+                if os.path.exists(path):
+                    with open(path, "r", encoding="utf-8") as f:
+                        v = f.read().strip()
+                        if v:
+                            return v
+            except Exception:
+                pass
+            new_id = "dev-" + uuid.uuid4().hex
+            try:
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(new_id)
+            except Exception:
+                pass
+            return new_id
+
+    def collect_fingerprint(self) -> Optional[dict]:
+        """
+        采集硬件指纹原始组件（明文，由服务端做 salted hash，绝不落库明文）。
+        仅采集：主板序列号 / 磁盘序列号 / CPUID。任一采集失败则该项为 None，
+        服务端按「不可读/默认值」处理、不计入置信度（应对极端情况下组件值仍可能不唯一）。
+        Windows 通过 PowerShell/WMI 采集；其他平台尽力而为，采集不到即返回部分/空。
+        """
+        fp: dict = {}
+        if platform.system().lower().startswith("win"):
+            try:
+                cmds = [
+                    "Get-CimInstance Win32_BaseBoard | Select-Object -ExpandProperty SerialNumber",
+                    "Get-CimInstance Win32_DiskDrive | Select-Object -First 1 -ExpandProperty SerialNumber",
+                    "(Get-CimInstance Win32_Processor | Select-Object -First 1).ProcessorId",
+                ]
+                out = subprocess.run(
+                    ["powershell", "-NoProfile", "-NonInteractive", "-Command", "; ".join(cmds)],
+                    capture_output=True, text=True, timeout=15,
+                )
+                lines = [ln.strip() for ln in out.stdout.strip().splitlines() if ln.strip()]
+                if len(lines) >= 3:
+                    fp["motherboardSerial"] = lines[0] or None
+                    fp["diskSerial"] = lines[1] or None
+                    fp["cpuid"] = lines[2] or None
+            except Exception:
+                pass
+        # 非 Windows 或采集失败：保留已采集到的部分；全部为空时返回 None（服务端按退化处理）
+        return fp or None
 
     def _headers(self) -> dict:
         h = {
@@ -90,6 +157,8 @@ class PdkClient:
         }
         if self.token:
             h[self.token_name] = self.token
+        if self.fingerprint_hash:
+            h["X-PDK-FP"] = self.fingerprint_hash
         return h
 
     # ------------------------------------------------------------------ 底层请求
@@ -194,13 +263,19 @@ class PdkClient:
         return self._request("GET", f"/api/v1/client/business/by-app/{self.app_id}")
 
     def login(self, password: str, *, card_key: Optional[str] = None,
-              device_name: str = "", platform: str = "python", client_version: str = "1.0.0") -> dict:
+              device_name: str = "", platform: str = "python", client_version: str = "1.0.0",
+              fingerprint: Optional[dict] = None) -> dict:
         """
         登录。
         - DEVICE_LICENSE 业务：若本设备尚未绑定许可证，必须传 card_key（卡密即激活设备）；
           已绑定设备再次登录可省略 card_key。
-        - 成功后自动保存 token（tokenName / tokenValue）与许可证信息。
+        - 成功后自动保存 token（tokenName / tokenValue）、许可证信息，以及服务端下发的
+          设备指纹哈希（fingerprintHash）—— 之后每次请求自动通过 X-PDK-FP 头回传，
+          供服务端做「不做心跳的克隆/换机检测」。
+        - fingerprint：硬件指纹组件字典（motherboardSerial/diskSerial/cpuid）。不传则自动采集。
+          全部采集不到时不上报，向后兼容老逻辑（不做指纹判定）。
         """
+        fp = fingerprint if fingerprint is not None else self.collect_fingerprint()
         body = {
             "appId": self.app_id,
             "phone": self.phone,
@@ -212,11 +287,16 @@ class PdkClient:
         }
         if card_key:
             body["cardKey"] = card_key
+        if fp:
+            body["fingerprint"] = fp
         data = self._request("POST", "/api/v1/client/auth/login", body)
         # 保存会话令牌（DEVICE_LICENSE 下 token 主体是 license:<id>）
         if data.get("tokenName") and data.get("tokenValue"):
             self.token_name = data["tokenName"]
             self.token = data["tokenValue"]
+        # 保存设备指纹哈希，供后续请求通过 X-PDK-FP 头回传
+        if data.get("fingerprintHash"):
+            self.fingerprint_hash = data["fingerprintHash"]
         return data
 
     def activate_device(self, password: str, card_key: str, **kw) -> dict:
@@ -328,8 +408,12 @@ if __name__ == "__main__":
     # 最小可运行示例：ZHIBO_AI 客户端登录并自查
     client = PdkClient("http://localhost:8080", app_id=2, phone="13454118763")
     print("业务信息:", client.business_info())
+    # 自动采集硬件指纹（Windows 注册表持久化 deviceId + WMI 采集主板/磁盘/CPUID）
+    print("采集到的硬件指纹:", client.collect_fingerprint())
     # 新设备首次登录需要卡密（激活设备）；已绑定的设备可只传密码
     res = client.login(password="YourPass123", card_key="PDK-XXXX-XXXX-XXXX")
     print("登录成功, token 头部:", res["tokenName"])
     print("许可证:", res.get("deviceLicense"))
+    print("服务端下发的指纹哈希(后续请求自动通过 X-PDK-FP 回传):", res.get("fingerprintHash"))
+    # 此后每次受保护请求自动携带 X-PDK-FP 头，服务端比对以检测克隆/换机
     print("合法检查:", client.verify_session())
