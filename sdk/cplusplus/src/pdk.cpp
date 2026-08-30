@@ -29,7 +29,6 @@
 
 #ifdef _WIN32
 #  include <windows.h>
-#  include <winreg.h>
 #else
 #  include <unistd.h>
 #  include <sys/stat.h>
@@ -122,26 +121,18 @@ static std::string aes_gcm_decrypt(const std::vector<unsigned char>& key,
  * ========================================================================== */
 static std::string machine_fingerprint() {
 #ifdef _WIN32
-    HKEY hKey;
-    char buf[256] = {0};
-    DWORD sz = sizeof(buf);
-    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE,
-                      "SOFTWARE\\Microsoft\\Cryptography", 0,
-                      KEY_READ | KEY_WOW64_64KEY, &hKey) == ERROR_SUCCESS) {
-        if (RegQueryValueExA(hKey, "MachineGuid", nullptr, nullptr, (LPBYTE)buf, &sz) == ERROR_SUCCESS) {
-            RegCloseKey(hKey);
-            return std::string(buf);
-        }
-        RegCloseKey(hKey);
-    }
-    // 兜底：卷序列号
-    char vol[4] = "C:\\";
+    // 不再读取注册表。改用「系统盘卷序列号」作为机器级稳定指纹种子
+    // （device_id 首次生成后落盘于 ProgramData，之后以缓存为准，故此处仅作首次兜底）。
+    // 盘符跟随 %SystemDrive%，不写死 C:，兼容系统装在非 C: 盘的情况。
+    const char* sd = getenv("SystemDrive");
+    std::string vol = sd ? std::string(sd) : "C:";
+    if (vol.size() >= 2 && vol[1] == ':') vol += "\\";
     DWORD sn = 0;
-    if (GetVolumeInformationA(vol, nullptr, 0, &sn, nullptr, nullptr, nullptr, 0) && sn)
+    if (GetVolumeInformationA(vol.c_str(), nullptr, 0, &sn, nullptr, nullptr, nullptr, 0) && sn)
         return "VOL" + std::to_string(sn);
     return "WIN-" + std::to_string(GetCurrentProcessId());
 #else
-    // 优先 /etc/machine-id，否则 hostname+mac
+    // 优先 /etc/machine-id，否则 hostname
     for (const char* p : {"/etc/machine-id", "/var/lib/dbus/machine-id"}) {
         std::ifstream f(p);
         if (f) { std::string s; std::getline(f, s); if (!s.empty()) return s; }
@@ -161,52 +152,57 @@ static std::string sha256_hex(const std::string& s) {
     return out;
 }
 
-static std::string device_cache_dir() {
+// 所有语言 SDK 统一的设备 ID 落盘目录（按 app_id 隔离）：
+// - Windows：%ProgramData%\PDK\{app_id}（机器级、所有用户共享、无需管理员、盘符跟随系统盘）
+// - 其他：~/.pdk_client/{app_id}（按 app_id 隔离的回退）
+// 文件名固定为 device_id（纯文本），各 SDK 同机同 app_id 可互读；不再使用注册表。
+static std::string device_cache_dir(int app_id) {
 #ifdef _WIN32
-    const char* appdata = getenv("APPDATA");
-    std::string base = appdata ? std::string(appdata) : "C:\\";
-    return base + "\\.pdk_client";
+    const char* pd = getenv("ProgramData");
+    std::string base = pd ? std::string(pd)
+                          : std::string(getenv("SystemDrive") ? getenv("SystemDrive") : "C:") + "\\ProgramData";
+    return base + "\\PDK\\" + std::to_string(app_id);
 #else
     const char* home = getenv("HOME");
     std::string base = home ? std::string(home) : "/tmp";
-    return base + "/.pdk_client";
+    return base + "/.pdk_client/" + std::to_string(app_id);
 #endif
 }
 
-static std::string load_device_id() {
-    std::string path = device_cache_dir() + "/device_id.json";
+static std::string load_device_id(int app_id) {
+    std::string path = device_cache_dir(app_id) + "/device_id";
     std::ifstream f(path);
     if (!f) return "";
-    try {
-        json j; f >> j;
-        std::string id = j.value("device_id", "");
-        return id;
-    } catch (...) { return ""; }
+    std::string line;
+    if (!std::getline(f, line)) return "";
+    while (!line.empty() && (line.back() == '\r' || line.back() == '\n' || line.back() == ' '))
+        line.pop_back();
+    return line;
 }
 
-static void save_device_id(const std::string& id) {
+static void save_device_id(const std::string& id, int app_id) {
     if (id.empty()) return;
-    std::string dir = device_cache_dir();
+    std::string dir = device_cache_dir(app_id);
 #ifdef _WIN32
     CreateDirectoryA(dir.c_str(), nullptr);
 #else
     mkdir(dir.c_str(), 0700);
 #endif
-    std::ofstream f(dir + "/device_id.json");
+    std::ofstream f(dir + "/device_id", std::ios::trunc);
     if (!f) return;
-    json j = {{"device_id", id}, {"updated_at", ""}};
-    f << j.dump(2);
+    f << id << "\n";
 }
 
-static std::string default_device_id() {
+static std::string default_device_id(int app_id) {
     const char* env = getenv("PDK_DEVICE_ID");
     if (env && *env) return std::string(env);
-    std::string cached = load_device_id();
+    std::string cached = load_device_id(app_id);
     if (!cached.empty()) return cached;
-    std::string fp = sha256_hex(machine_fingerprint());
+    // 种子含 app_id，避免不同业务在同机生成出相同的 device_id 字符串
+    std::string fp = sha256_hex(machine_fingerprint() + ":" + std::to_string(app_id));
     std::string id = "CPP-" + fp.substr(0, 24);
     std::transform(id.begin(), id.end(), id.begin(), ::toupper);
-    save_device_id(id);
+    save_device_id(id, app_id);
     return id;
 }
 
@@ -341,7 +337,7 @@ Client::Client(const Config& cfg) : impl_(std::make_unique<Impl>()) {
     impl_->appId     = cfg.appId;
     impl_->timeoutMs = cfg.httpTimeoutMs;
     impl_->debugLog  = cfg.enableDebugLog;
-    impl_->deviceId  = cfg.deviceId.empty() ? default_device_id() : cfg.deviceId;
+    impl_->deviceId  = cfg.deviceId.empty() ? default_device_id(impl_->appId) : cfg.deviceId;
     emitState(State::Ready, "客户端初始化完成，设备ID=" + impl_->deviceId);
 }
 
@@ -556,7 +552,7 @@ ApiResponse Client::registerAccount(const std::string& phone,
         impl_->phone      = phone;
         std::string srvDid = d.value("deviceId", impl_->deviceId);
         impl_->deviceId   = srvDid;
-        save_device_id(srvDid);       // 服务端权威，回写本地缓存
+        save_device_id(srvDid, impl_->appId);       // 服务端权威，回写本地缓存
         impl_->password   = password;
         emitState(State::Registered, "注册成功并登录：" + phone);
     } else {
@@ -578,7 +574,7 @@ ApiResponse Client::login(const std::string& phone, const std::string& password)
         impl_->phone      = phone;
         std::string srvDid = d.value("deviceId", impl_->deviceId);
         impl_->deviceId   = srvDid;
-        save_device_id(srvDid);
+        save_device_id(srvDid, impl_->appId);
         impl_->password   = password;
         emitState(State::LoggedIn, "登录成功：" + phone);
     } else if (r.code == ResultCode::DEVICE_KICK_OUT) {

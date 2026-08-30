@@ -32,12 +32,16 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.web.bind.annotation.*;
 
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
+
 import java.util.LinkedHashMap;
 import java.util.Map;
 
 @RestController
 @RequestMapping("/api/v1/client/auth")
 @RequiredArgsConstructor
+@Tag(name = "客户端认证（登录/注册/改密）", description = "手机号+密码登录；DEVICE_LICENSE（设备许可证）业务下，登录即承载设备许可证的绑定与激活")
 public class ClientAuthController {
     private final UserMapper userMapper;
     private final UserCredentialMapper credentialMapper;
@@ -121,7 +125,7 @@ public class ClientAuthController {
         } else {
             clientStpLogic.login(user.getId());
             deviceBindingService.bind(user.getBizId(), user.getId(), user.getDeviceId());
-            result = payload(user, credential, business);
+            result = payload(user, credential, business, null);
         }
         result.put("resourceAllocated", resourceAllocated);
         result.put("resourceMessage", resourceAllocated
@@ -136,6 +140,14 @@ public class ClientAuthController {
     }
 
     @PostMapping("/login")
+    @Operation(summary = "客户端登录（DEVICE_LICENSE 业务下兼作设备激活）",
+            description = "手机号 + 密码登录。行为按业务授权模式分流，无独立绑定/激活接口：\n"
+                    + "1) DEVICE_LICENSE（设备许可证）业务：\n"
+                    + "   - 本设备【已绑定】许可证 → 直接登录，cardKey 被忽略（即使携带也不会重新激活）；\n"
+                    + "   - 本设备【未绑定】且携带 cardKey → 完成激活：将卡密对应的设备许可证绑定到「本设备 + 手机号」；\n"
+                    + "   - 本设备【未绑定】且未携带 cardKey → 报错 40380，必须先提供卡密激活。\n"
+                    + "2) 非 DEVICE_LICENSE 业务：普通手机号密码登录（cardKey 忽略）。\n"
+                    + "换卡须先解绑（unbind），否则携带新卡密仍返回原许可证。克隆检测（40386）依赖 X-PDK-FP 头与硬件指纹。")
     public CommonResult<Map<String, Object>> login(@Valid @RequestBody ClientLoginDTO dto,
                                                     HttpServletRequest request) {
         BusinessContext business = businessRequestResolver.resolveContextAndBind(request, dto.getAppId());
@@ -182,7 +194,8 @@ public class ClientAuthController {
         if (!business.usesDeviceLicense()) deviceBindingService.bind(user.getBizId(), user.getId(), dto.getDeviceId());
         loginLogService.recordClientSuccess(business.bizId(), user.getId(), user.getPhone(),
                 dto.getDeviceId(), licenseContext, request);
-        Map<String, Object> result = payload(user, credential, business);
+        Map<String, Object> result = payload(user, credential, business,
+                licenseContext != null ? licenseContext.device().getDeviceName() : null);
         if (licenseContext != null) {
             result.put("deviceLicense", deviceLicenseService.view(licenseContext.license()));
             // 下发每租户盐与已落库的指纹哈希：客户端用 fingerprintHash 通过 X-PDK-FP 头回传，
@@ -281,7 +294,8 @@ public class ClientAuthController {
         return CommonResult.success("电脑已解绑，可在新电脑使用账号密码重新登录并绑定");
     }
 
-    private Map<String, Object> payload(User user, UserCredential credential, BusinessContext business) {
+    private Map<String, Object> payload(User user, UserCredential credential, BusinessContext business,
+                                  String deviceName) {
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("bizId", business.bizId());
         data.put("appId", business.appId());
@@ -293,6 +307,7 @@ public class ClientAuthController {
         data.put("tokenValue", clientStpLogic.getTokenValue());
         data.put("phone", user.getPhone());
         data.put("deviceId", user.getDeviceId());
+        if (deviceName != null) data.put("deviceName", deviceName);
         data.put("status", user.getStatus());
         data.put("packageName", user.getCurrentPackageName());
         data.put("expireTime", user.getExpireTime());

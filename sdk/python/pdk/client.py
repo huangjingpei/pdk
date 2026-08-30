@@ -53,41 +53,51 @@ def _fingerprint_device_id() -> str:
     return f"PYQT-{digest}"
 
 
-_DEVICE_ID_DIR = os.path.join(os.path.expanduser("~"), ".pdk_client")
-_DEVICE_ID_FILE = os.path.join(_DEVICE_ID_DIR, "device_id.json")
+def _device_id_path(app_id: int) -> str:
+    """所有语言 SDK 统一的设备 ID 落盘路径：
+    - Windows：%ProgramData%\\PDK\\{app_id}\\device_id（机器级、所有用户共享、无需管理员、盘符跟随系统盘）
+    - 其他：~/.pdk_client/{app_id}/device_id（按 app_id 隔离的回退）
+    纯文本，各 SDK 同机同 app_id 可互读；不再使用注册表。"""
+    if os.name == "nt":
+        prog_data = os.environ.get("ProgramData")
+        if not prog_data:
+            prog_data = os.environ.get("SystemDrive", "C:") + "\\ProgramData"
+        return os.path.join(prog_data, "PDK", str(app_id), "device_id")
+    return os.path.join(os.path.expanduser("~"), ".pdk_client", str(app_id), "device_id")
 
 
-def load_device_id() -> str:
+def load_device_id(app_id: int) -> str:
     try:
-        if os.path.exists(_DEVICE_ID_FILE):
-            with open(_DEVICE_ID_FILE, "r", encoding="utf-8") as f:
-                return (json.load(f).get("device_id") or "").strip()
+        path = _device_id_path(app_id)
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                return f.read().strip()
     except Exception:
         pass
     return ""
 
 
-def save_device_id(device_id: str) -> None:
+def save_device_id(device_id: str, app_id: int) -> None:
     if not device_id:
         return
     try:
-        os.makedirs(_DEVICE_ID_DIR, exist_ok=True)
-        with open(_DEVICE_ID_FILE, "w", encoding="utf-8") as f:
-            json.dump({"device_id": device_id, "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S")},
-                      f, ensure_ascii=False)
+        path = _device_id_path(app_id)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(device_id)
     except Exception:
         pass
 
 
-def default_device_id() -> str:
+def default_device_id(app_id: int) -> str:
     env_id = (os.getenv("PDK_DEVICE_ID") or "").strip()
     if env_id:
         return env_id
-    cached = load_device_id()
+    cached = load_device_id(app_id)
     if cached:
         return cached
     new_id = _fingerprint_device_id()
-    save_device_id(new_id)
+    save_device_id(new_id, app_id)
     return new_id
 
 
@@ -115,7 +125,7 @@ class PdkApiClient:
         self._app_id = int(app_id)
         self.root_salt = root_salt
         self.session = ClientSession()
-        self.session.device_id = device_id or default_device_id()
+        self.session.device_id = device_id or default_device_id(self._app_id)
         self.http = requests.Session()
 
         # 回调（与 C++ / 易语言 模型一致）
@@ -431,7 +441,7 @@ class PdkApiClient:
         self.session.phone = phone
         server_did = data.get("deviceId") or self.session.device_id
         self.session.device_id = server_did
-        save_device_id(server_did)  # 服务端权威，回写本地缓存
+        save_device_id(server_did, self._app_id)  # 服务端权威，回写本地缓存
         self.session.password = password
 
     def logout(self):

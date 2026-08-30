@@ -32,8 +32,8 @@
 │   ① 环境变量 PDK_DEVICE_ │                                          │  Redis: pdk:device:bind:  │
 │      ID (最高优先级)      │ ◀──── 登录/注册响应回传 deviceId ──────── │         {phone}  (30min TTL) │
 │   ② 本地缓存文件          │      + payload() 始终携带 deviceId        │                          │
-│      ~/.pdk_client/      │                                          │  DeviceSecurityInterceptor│
-│       device_id.json     │                                          │  强制校验 device_id 匹配   │
+│  %ProgramData%\PDK\{app_id}\device_id  │                                          │  DeviceSecurityInterceptor│
+│       device_id（纯文本）     │                                          │  强制校验 device_id 匹配   │
 │   ③ 本机指纹种子兜底      │                                          │  → 不匹配返回 40103        │
 └──────────────────────────┘                                          └──────────────────────────┘
 ```
@@ -76,9 +76,9 @@
 | 函数 / 方法 | 作用 |
 |---|---|
 | `_fingerprint_device_id()` | 兜底种子：`SHA256(主机名:MAC:操作系统)` 取前 24 位，前缀 `PYQT-`。仅在无缓存时落地，保证既有绑定账号兼容。 |
-| `load_device_id()` | 读取本地缓存 `~/.pdk_client/device_id.json` 的 `device_id`；失败返回 `""`。 |
-| `save_device_id(did)` | 写回本地缓存（含 `updated_at`）。 |
-| `default_device_id()` | 优先级：① `PDK_DEVICE_ID` 环境变量 → ② 本地缓存 → ③ 指纹种子落地。 |
+| `load_device_id(app_id)` | 读取本地缓存：Windows 为 `%ProgramData%\PDK\{app_id}\device_id`，其他为 `~/.pdk_client/{app_id}/device_id`（纯文本）；失败返回 `""`。 |
+| `save_device_id(did, app_id)` | 写回本地缓存（同路径，纯文本，不再含 `updated_at` JSON）。 |
+| `default_device_id(app_id)` | 优先级：① `PDK_DEVICE_ID` 环境变量 → ② 本地缓存（按 app_id 隔离）→ ③ 指纹种子落地。 |
 | `register()` / `login()` | 成功后以**服务端返回的 `deviceId`** 覆盖会话与本地缓存（服务端权威）。 |
 | `unbind_device()` | **仅清登录态 token，保留 `session.device_id`**（与后端不再置空语义一致）。 |
 
@@ -98,7 +98,7 @@ save_device_id(server_did)                          # 覆盖本地缓存
 ## 4. 注意事项
 
 ### 4.1 本地缓存文件的作用（务必理解）
-`~/.pdk_client/device_id.json` **不是权威**，只是「首请求引导」。没有它，应用重启后就没有 device_id → 登录请求缺头 → 被 40103 拒绝 → 而想拿服务端值又得先登录 → **死锁**。所以本地缓存必须存在，但它随时会被服务端返回值覆盖。
+`%ProgramData%\PDK\{app_id}\device_id`（Windows）或 `~/.pdk_client/{app_id}/device_id`（其他）**不是权威**，只是「首请求引导」。没有它，应用重启后就没有 device_id → 登录请求缺头 → 被 40103 拒绝 → 而想拿服务端值又得先登录 → **死锁**。所以本地缓存必须存在，但它随时会被服务端返回值覆盖。
 
 ### 4.2 为什么不能「完全不存本地」
 纯服务端方案需新增「恢复登录」接口（凭手机号+密码+短信，**不校验** device_id）来打破死锁。代价是放松单设备互踢（凭据即设备）。本系统选方案 A 即为此取舍。
@@ -142,7 +142,7 @@ SELECT phone, device_id, status FROM pdk_user WHERE phone = '138xxxx';
 ```
 ```bash
 # 客户端本地缓存
-cat ~/.pdk_client/device_id.json
+cat %ProgramData%\PDK\{app_id}\device_id   # Windows；其他系统： cat ~/.pdk_client/{app_id}/device_id
 ```
 
 ---
@@ -155,21 +155,21 @@ cat ~/.pdk_client/device_id.json
 cd E:/pdk/client-pyqt
 python - <<'PY'
 import os, json, importlib
-cfg = os.path.join(os.path.expanduser("~"), ".pdk_client", "device_id.json")
+cfg = os.path.join(os.environ.get("ProgramData", os.path.expanduser("~")), "PDK", str(app_id), "device_id")  # Windows 走 ProgramData；其他走 ~/.pdk_client/{app_id}
 if os.path.exists(cfg): os.remove(cfg)
 
 import pdk_client as C
 
 # 1) 首次：无缓存 -> 指纹种子落地
-id1 = C.default_device_id(); assert os.path.exists(cfg)
+id1 = C.default_device_id(1); assert os.path.exists(cfg)
 
 # 2) 服务端权威写回
-C.save_device_id("PYQT-SERVER-AUTHORITATIVE-ABCD1234")
-assert C.default_device_id() == "PYQT-SERVER-AUTHORITATIVE-ABCD1234"
+C.save_device_id("PYQT-SERVER-AUTHORITATIVE-ABCD1234", 1)
+assert C.default_device_id(1) == "PYQT-SERVER-AUTHORITATIVE-ABCD1234"
 
 # 3) 重启复用（reload 模拟）
 importlib.reload(C)
-assert C.default_device_id() == "PYQT-SERVER-AUTHORITATIVE-ABCD1234"
+assert C.default_device_id(1) == "PYQT-SERVER-AUTHORITATIVE-ABCD1234"
 
 # 4) login 成功采用服务端 deviceId 并写回
 client = C.PdkApiClient()
@@ -178,7 +178,7 @@ client.request = lambda *a, **k: {"code":200,"message":"ok",
             "deviceId":"PYQT-SERVER-AUTHORITATIVE-ABCD1234","status":"TRIAL"}}
 client.login("13800000000","Passw0rd!233","PYQT-CLIENT-SENT")
 assert client.session.device_id == "PYQT-SERVER-AUTHORITATIVE-ABCD1234"
-assert C.load_device_id() == "PYQT-SERVER-AUTHORITATIVE-ABCD1234"
+assert C.load_device_id(1) == "PYQT-SERVER-AUTHORITATIVE-ABCD1234"
 
 # 5) unbind 保留 device_id、仅清 token
 client.request = lambda *a, **k: {"code":200,"message":"ok","data":None}
@@ -189,7 +189,7 @@ assert client.session.token_value == ""
 
 # 6) 环境变量覆盖
 os.environ["PDK_DEVICE_ID"]="PYQT-INSTANCE-B"
-assert C.default_device_id()=="PYQT-INSTANCE-B"
+assert C.default_device_id(1)=="PYQT-INSTANCE-B"
 print("ALL_DEVICE_ID_OK")
 PY
 ```
@@ -273,5 +273,5 @@ status = client.resource_status()  # 被领小号 usedCalls+1 且 healthStatus �
 
 - 文档对应的代码改动（后端 `ClientAuthController.java` + 客户端 `pdk_client.py` / `main.py`）**截至本文档撰写时尚未提交本地 git**；
 - **后端必须重启**后 `unbind-device` 新语义才生效；
-- 部署前请确认：① 数据库 `pdk_user.device_id` 列存在；② 本地缓存目录 `~/.pdk_client/` 有写权限；
+- 部署前请确认：① 数据库 `pdk_user.device_id` 列存在；② 本地缓存目录 `ProgramData\PDK\{app_id}\`（Windows 机器级、所有用户可读）或 `~/.pdk_client/{app_id}`（其他）有写权限；
 - 如需「解绑即彻底换设备」的语义，请另行评估（会破坏方案 A 的「复用同一 device_id」约定）。

@@ -43,6 +43,18 @@ DEFAULT_TIMEOUT = 20
 REPLAY_WINDOW_MS = 5 * 60 * 1000  # 与服务端 ±5 分钟防重放一致
 
 
+def _default_device_name() -> str:
+    """
+    调用方未提供设备名称时的兜底：用「主机名 / 操作系统」拼一个可读默认值。
+    例如 Windows 上通常是「DESKTOP-AB12 / Windows」，Linux 上「ubuntu-srv / Linux」。
+    放在模块级是为了避开 login() 内同名参数 platform 对 platform 模块的遮蔽。
+    """
+    try:
+        return f"{platform.node()} / {platform.system()}"
+    except Exception:
+        return "unknown-device"
+
+
 class PdkClientError(Exception):
     """服务端返回的非 200 结果统一抛此异常。code 即后端 BusinessException 的业务码。"""
 
@@ -85,39 +97,42 @@ class PdkClient:
 
     # ------------------------------------------------------------------ 工具
     def _load_or_create_device_id(self) -> str:
-        """稳定的设备 ID：写入 Windows 注册表 HKCU（重装不丢、无需管理员）；回退到主目录文件。"""
-        key_path = f"Software\\PDK\\{self.app_id}\\Device"
+        """
+        稳定的设备 ID（所有语言 SDK 统一约定）：
+        - Windows：写入机器级目录 %ProgramData%\\PDK\\{app_id}\\device_id。
+          该目录对所有 Windows 用户共享、普通用户即可读写、无需管理员，
+          且重装/重启不丢（位于系统盘 ProgramData，不在用户配置里）。
+          盘符跟随系统盘（取 %ProgramData% 或 %SystemDrive%，绝不写死 C:）。
+        - 非 Windows / ProgramData 不可写：回退到用户主目录 ~/.pdk_client/{app_id}/device_id。
+        不再使用注册表（避免多用户下 device_id 变成 per-user，导致同机多业务/多账号
+        身份错乱、且会与机器级硬件指纹在克隆检测中误判 40386）。
+        文件为纯文本，各语言 SDK 同机同 app_id 可互读。
+        """
+        if os.name == "nt":
+            prog_data = os.environ.get("ProgramData")
+            if not prog_data:
+                prog_data = os.environ.get("SystemDrive", "C:") + "\\ProgramData"
+            base = os.path.join(prog_data, "PDK", str(self.app_id))
+        else:
+            base = os.path.join(os.path.expanduser("~"), ".pdk_client", str(self.app_id))
+        path = os.path.join(base, "device_id")
         try:
-            import winreg
-            hk = winreg.CreateKey(winreg.HKEY_CURRENT_USER, key_path)
-            try:
-                val, _ = winreg.QueryValueEx(hk, "DeviceId")
-                if val:
-                    return val
-            except FileNotFoundError:
-                pass
-            new_id = "dev-" + uuid.uuid4().hex
-            winreg.SetValueEx(hk, "DeviceId", 0, winreg.REG_SZ, new_id)
-            winreg.CloseKey(hk)
-            return new_id
+            if os.path.exists(path):
+                with open(path, "r", encoding="utf-8") as f:
+                    v = f.read().strip()
+                    if v:
+                        return v
         except Exception:
-            # 非 Windows / 注册表不可用：回退到用户主目录文件（跨平台可用）
-            path = os.path.join(os.path.expanduser("~"), f".pdk_device_id_{self.app_id}")
-            try:
-                if os.path.exists(path):
-                    with open(path, "r", encoding="utf-8") as f:
-                        v = f.read().strip()
-                        if v:
-                            return v
-            except Exception:
-                pass
-            new_id = "dev-" + uuid.uuid4().hex
-            try:
-                with open(path, "w", encoding="utf-8") as f:
-                    f.write(new_id)
-            except Exception:
-                pass
-            return new_id
+            pass
+        new_id = "dev-" + uuid.uuid4().hex
+        try:
+            os.makedirs(base, exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(new_id)
+        except Exception:
+            # 极端情况连主目录都不可写：仅内存持有，重启后重新生成（不影响登录流程）
+            pass
+        return new_id
 
     def collect_fingerprint(self) -> Optional[dict]:
         """
@@ -274,8 +289,12 @@ class PdkClient:
           供服务端做「不做心跳的克隆/换机检测」。
         - fingerprint：硬件指纹组件字典（motherboardSerial/diskSerial/cpuid）。不传则自动采集。
           全部采集不到时不上报，向后兼容老逻辑（不做指纹判定）。
+        - device_name：设备名称（用于后台设备列表展示）。留空时自动兜底为「主机名 / 操作系统」，
+          例如 Windows 上「DESKTOP-AB12 / Windows」，无需调用方手动传入。
         """
         fp = fingerprint if fingerprint is not None else self.collect_fingerprint()
+        # 设备名称兜底：调用方未传时自动用「主机名 / 操作系统」，保证设备列表可读
+        device_name = device_name or _default_device_name()
         body = {
             "appId": self.app_id,
             "phone": self.phone,
@@ -294,6 +313,9 @@ class PdkClient:
         if data.get("tokenName") and data.get("tokenValue"):
             self.token_name = data["tokenName"]
             self.token = data["tokenValue"]
+        # 保存服务端回显的设备名称（登录时由客户端上报或自动兜底）
+        if data.get("deviceName"):
+            self.device_name = data["deviceName"]
         # 保存设备指纹哈希，供后续请求通过 X-PDK-FP 头回传
         if data.get("fingerprintHash"):
             self.fingerprint_hash = data["fingerprintHash"]

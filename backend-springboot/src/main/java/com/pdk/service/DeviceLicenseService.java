@@ -387,10 +387,15 @@ public class DeviceLicenseService {
         }
         String nextStatus = license.getExpireAt() != null && !license.getExpireAt().isAfter(LocalDateTime.now()) ? "EXPIRED" : "UNBOUND";
         int nextVersion = value(license.getVersion()) + 1;
+        // 解绑即结束当前绑定周期：清空激活/生效/到期时间，避免客户端重绑后仍沿用旧周期时间，
+        // 也避免管理后台解绑后页面继续展示无效的旧激活信息。重绑时 activated_at 为 null 会自动重算。
         licenseMapper.update(null, new LambdaUpdateWrapper<DeviceLicense>()
                 .eq(DeviceLicense::getId, licenseId)
                 .set(DeviceLicense::getUserDeviceId, null)
                 .set(DeviceLicense::getStatus, nextStatus)
+                .set(DeviceLicense::getActivatedAt, null)
+                .set(DeviceLicense::getEffectiveAt, null)
+                .set(DeviceLicense::getExpireAt, null)
                 .set(DeviceLicense::getVersion, nextVersion));
         cardMapper.update(null, new LambdaUpdateWrapper<CardKey>()
                 .eq(CardKey::getId, license.getCardKeyId()).set(CardKey::getActivatedDeviceId, null));
