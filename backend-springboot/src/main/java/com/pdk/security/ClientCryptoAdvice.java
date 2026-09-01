@@ -3,6 +3,7 @@ package com.pdk.security;
 import com.pdk.common.exception.BusinessException;
 import com.pdk.config.ConfigKeys;
 import com.pdk.service.SystemConfigService;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.MethodParameter;
@@ -35,6 +36,7 @@ public class ClientCryptoAdvice implements RequestBodyAdvice, ResponseBodyAdvice
 
     private final BodyCryptoService bodyCrypto;
     private final SystemConfigService configService;
+    private final ObjectMapper objectMapper;
 
     /** 请求线程内共享：本次请求是否以加密信封形式到达（用于响应侧决定是否加密）。 */
     private static final ThreadLocal<Boolean> REQUEST_ENCRYPTED = new ThreadLocal<>();
@@ -58,9 +60,11 @@ public class ClientCryptoAdvice implements RequestBodyAdvice, ResponseBodyAdvice
     }
 
     @Autowired
-    public ClientCryptoAdvice(BodyCryptoService bodyCrypto, SystemConfigService configService) {
+    public ClientCryptoAdvice(BodyCryptoService bodyCrypto, SystemConfigService configService,
+                              ObjectMapper objectMapper) {
         this.bodyCrypto = bodyCrypto;
         this.configService = configService;
+        this.objectMapper = objectMapper;
     }
 
     @Override
@@ -134,18 +138,42 @@ public class ClientCryptoAdvice implements RequestBodyAdvice, ResponseBodyAdvice
         if (!isProtectedPath(uri)) {
             return body;
         }
+        // 公开引导端点（如 /config/public）必须始终返回明文：客户端需要先拿到公钥与加密模式
+        // 才能开始加密，绝不能用会话密钥加密它的响应（否则新客户端无法引导，报 42904）。
+        if (isPublicBootstrapPath(uri)) {
+            return body;
+        }
         javax.crypto.spec.SecretKeySpec responseKey = null;
         if (Boolean.TRUE.equals(encrypted) && sessionKey != null) {
             responseKey = sessionKey; // 本次请求即信封：用本次会话密钥加密响应
+            // 健壮性：登录类响应（POST 信封）同时按登录态身份缓存密钥，
+            // 覆盖后续 GET 未携带 device-id 头时的加密判定
+            cacheKeyByLoginId(sessionKey);
         } else {
-            // 方案 A：查跨请求会话密钥缓存（GET / 无 body 请求也据此加密响应）
-            HttpServletRequest cur = currentRequest();
-            if (cur != null) {
-                String id = resolveIdentity(cur);
-                SessionKeyEntry entry = SESSION_KEYS.get(id);
-                if (entry != null) {
-                    if (entry.expired()) SESSION_KEYS.remove(id);
-                    else responseKey = entry.key;
+            // GET / 无 body 请求：仅当客户端显式声明持有会话密钥（X-PDK-Crypto-Armed=1）
+            // 且能按稳定身份（设备ID / 登录态）找到缓存密钥时才加密响应。
+            // 这避免了“服务端缓存了别的会话密钥、但本客户端并没有该密钥”时把响应加密、
+            // 导致客户端无法解密（42904）的问题；同时彻底封堵了基于共享 IP 串密钥的风险。
+            String armed = request.getHeaders().getFirst("X-PDK-Crypto-Armed");
+            if ("1".equals(armed)) {
+                String id = resolveIdentityHttp(request);
+                if (isStableIdentity(id)) {
+                    SessionKeyEntry entry = SESSION_KEYS.get(id);
+                    if (entry != null) {
+                        if (entry.expired()) SESSION_KEYS.remove(id);
+                        else responseKey = entry.key;
+                    }
+                }
+                // 兜底：用登录态身份再查一次（同样仅限稳定身份）
+                if (responseKey == null) {
+                    HttpServletRequest cur = currentRequest();
+                    if (cur != null) {
+                        String id2 = resolveIdentity(cur);
+                        if (isStableIdentity(id2)) {
+                            SessionKeyEntry e2 = SESSION_KEYS.get(id2);
+                            if (e2 != null && !e2.expired()) responseKey = e2.key;
+                        }
+                    }
                 }
             }
         }
@@ -154,13 +182,51 @@ public class ClientCryptoAdvice implements RequestBodyAdvice, ResponseBodyAdvice
         }
         try {
             String json = body instanceof String ? (String) body
-                    : new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(body);
-            String envelope = bodyCrypto.encryptResponse(json, responseKey);
+                    : objectMapper.writeValueAsString(body);
+            Map<String, Object> envelope = bodyCrypto.encryptResponse(json, responseKey);
             response.getHeaders().setContentType(MediaType.APPLICATION_JSON);
             return envelope;
         } catch (Exception e) {
-            // 加密失败：退回明文，避免客户端完全收不到响应
+            // 加密失败不应阻断业务：退回明文响应，保留原始 body。
             return body;
+        }
+    }
+
+    /** 公开引导端点：必须明文返回，供新客户端引导（获取公钥 / 加密模式）。 */
+    private boolean isPublicBootstrapPath(String uri) {
+        return uri != null && uri.startsWith("/api/v1/client/config/public");
+    }
+
+    /** 仅设备ID（dev）或登录态（uid）身份可用于加密判定；IP 身份共享不可靠，禁止用于加密。 */
+    private static boolean isStableIdentity(String id) {
+        return id != null && (id.contains(":dev:") || id.contains(":uid:"));
+    }
+
+    /** 从 ServerHttpRequest 直接解析会话身份（优先 device-id，其次登录态，最后 IP）。
+     *  不依赖 RequestContextHolder，避免在 ResponseBodyAdvice 阶段取不到原生 request 时静默跳过加密。 */
+    private static String resolveIdentityHttp(ServerHttpRequest req) {
+        String appId = req.getHeaders().getFirst("X-PDK-App-ID");
+        String appScope = (appId == null || appId.isBlank()) ? "1" : appId.trim();
+        String dev = req.getHeaders().getFirst("X-PDK-Device-ID");
+        if (dev != null && !dev.isBlank()) return "app:" + appScope + ":dev:" + dev.trim();
+        try {
+            Object id = cn.dev33.satoken.stp.StpUtil.getLoginIdDefaultNull();
+            if (id != null) return "app:" + appScope + ":uid:" + id;
+        } catch (Exception ignored) {
+            // Sa-Token 未启用或请求未登录时忽略，退化为 IP
+        }
+        return "app:" + appScope + ":ip:" + (req.getRemoteAddress() != null
+                ? req.getRemoteAddress().toString() : "unknown");
+    }
+
+    /** 登录类响应（本次请求为信封）额外按登录态身份缓存会话密钥，
+     *  供后续未携带 device-id 头的 GET 请求也能判定加密。 */
+    private void cacheKeyByLoginId(javax.crypto.spec.SecretKeySpec key) {
+        HttpServletRequest cur = currentRequest();
+        if (cur == null) return;
+        String id = resolveIdentity(cur);
+        if (id.contains(":uid:")) {
+            SESSION_KEYS.put(id, new SessionKeyEntry(key));
         }
     }
 

@@ -555,7 +555,7 @@ CREATE TABLE IF NOT EXISTS `pdk_system_config` (
 INSERT INTO `pdk_system_config` (`config_key`, `config_value`, `config_type`, `config_group`, `config_label`, `config_options`, `default_value`, `description`, `editable_by`) VALUES
 ('token.allocation.mode', 'FIXED', 'SELECT', 'ACCOUNT', '账号小号 Token 使用方式', 'FIXED:固定分配,POLLING:轮询(预留未启用)', 'FIXED', '当前仅 FIXED(固定分配)生效：激活时把小号独占绑定给用户；POLLING(轮询)预留未启用', 'SUPER_ADMIN'),
 ('sms.register.enabled', 'false', 'SWITCH', 'SMS', '注册短信验证码', '', 'false', '开启后客户端注册必须校验短信验证码', 'SUPER_ADMIN'),
-('security.encryption.enabled', 'true', 'SWITCH', 'SECURITY', '协议安全加密', '', 'true', '开启后服务端下发拼多多 Token 走 AES-GCM 加密；关闭可灰度降级', 'SUPER_ADMIN'),
+('security.encryption.mode', 'optional', 'SELECT', 'SECURITY', '协议加密模式', 'off:关闭,optional:灰度(兼容明文),force:强制仅加密', 'optional', 'off=明文信封都不处理;optional=信封解密+明文放行且响应仅当请求加密才加密;force=仅接受加密信封', 'SUPER_ADMIN'),
 ('trial.days', '1', 'NUMBER', 'ACCOUNT', '新用户试用天数', '', '1', '注册赠送的体验版天数（预留，待启用）', 'SUPER_ADMIN'),
 ('device.kickout.enabled', 'true', 'SWITCH', 'SECURITY', '单设备互踢', '', 'true', '开启后同账号仅允许一台设备在线（预留，待启用）', 'SUPER_ADMIN'),
 ('heartbeat.interval.seconds', '45', 'NUMBER', 'SECURITY', '心跳间隔(秒)', '', '45', '客户端建议心跳上报间隔（预留，待启用）', 'SUPER_ADMIN')

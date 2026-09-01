@@ -14,7 +14,6 @@ public final class ConfigKeys {
      */
     public static final String TOKEN_ALLOCATION_MODE = "token.allocation.mode";
     public static final String SMS_REGISTER_ENABLED = "sms.register.enabled";
-    public static final String SECURITY_ENCRYPTION_ENABLED = "security.encryption.enabled";
     /**
      * 协议安全加密模式（三态）：
      * off    = 关闭，明文/信封都不处理（兼容旧客户端）
@@ -29,7 +28,6 @@ public final class ConfigKeys {
     // ---- 默认值（数据库无记录时回退） ----
     public static final String DEFAULT_TOKEN_ALLOCATION_MODE = "FIXED";
     public static final boolean DEFAULT_SMS_REGISTER_ENABLED = false;
-    public static final boolean DEFAULT_SECURITY_ENCRYPTION_ENABLED = true;
     public static final String DEFAULT_SECURITY_ENCRYPTION_MODE = "optional";
     public static final int DEFAULT_TRIAL_DAYS = 1;
     public static final boolean DEFAULT_DEVICE_KICKOUT_ENABLED = true;
@@ -41,10 +39,6 @@ public final class ConfigKeys {
     }
 
     public static boolean isSmsRegisterEnabled(String value) {
-        return Boolean.parseBoolean(value);
-    }
-
-    public static boolean isSecurityEncryptionEnabled(String value) {
         return Boolean.parseBoolean(value);
     }
 

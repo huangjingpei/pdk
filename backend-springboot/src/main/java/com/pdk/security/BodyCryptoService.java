@@ -12,6 +12,9 @@ import java.time.Duration;
 import javax.crypto.Cipher;
 import javax.crypto.spec.SecretKeySpec;
 import javax.crypto.spec.GCMParameterSpec;
+import javax.crypto.spec.OAEPParameterSpec;
+import java.security.spec.MGF1ParameterSpec;
+import javax.crypto.spec.PSource;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.util.Base64;
@@ -48,6 +51,17 @@ public class BodyCryptoService {
     private static final int GCM_TAG_BITS = 128;
     private static final int IV_BYTES = 12;
     private static final int AES_KEY_BYTES = 32;
+
+    /**
+     * RSA-OAEP 参数（与所有客户端 SDK 严格对齐）。
+     * 注意：Java 的 {@code RSA/ECB/OAEPWithSHA-256AndMGF1Padding} 在【不显式传参】时，
+     * MGF1 默认使用 SHA-1，而 Python(cryptography) / C++(OpenSSL EVP_sha256) / Go / .NET 的
+     * OAEP-SHA256 默认 MGF1 都是 SHA-256。两者不一致会导致跨语言解密失败（42904）。
+     * 因此这里【必须显式】指定 MGF1 = SHA-256，否则只有 Java 客户端能互通。
+     */
+    private static final OAEPParameterSpec PDK_OAEP_PARAMS =
+            new OAEPParameterSpec("SHA-256", "MGF1", new MGF1ParameterSpec("SHA-256"),
+                    PSource.PSpecified.DEFAULT);
 
     private final SecureRandom random = new SecureRandom();
     private final ReplayCache replayCache;
@@ -122,9 +136,9 @@ public class BodyCryptoService {
             Object tsObj = env.get("ts");
             String rnd = (String) env.get("rnd");
 
-            // 1) RSA-OAEP 解包出一次性 AES 密钥
+            // 1) RSA-OAEP 解包出一次性 AES 密钥（显式 SHA-256 MGF1，对齐客户端 SDK）
             Cipher rsa = Cipher.getInstance("RSA/ECB/OAEPWithSHA-256AndMGF1Padding");
-            rsa.init(Cipher.DECRYPT_MODE, priv);
+            rsa.init(Cipher.DECRYPT_MODE, priv, PDK_OAEP_PARAMS);
             byte[] aesKeyBytes = rsa.doFinal(encKey);
 
             // 2) AES-256-GCM 解密 body（data 尾部已含 16 字节认证标签）
@@ -152,8 +166,12 @@ public class BodyCryptoService {
         }
     }
 
-    /** 用请求会话密钥加密响应明文（无需再做 RSA，开销极小）。 */
-    public String encryptResponse(String plainJson, SecretKeySpec aesKey) {
+    /** 用请求会话密钥加密响应明文（无需再做 RSA，开销极小）。
+     *  返回 Map 而非 JSON 字符串：ResponseBodyAdvice 直接返回 Map 时，Spring 的
+     *  Jackson 转换器会【只序列化一次】；若返回已序列化的字符串且 Content-Type=application/json，
+     *  会被 Jackson 再包一层引号导致双编码（客户端拿到 "{\"kid\":...}" 无法解析）。
+     *  响应沿用请求会话密钥，故 enc 字段不回传 AES 密钥（避免明文泄露）。 */
+    public Map<String, Object> encryptResponse(String plainJson, SecretKeySpec aesKey) {
         try {
             byte[] iv = new byte[IV_BYTES];
             random.nextBytes(iv);
@@ -163,12 +181,12 @@ public class BodyCryptoService {
 
             Map<String, Object> env = new java.util.LinkedHashMap<>();
             env.put("kid", keyService.getActiveKid());
-            env.put("enc", Base64.getEncoder().encodeToString(aesKey.getEncoded()));
+            env.put("enc", "");
             env.put("iv", Base64.getEncoder().encodeToString(iv));
             env.put("data", Base64.getEncoder().encodeToString(data));
             env.put("ts", System.currentTimeMillis());
             env.put("rnd", Long.toString(random.nextLong()));
-            return objectMapper.writeValueAsString(env);
+            return env;
         } catch (Exception e) {
             throw new BusinessException(42905, "报文加密失败");
         }

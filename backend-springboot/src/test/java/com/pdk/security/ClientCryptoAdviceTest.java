@@ -1,6 +1,7 @@
 package com.pdk.security;
 
 import com.pdk.service.SystemConfigService;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpHeaders;
@@ -31,7 +32,7 @@ class ClientCryptoAdviceTest {
         SystemConfigService config = mock(SystemConfigService.class);
         when(crypto.isEnvelope(anyString())).thenReturn(false);
         when(config.getValue(anyString(), anyString())).thenReturn("optional");
-        ClientCryptoAdvice advice = new ClientCryptoAdvice(crypto, config);
+        ClientCryptoAdvice advice = new ClientCryptoAdvice(crypto, config, new ObjectMapper());
 
         MockHttpServletRequest servletRequest = new MockHttpServletRequest("POST", "/api/v1/client/auth/login");
         RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(servletRequest));
