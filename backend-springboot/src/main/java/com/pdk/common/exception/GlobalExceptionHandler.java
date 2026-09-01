@@ -9,6 +9,7 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.dao.DuplicateKeyException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 @Slf4j
 @RestControllerAdvice
@@ -42,6 +43,12 @@ public class GlobalExceptionHandler {
     public CommonResult<Void> handleDuplicateKey(DuplicateKeyException e, HttpServletRequest request) {
         log.warn("唯一约束冲突 [{}]: {}", request.getRequestURI(), e.getMostSpecificCause().getMessage());
         return CommonResult.failed(40901, "数据已被其他请求创建或占用，请刷新后重试");
+    }
+
+    @ExceptionHandler(NoResourceFoundException.class)
+    public CommonResult<Void> handleNoResource(NoResourceFoundException e, HttpServletRequest request) {
+        log.warn("资源不存在 [{}]", request.getRequestURI());
+        return CommonResult.failed(40400, "请求的资源不存在");
     }
 
     @ExceptionHandler(Exception.class)
