@@ -29,8 +29,8 @@ spring:
       continue-on-error: false
   servlet:
     multipart:
-      max-file-size: 10MB
-      max-request-size: 10MB
+      max-file-size: ${PDK_UPDATE_MAX_FILE_SIZE:512MB}
+      max-request-size: ${PDK_UPDATE_MAX_REQUEST_SIZE:520MB}
   data:
     redis:
       host: localhost
@@ -117,6 +117,20 @@ pdk:
     daily-counter-reset-cron: "0 0 0 * * *"
     scheduler-zone: Asia/Shanghai
     admin-password-pepper: ${PDK_ADMIN_PASSWORD_PEPPER:PDK_ADMIN_2026}
+  client-update:
+    enabled: ${PDK_CLIENT_UPDATE_ENABLED:true}
+    storage-root: ${PDK_UPDATE_STORAGE_ROOT:${java.io.tmpdir}/pdk-client-updates}
+    public-base-url: ${PDK_UPDATE_PUBLIC_BASE_URL:http://localhost:8080}
+    download-token-secret: ${PDK_UPDATE_DOWNLOAD_TOKEN_SECRET:change-me-download-token-secret-at-least-32-bytes}
+    event-token-secret: ${PDK_UPDATE_EVENT_TOKEN_SECRET:change-me-event-token-secret-at-least-32-bytes}
+    rollout-hmac-secret: ${PDK_UPDATE_ROLLOUT_HMAC_SECRET:change-me-rollout-secret-at-least-32-bytes}
+    rollout-key-version: ${PDK_UPDATE_ROLLOUT_KEY_VERSION:1}
+    artifact-private-key: ${PDK_UPDATE_ARTIFACT_PRIVATE_KEY:}
+    artifact-key-id: ${PDK_UPDATE_ARTIFACT_KEY_ID:client-release-local-1}
+    policy-private-key: ${PDK_UPDATE_POLICY_PRIVATE_KEY:}
+    policy-key-id: ${PDK_UPDATE_POLICY_KEY_ID:client-policy-local-1}
+    download-url-ttl-seconds: ${PDK_UPDATE_DOWNLOAD_TTL_SECONDS:600}
+    policy-ttl-hours: ${PDK_UPDATE_POLICY_TTL_HOURS:24}
 
 management:
   endpoints:

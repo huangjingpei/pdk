@@ -551,6 +551,113 @@ CREATE TABLE IF NOT EXISTS `pdk_system_config` (
 
 -- 全新建库模式：不执行历史 ALTER 迁移。部署前如有旧结构，请先备份并重建数据库。
 
+-- 18. 客户端升级策略；以业务、版本线、平台和架构作为隔离边界。
+CREATE TABLE IF NOT EXISTS `pdk_client_update_policy` (
+    `id` BIGINT AUTO_INCREMENT PRIMARY KEY,
+    `biz_id` BIGINT NOT NULL,
+    `channel` VARCHAR(16) NOT NULL,
+    `platform` VARCHAR(16) NOT NULL,
+    `arch` VARCHAR(16) NOT NULL,
+    `update_enabled` TINYINT NOT NULL DEFAULT 0,
+    `minimum_supported_version` VARCHAR(32) DEFAULT NULL,
+    `mandatory_release_id` BIGINT DEFAULT NULL,
+    `server_enforcement_enabled` TINYINT NOT NULL DEFAULT 0,
+    `offline_grace_hours` INT NOT NULL DEFAULT 24,
+    `check_interval_seconds` INT NOT NULL DEFAULT 21600,
+    `policy_revision` BIGINT NOT NULL DEFAULT 1,
+    `updated_by` VARCHAR(64) NOT NULL,
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY `uk_update_policy_scope` (`biz_id`, `channel`, `platform`, `arch`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='客户端升级运行策略';
+
+-- 19. 客户端版本发布；发布后的版本号和构件不可覆盖。
+CREATE TABLE IF NOT EXISTS `pdk_client_release` (
+    `id` BIGINT AUTO_INCREMENT PRIMARY KEY,
+    `biz_id` BIGINT NOT NULL,
+    `version` VARCHAR(32) NOT NULL,
+    `version_major` INT NOT NULL,
+    `version_minor` INT NOT NULL,
+    `version_patch` INT NOT NULL,
+    `channel` VARCHAR(16) NOT NULL,
+    `minimum_protocol_version` INT NOT NULL DEFAULT 1,
+    `minimum_updater_version` VARCHAR(32) NOT NULL DEFAULT '1.0.0',
+    `release_notes` TEXT DEFAULT NULL,
+    `status` VARCHAR(16) NOT NULL DEFAULT 'DRAFT',
+    `rollout_percentage` INT NOT NULL DEFAULT 0,
+    `ever_published` TINYINT NOT NULL DEFAULT 0,
+    `published_at` DATETIME DEFAULT NULL,
+    `created_by` VARCHAR(64) NOT NULL,
+    `updated_by` VARCHAR(64) NOT NULL,
+    `published_by` VARCHAR(64) DEFAULT NULL,
+    `request_id` VARCHAR(64) NOT NULL,
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY `uk_update_release_version` (`biz_id`, `version`),
+    UNIQUE KEY `uk_update_release_request` (`biz_id`, `request_id`),
+    INDEX `idx_update_release_query` (`biz_id`, `channel`, `status`, `published_at`),
+    INDEX `idx_update_release_semver` (`biz_id`, `channel`, `version_major`, `version_minor`, `version_patch`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='客户端版本发布';
+
+-- 20. 版本构件；storage_key 为服务端生成，不接受客户端路径。
+CREATE TABLE IF NOT EXISTS `pdk_client_artifact` (
+    `id` BIGINT AUTO_INCREMENT PRIMARY KEY,
+    `release_id` BIGINT NOT NULL,
+    `biz_id` BIGINT NOT NULL,
+    `platform` VARCHAR(16) NOT NULL,
+    `arch` VARCHAR(16) NOT NULL,
+    `package_type` VARCHAR(16) NOT NULL,
+    `file_name` VARCHAR(255) NOT NULL,
+    `storage_key` VARCHAR(255) NOT NULL,
+    `file_size` BIGINT DEFAULT NULL,
+    `sha256` CHAR(64) DEFAULT NULL,
+    `signature_algorithm` VARCHAR(24) DEFAULT NULL,
+    `signature_value` TEXT DEFAULT NULL,
+    `signing_key_id` VARCHAR(64) DEFAULT NULL,
+    `status` VARCHAR(20) NOT NULL DEFAULT 'UPLOADING',
+    `request_id` VARCHAR(64) NOT NULL,
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY `uk_update_artifact_target` (`release_id`, `platform`, `arch`, `package_type`),
+    UNIQUE KEY `uk_update_artifact_storage` (`storage_key`),
+    UNIQUE KEY `uk_update_artifact_request` (`biz_id`, `request_id`),
+    INDEX `idx_update_artifact_query` (`biz_id`, `platform`, `arch`, `status`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='客户端升级构件';
+
+-- 21. 升级遥测事件；仅保存 HMAC 匿名设备标识。
+CREATE TABLE IF NOT EXISTS `pdk_client_update_event` (
+    `id` BIGINT AUTO_INCREMENT PRIMARY KEY,
+    `biz_id` BIGINT NOT NULL,
+    `release_id` BIGINT DEFAULT NULL,
+    `artifact_id` BIGINT DEFAULT NULL,
+    `device_id_hash` CHAR(64) DEFAULT NULL,
+    `rollout_key_version` VARCHAR(16) DEFAULT NULL,
+    `from_version` VARCHAR(32) DEFAULT NULL,
+    `target_version` VARCHAR(32) DEFAULT NULL,
+    `platform` VARCHAR(16) DEFAULT NULL,
+    `event_type` VARCHAR(32) NOT NULL,
+    `error_category` VARCHAR(64) DEFAULT NULL,
+    `client_time` DATETIME DEFAULT NULL,
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `check_request_id` VARCHAR(64) NOT NULL,
+    UNIQUE KEY `uk_update_event_idempotent` (`check_request_id`, `event_type`),
+    INDEX `idx_update_event_biz_time` (`biz_id`, `created_at`),
+    INDEX `idx_update_event_release` (`biz_id`, `release_id`, `event_type`, `created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='客户端升级匿名遥测事件';
+
+-- 22. 管理端升级操作幂等账本；防止旧请求在后续状态变化后被重放。
+CREATE TABLE IF NOT EXISTS `pdk_client_update_operation` (
+    `id` BIGINT AUTO_INCREMENT PRIMARY KEY,
+    `biz_id` BIGINT NOT NULL,
+    `request_id` VARCHAR(64) NOT NULL,
+    `operation_type` VARCHAR(64) NOT NULL,
+    `target_type` VARCHAR(32) NOT NULL,
+    `target_id` VARCHAR(64) NOT NULL,
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY `uk_update_operation_request` (`biz_id`, `request_id`),
+    INDEX `idx_update_operation_target` (`biz_id`, `target_type`, `target_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='升级管理操作幂等账本';
+
 -- 平台配置种子数据（超级管理员可在后台「系统设置」修改；重复执行只更新元数据，不覆盖已修改的配置值）
 INSERT INTO `pdk_system_config` (`config_key`, `config_value`, `config_type`, `config_group`, `config_label`, `config_options`, `default_value`, `description`, `editable_by`) VALUES
 ('token.allocation.mode', 'FIXED', 'SELECT', 'ACCOUNT', '账号小号 Token 使用方式', 'FIXED:固定分配,POLLING:轮询(预留未启用)', 'FIXED', '当前仅 FIXED(固定分配)生效：激活时把小号独占绑定给用户；POLLING(轮询)预留未启用', 'SUPER_ADMIN'),

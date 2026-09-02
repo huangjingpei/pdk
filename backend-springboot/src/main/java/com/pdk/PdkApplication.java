@@ -12,7 +12,7 @@ import org.springframework.transaction.annotation.EnableTransactionManagement;
 @SpringBootApplication
 @EnableTransactionManagement
 @EnableScheduling
-@MapperScan({"com.pdk.mapper", "com.pdk.business.zhibo.live.mapper"})
+@MapperScan({"com.pdk.mapper", "com.pdk.business.zhibo.live.mapper", "com.pdk.update.mapper"})
 public class PdkApplication {
     public static void main(String[] args) {
         SpringApplication.run(PdkApplication.class, args);
