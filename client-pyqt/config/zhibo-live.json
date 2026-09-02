@@ -3,5 +3,11 @@
   "bizCode": "ZHIBO_LIVE",
   "implementationGroup": "zhibo",
   "displayName": "直播矩阵",
+  "version": "1.0.0",
+  "channel": "STABLE",
+  "updaterVersion": "1.0.0",
+  "entryPoint": "main.py",
+  "artifactPublicKeys": {},
+  "policyPublicKeys": {},
   "productionEditable": false
 }

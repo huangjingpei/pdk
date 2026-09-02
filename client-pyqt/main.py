@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
@@ -34,6 +35,7 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QMainWindow,
     QMessageBox,
+    QProgressDialog,
     QPushButton,
     QComboBox,
     QScrollArea,
@@ -47,6 +49,7 @@ from PyQt6.QtWidgets import (
 
 from pdk_client import PdkApiClient, default_device_id, random_password, random_phone, redact_sensitive
 from pdk_testrunner import Result, TestRunner
+from update_client import ClientUpdateManager, UpdateError
 
 
 @dataclass
@@ -1169,7 +1172,49 @@ def main() -> int:
     app = QApplication([])
     app.setStyle("Fusion")
     window = MainWindow()
+    updates = ClientUpdateManager(window.runner.client, window.runner.build_config, window.runner.device_id)
+    checking = QProgressDialog("正在登录前检查客户端更新…", "", 0, 0)
+    checking.setWindowTitle("PDK 客户端升级")
+    checking.setCancelButton(None)
+    checking.show()
+    app.processEvents()
+    try:
+        decision = updates.check()
+    except UpdateError as exc:
+        decision = updates.cached_required()
+        if decision is None:
+            QMessageBox.warning(None, "更新检查暂不可用", f"{exc}\n\n当前没有仍生效的已验签强制策略，将继续启动。")
+    finally:
+        checking.close()
+    if decision and decision.get("hasUpdate"):
+        required = decision.get("updatePolicy") == "REQUIRED"
+        buttons = QMessageBox.StandardButton.Yes if required else (QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        answer = QMessageBox.question(None, "必须更新" if required else "发现新版本",
+            f"当前版本：{updates.current_version}\n目标版本：{decision.get('targetVersion')}\n\n{decision.get('releaseNotes') or '包含稳定性与安全更新'}\n\n{'必须完成更新后才能继续。' if required else '是否立即更新？'}",
+            buttons, QMessageBox.StandardButton.Yes)
+        if answer == QMessageBox.StandardButton.Yes:
+            progress = QProgressDialog("正在下载并验证升级包…", "取消" if not required else "", 0, 100)
+            progress.setWindowTitle("客户端升级")
+            if required: progress.setCancelButton(None)
+            progress.show()
+            try:
+                package = updates.download_and_verify(decision, lambda done,total: (progress.setValue(min(100,int(done*100/total))), app.processEvents()))
+                updates.launch_updater(decision, package)
+                return 0
+            except UpdateError as exc:
+                QMessageBox.critical(None, "更新失败", str(exc))
+                if required: return 2
+            finally: progress.close()
+        elif required:
+            return 2
     window.show()
+    health_file = os.getenv("PDK_UPDATE_HEALTH_FILE", "")
+    if health_file:
+        try:
+            from pathlib import Path
+            Path(health_file).write_text("ok", encoding="utf-8")
+        except OSError:
+            pass
     return app.exec()
 
 

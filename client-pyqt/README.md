@@ -36,3 +36,9 @@ python main.py
 也可分别使用 `zhibo-ai.json`、`zhibo-live.json`；后两者共用 `implementationGroup=zhibo`，但 appId 和服务端数据仍严格隔离。公开业务接口会返回注册策略和支持动作，`ADMIN_ONLY` 业务会自动禁用短信注册入口。
 
 注意：`LOCAL-DEMO-SLOT-01` 是启动 SQL 写入的假资源，仅用于验证接口闭环，不能调用真实平台。
+
+## 登录前升级
+
+客户端现在会在显示主窗口前调用升级检查。生产构建必须在对应 JSON 中固定 `version/channel/updaterVersion`，并按 keyId 内置两类不同用途的 Ed25519 公钥；也可以在隔离测试环境临时使用 `PDK_UPDATE_ARTIFACT_PUBLIC_KEY` 与 `PDK_UPDATE_POLICY_PUBLIC_KEY`。
+
+可选更新允许稍后处理；强制更新不会进入登录和业务界面。下载通过 Range 续传，完成后依次校验大小、SHA-256 和构件签名，再交给独立 `updater.py`。部署、包清单和密钥生成方法见 [升级系统一期实施方案](../docs/CLIENT_UPDATE_IMPLEMENTATION_PLAN.md)。

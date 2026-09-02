@@ -175,6 +175,7 @@ class PdkApiClient:
             raise ValueError("app_id 必须为正整数")
         self.base_url = base_url.rstrip("/")
         self._app_id = int(app_id)
+        self.client_version = os.getenv("PDK_CLIENT_VERSION", "1.0.0")
         self.session = ClientSession()
         self.http = requests.Session()
         # 调试辅助：当前调用上下文的「期待」注解（由调用方设置，如场景 expected），
@@ -225,6 +226,9 @@ class PdkApiClient:
         hdrs: dict[str, str] = {
             "Accept": "application/json",
             "X-PDK-App-ID": str(self.app_id),
+            "X-PDK-Client-Version": self.client_version,
+            "X-PDK-Platform": "WINDOWS" if platform.system().lower() == "windows" else platform.system().upper(),
+            "X-PDK-Arch": "X64" if platform.machine().lower() in {"amd64", "x86_64"} else platform.machine().upper(),
         }
         if authenticated:
             if self.session.token_value:
@@ -304,6 +308,33 @@ class PdkApiClient:
     def business_info(self) -> dict[str, Any]:
         """登录前读取当前构建 appId 的名称、描述、注册策略与可用状态。"""
         return self.request("GET", f"/api/v1/client/business/by-app/{self.app_id}")
+
+    def check_update(
+        self,
+        current_version: str,
+        *,
+        device_id: str,
+        platform_name: str = "WINDOWS",
+        arch: str = "X64",
+        channel: str = "STABLE",
+        protocol_version: int = 1,
+        updater_version: str = "1.0.0",
+    ) -> dict[str, Any]:
+        """登录前检查升级；appId 取固定构建配置，设备 ID 只用于匿名灰度。"""
+        return self.request(
+            "GET", "/api/v1/client/updates/check",
+            headers={"X-PDK-Device-ID": device_id},
+            params={
+                "currentVersion": current_version, "platform": platform_name,
+                "arch": arch, "channel": channel,
+                "protocolVersion": protocol_version, "updaterVersion": updater_version,
+            },
+        )
+
+    def report_update_event(self, payload: dict[str, Any], *, device_id: str) -> dict[str, Any]:
+        """升级遥测失败不抛出，调用方不得因此回滚已完成安装。"""
+        return self.request("POST", "/api/v1/client/updates/events",
+                            headers={"X-PDK-Device-ID": device_id}, json=payload)
 
     def send_sms(self, phone: str, purpose: str = "REGISTER") -> dict[str, Any]:
         return self.request("POST", "/api/v1/client/auth/sms/send",

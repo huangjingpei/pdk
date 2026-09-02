@@ -123,6 +123,9 @@ class PdkApiClient:
             raise ValueError("app_id 必须为正整数")
         self.base_url = base_url.rstrip("/")
         self._app_id = int(app_id)
+        self.client_version = os.getenv("PDK_CLIENT_VERSION", "1.0.0")
+        self.client_platform = "WINDOWS" if platform.system().lower() == "windows" else platform.system().upper()
+        self.client_arch = "X64" if platform.machine().lower() in {"amd64", "x86_64"} else platform.machine().upper()
         self.root_salt = root_salt
         self.session = ClientSession()
         self.session.device_id = device_id or default_device_id(self._app_id)
@@ -208,6 +211,9 @@ class PdkApiClient:
         hdrs: dict = {
             "Accept": "application/json",
             "X-PDK-App-ID": str(self.app_id),
+            "X-PDK-Client-Version": self.client_version,
+            "X-PDK-Platform": self.client_platform,
+            "X-PDK-Arch": self.client_arch,
         }
         if authenticated:
             if self.session.token_value:
@@ -384,6 +390,26 @@ class PdkApiClient:
     def business_info(self):
         """登录前读取当前 appId 的公开业务元数据和注册策略。"""
         return self.request("GET", f"/api/v1/client/business/by-app/{self.app_id}")
+
+    def check_update(self, current_version=None, channel="STABLE", protocol_version=1,
+                     updater_version="1.0.0", platform_name=None, arch=None):
+        """登录前检查客户端升级；响应中的 targetVersion 才是本次实际安装目标。"""
+        version = current_version or self.client_version
+        return self.request("GET", "/api/v1/client/updates/check", params={
+            "currentVersion": version, "platform": platform_name or self.client_platform,
+            "arch": arch or self.client_arch, "channel": channel,
+            "protocolVersion": protocol_version, "updaterVersion": updater_version,
+        })
+
+    def report_update_event(self, check_request_id, event_token, event_type, *, artifact_id=None,
+                            from_version=None, target_version=None, error_category=None):
+        """上报匿名升级遥测；失败不应改变本地安装结果。"""
+        return self.request("POST", "/api/v1/client/updates/events", json_body={
+            "checkRequestId": check_request_id, "eventToken": event_token,
+            "artifactId": artifact_id, "eventType": event_type,
+            "fromVersion": from_version or self.client_version, "targetVersion": target_version,
+            "platform": self.client_platform, "errorCategory": error_category,
+        })
 
     def send_sms(self, phone, purpose="REGISTER"):
         self._emit_state(State.Ready, f"正在发送验证码到 {phone}")

@@ -2,5 +2,11 @@
   "appId": 1,
   "bizCode": "PDD",
   "displayName": "拼多多业务",
+  "version": "1.0.0",
+  "channel": "STABLE",
+  "updaterVersion": "1.0.0",
+  "entryPoint": "main.py",
+  "artifactPublicKeys": {},
+  "policyPublicKeys": {},
   "productionEditable": false
 }

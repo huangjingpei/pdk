@@ -3,5 +3,11 @@
   "bizCode": "ZHIBO_AI",
   "implementationGroup": "zhibo",
   "displayName": "直播 AI",
+  "version": "1.0.0",
+  "channel": "STABLE",
+  "updaterVersion": "1.0.0",
+  "entryPoint": "main.py",
+  "artifactPublicKeys": {},
+  "policyPublicKeys": {},
   "productionEditable": false
 }
