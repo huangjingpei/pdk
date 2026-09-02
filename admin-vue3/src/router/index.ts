@@ -14,6 +14,7 @@ import BusinessManager from '../views/business/BusinessManager.vue';
 import LoginLog from '../views/log/LoginLog.vue';
 import AuditLog from '../views/log/AuditLog.vue';
 import DeviceLicenseManager from '../views/license/DeviceLicenseManager.vue';
+import ClientUpdateManager from '../views/update/ClientUpdateManager.vue';
 import { hasPermission, isLoggedIn } from '../auth';
 
 const router = createRouter({
@@ -88,6 +89,12 @@ const router = createRouter({
       name: 'DeviceLicenseManager',
       component: DeviceLicenseManager,
       meta: { title: '设备许可证', permission: 'card:view' },
+    },
+    {
+      path: '/updates/client',
+      name: 'ClientUpdateManager',
+      component: ClientUpdateManager,
+      meta: { title: '客户端升级', permission: 'client-update:view' },
     },
     {
       path: '/business/manager',

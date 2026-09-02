@@ -88,6 +88,11 @@
           <span>业务管理</span>
         </el-menu-item>
 
+        <el-menu-item v-if="hasPermission('client-update:view')" index="/updates/client">
+          <el-icon><UploadFilled /></el-icon>
+          <span>客户端升级</span>
+        </el-menu-item>
+
         <el-menu-item v-if="hasPermission('system:config')" index="/settings">
           <el-icon><Setting /></el-icon>
           <span>系统设置</span>

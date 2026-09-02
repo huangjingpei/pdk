@@ -230,3 +230,18 @@ export interface LicenseExportResult {
   csv: string;
   recordCount: number;
 }
+
+export interface ClientRelease {
+  id: number; bizId: number; version: string; channel: 'STABLE'|'BETA'; status: 'DRAFT'|'READY'|'PUBLISHED'|'SUSPENDED'|'ARCHIVED';
+  minimumProtocolVersion: number; minimumUpdaterVersion: string; releaseNotes?: string; rolloutPercentage: number;
+  publishedAt?: string; createdAt?: string;
+}
+export interface ClientArtifact {
+  id: number; releaseId: number; platform: string; arch: string; packageType: string; fileName: string;
+  fileSize?: number; sha256?: string; signatureValue?: string; signingKeyId?: string; status: string;
+}
+export interface ClientUpdatePolicy {
+  id?: number; bizId: number; channel: string; platform: string; arch: string; updateEnabled: number;
+  minimumSupportedVersion?: string; mandatoryReleaseId?: number; serverEnforcementEnabled: number;
+  offlineGraceHours: number; checkIntervalSeconds: number; policyRevision?: number;
+}
