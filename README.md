@@ -50,3 +50,7 @@ npm run dev
 
 - master 分支：是原先拼多多操作类工具，包含小号，下单，退单操作
 - pkd分支：是一个通用的授权，业务系统，和客户端联合联合用来限制客户端登录，注销，检测版本升级
+
+## 6. 客户端升级系统
+
+服务端、Vue 3 管理后台、PyQt 客户端和独立 Windows updater 的一期实现与部署顺序见 [客户端升级系统一期实施方案](./docs/CLIENT_UPDATE_IMPLEMENTATION_PLAN.md)。生产启用强制更新前必须执行 [升级验收指南](./docs/UPGRADE_TESTING_GUIDE.md)，并先完成旧客户端桥接覆盖。
