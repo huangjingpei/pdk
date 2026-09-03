@@ -1,6 +1,7 @@
 package com.pdk.update.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -276,11 +277,19 @@ public class ClientUpdateService {
         ClientRelease latest = published.stream().filter(r -> compatible(r, protocolVersion, updater)).filter(r -> findArtifact(r.getId(), pf, ar) != null).findFirst().orElse(null);
         ClientRelease target = null; String updatePolicy = "NONE", reason = latest == null ? "NO_COMPATIBLE_ARTIFACT" : "UP_TO_DATE";
         if (policy.getMinimumSupportedVersion() != null && current.compareTo(SemanticVersion.parse(policy.getMinimumSupportedVersion())) < 0) {
-            ClientRelease mandatory = requireRelease(policy.getMandatoryReleaseId());
-            if (!compatible(mandatory, protocolVersion, updater)) {
+            // 强制目标可能未配置或已被删除：按 ID 直接查（不存在时返回 null 而非抛出），
+            // 查不到就退化为最新已发布版本，否则客户端会被 426 门禁挡住又拿不到任何可安装版本。
+            ClientRelease mandatory = policy.getMandatoryReleaseId() == null ? null
+                    : releaseMapper.selectById(policy.getMandatoryReleaseId());
+            if (mandatory != null && !mandatory.getBizId().equals(business.getId())) mandatory = null;
+            if (mandatory == null) {
+                if (latest == null) return none(requestId, protocolVersion, business, ch, pf, ar, currentVersion, updaterVersion, "MANDATORY_RELEASE_MISSING", policy, now);
+                target = latest; updatePolicy = "REQUIRED"; reason = "MANDATORY_RELEASE_MISSING_FALLBACK_TO_LATEST";
+            } else if (!compatible(mandatory, protocolVersion, updater)) {
                 return none(requestId, protocolVersion, business, ch, pf, ar, currentVersion, updaterVersion, "UPDATER_INCOMPATIBLE", policy, now);
+            } else {
+                target = mandatory; updatePolicy = "REQUIRED"; reason = "BELOW_MINIMUM_SUPPORTED_VERSION";
             }
-            target = mandatory; updatePolicy = "REQUIRED"; reason = "BELOW_MINIMUM_SUPPORTED_VERSION";
         } else if (latest != null && SemanticVersion.parse(latest.getVersion()).compareTo(current) > 0) {
             String anonymous = security.anonymousDevice(business.getId(), deviceId);
             if (anonymous != null && security.rolloutBucket(appId, latest.getId(), anonymous) < latest.getRolloutPercentage() * 100) {
@@ -345,12 +354,17 @@ public class ClientUpdateService {
     public IPage<ClientUpdateEvent> events(AdminPrincipal admin, Long bizId, int page, int size) {
         bizId = businessScope.enforce(admin, bizId); LambdaQueryWrapper<ClientUpdateEvent> q = new LambdaQueryWrapper<>();
         q.eq(bizId != null, ClientUpdateEvent::getBizId, bizId).orderByDesc(ClientUpdateEvent::getCreatedAt);
-        return eventMapper.selectPage(new Page<>(page, size), q);
+        // 与 releases() 保持一致地钳制分页，避免 size 过大拖垮数据库。
+        return eventMapper.selectPage(new Page<>(Math.max(1, page), Math.min(100, Math.max(1, size))), q);
     }
     public List<Map<String,Object>> statistics(AdminPrincipal admin, Long bizId) {
-        bizId = businessScope.enforce(admin, bizId); List<ClientUpdateEvent> events = eventMapper.selectList(new LambdaQueryWrapper<ClientUpdateEvent>().eq(bizId != null, ClientUpdateEvent::getBizId, bizId));
-        Map<String,Long> counts = new TreeMap<>(); events.forEach(e -> counts.merge(e.getEventType(), 1L, Long::sum));
-        return counts.entrySet().stream().map(e -> Map.<String,Object>of("eventType", e.getKey(), "count", e.getValue())).toList();
+        bizId = businessScope.enforce(admin, bizId);
+        // 用 SQL 聚合，避免把整张事件表读进内存后计数。
+        QueryWrapper<ClientUpdateEvent> q = new QueryWrapper<>();
+        q.select("event_type AS eventType", "COUNT(*) AS count")
+                .eq(bizId != null, "biz_id", bizId)
+                .groupBy("event_type").orderByAsc("event_type");
+        return eventMapper.selectMaps(q);
     }
 
     public static String artifactCanonical(long appId, ClientRelease r, ClientArtifact a) {
@@ -391,7 +405,7 @@ public class ClientUpdateService {
         try (ZipFile zip = new ZipFile(path.toFile())) {
             long total = 0; JsonNode manifest = null; Set<String> packageFiles=new HashSet<>(); Enumeration<? extends ZipEntry> entries = zip.entries();
             while (entries.hasMoreElements()) { ZipEntry e = entries.nextElement(); String name = e.getName().replace('\\','/');
-                if (name.startsWith("/") || name.contains("../") || e.getSize() > 2L * 1024 * 1024 * 1024) throw new BusinessException(42290, "ZIP 包含不安全条目");
+                if (unsafeEntry(name) || e.getSize() > 2L * 1024 * 1024 * 1024) throw new BusinessException(42290, "ZIP 包含不安全条目");
                 total += Math.max(0, e.getSize()); if (total > 4L * 1024 * 1024 * 1024) throw new BusinessException(42290, "ZIP 解压体积超过限制");
                 if (!e.isDirectory()) packageFiles.add(name);
                 if ("update-manifest.json".equals(name)) try (InputStream in = zip.getInputStream(e)) { manifest = objectMapper.readTree(in); }
@@ -425,6 +439,13 @@ public class ClientUpdateService {
                     || !entryPoint.equals(config.path("entryPoint").asText()))
                 throw new BusinessException(42290,"内嵌构建配置的 appId/version/entryPoint 与发布清单不一致");
         } catch (BusinessException e) { throw e; } catch (Exception e) { throw new BusinessException(42290, "无法识别升级 ZIP: " + e.getMessage()); }
+    }
+    /** ZIP 条目安全性：覆盖 POSIX/UNC 绝对路径、盘符绝对路径和任意层级的 .. 穿越。
+     *  符号链接由打包脚本（构建期）和 C++ 安装器（解压期）各自拒绝，服务端不再重复判断。 */
+    private boolean unsafeEntry(String name) {
+        if (name.startsWith("/") || name.matches("^[A-Za-z]:.*")) return true;
+        for (String part : name.split("/")) if (part.equals("..")) return true;
+        return false;
     }
     private void requireAvailableArtifact(long releaseId) { if (artifactMapper.selectCount(new LambdaQueryWrapper<ClientArtifact>().eq(ClientArtifact::getReleaseId, releaseId).eq(ClientArtifact::getStatus, "AVAILABLE")) == 0) throw new BusinessException(42290, "发布缺少已签名可用构件"); }
     private void ensureNotMandatoryTarget(long releaseId) { if (policyMapper.selectCount(new LambdaQueryWrapper<ClientUpdatePolicy>().eq(ClientUpdatePolicy::getMandatoryReleaseId, releaseId).eq(ClientUpdatePolicy::getUpdateEnabled, 1)) > 0) throw new BusinessException(40990, "该版本仍是强制更新目标，请先原子切换策略"); }

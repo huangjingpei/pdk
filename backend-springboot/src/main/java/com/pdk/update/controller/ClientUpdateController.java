@@ -48,17 +48,32 @@ public class ClientUpdateController {
         ClientArtifact artifact = updateService.requireArtifactById(artifactId);
         FileSystemResource resource = new FileSystemResource(path);
         long length = resource.contentLength();
-        String disposition = ContentDisposition.attachment().filename(artifact.getFileName(), StandardCharsets.UTF_8).build().toString();
-        HttpHeaders responseHeaders = new HttpHeaders(); responseHeaders.setContentDisposition(ContentDisposition.parse(disposition));
+        HttpHeaders responseHeaders = new HttpHeaders();
+        responseHeaders.setContentDisposition(ContentDisposition.attachment().filename(artifact.getFileName(), StandardCharsets.UTF_8).build());
         responseHeaders.setETag('"' + artifact.getSha256() + '"'); responseHeaders.set("Accept-Ranges", "bytes");
         responseHeaders.setContentType(MediaType.APPLICATION_OCTET_STREAM);
         if ("HEAD".equalsIgnoreCase(request.getMethod())) { responseHeaders.setContentLength(length); return new ResponseEntity<>(responseHeaders, HttpStatus.OK); }
-        List<HttpRange> ranges = headers.getRange();
+        List<HttpRange> ranges;
+        try { ranges = headers.getRange(); }
+        catch (IllegalArgumentException e) { return rangeNotSatisfiable(responseHeaders, length); }
         if (ranges.isEmpty()) { responseHeaders.setContentLength(length); return new ResponseEntity<Resource>(resource, responseHeaders, HttpStatus.OK); }
-        HttpRange range = ranges.get(0); long start = range.getRangeStart(length); long end = range.getRangeEnd(length);
-        ResourceRegion region = new ResourceRegion(resource, start, end - start + 1);
-        responseHeaders.set("Content-Range", "bytes " + start + "-" + end + "/" + length);
-        return new ResponseEntity<>(region, responseHeaders, HttpStatus.PARTIAL_CONTENT);
+        try {
+            HttpRange range = ranges.get(0); long start = range.getRangeStart(length); long end = range.getRangeEnd(length);
+            ResourceRegion region = new ResourceRegion(resource, start, end - start + 1);
+            responseHeaders.set("Content-Range", "bytes " + start + "-" + end + "/" + length);
+            return new ResponseEntity<>(region, responseHeaders, HttpStatus.PARTIAL_CONTENT);
+        } catch (IllegalArgumentException e) {
+            // Range 起点越界或格式非法：按 RFC 7233 返回 416，而不是 500。
+            return rangeNotSatisfiable(responseHeaders, length);
+        }
+    }
+
+    private ResponseEntity<Void> rangeNotSatisfiable(HttpHeaders responseHeaders, long length) {
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentDisposition(responseHeaders.getContentDisposition());
+        headers.setETag(responseHeaders.getETag());
+        headers.set("Content-Range", "bytes */" + length);
+        return new ResponseEntity<>(headers, HttpStatus.REQUESTED_RANGE_NOT_SATISFIABLE);
     }
 
     private long appId(HttpServletRequest request) {

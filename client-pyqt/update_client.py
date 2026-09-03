@@ -5,6 +5,7 @@ import base64
 import hashlib
 import json
 import os
+import secrets
 import subprocess
 import sys
 import time
@@ -114,11 +115,88 @@ class ClientUpdateManager:
 
     def launch_updater(self, decision: dict[str, Any], package: Path) -> None:
         artifact = decision["artifact"]
-        updater = Path(__file__).with_name("updater.py")
         install_root = Path(os.getenv("PDK_INSTALL_ROOT", Path(__file__).resolve().parent))
         public_key = self._key(artifact.get("signingKeyId"), "artifact")
+        entry_point = str(self.config.get("entryPoint", "main.py"))
+        native = self._find_native_updater()
+        if native is not None:
+            self._launch_native(decision, package, install_root, entry_point, public_key, native)
+        else:
+            self._launch_python(decision, package, install_root, entry_point, public_key)
+
+    @staticmethod
+    def _find_native_updater() -> Path | None:
+        """优先使用 C++ 原生更新器（无 Python 依赖、体积小）。
+
+        查找顺序刻意把 install_root 之外的位置放前面：更新器会整体替换
+        install_root，若 exe 自身处于 install_root 内部会被一并覆盖。
+        """
+        explicit = os.getenv("PDK_NATIVE_UPDATER", "").strip()
+        if explicit and Path(explicit).is_file():
+            return Path(explicit)
+        base = Path(__file__).resolve().parent
+        candidates = [
+            base.parent / "native_updater" / "build" / "Debug" / "pdk_updater.exe",  # 仓库构建输出（在 install_root 外）
+            base.parent / "pdk_updater.exe",  # 与客户端平级的稳定位置
+            base / "pdk_updater.exe",  # 兜底：同目录（注意会被更新覆盖，仅首轮可用）
+        ]
+        for candidate in candidates:
+            if candidate.is_file():
+                return candidate
+        return None
+
+    def _launch_native(self, decision: dict[str, Any], package: Path, install_root: Path,
+                       entry_point: str, public_key: str, native_exe: Path) -> None:
+        artifact = decision["artifact"]
+        job = {
+            "schemaVersion": 1,
+            "packagePath": str(package.resolve()),
+            "installRoot": str(install_root.resolve()),
+            "targetVersion": decision["targetVersion"],
+            "entryPoint": entry_point,
+            "appId": int(decision["appId"]),
+            "platform": artifact["platform"],
+            "arch": artifact["arch"],
+            "packageType": artifact["packageType"],
+            "fileSize": int(artifact["fileSize"]),
+            "sha256": artifact["sha256"],
+            "signature": artifact["signature"],
+            "publicKey": public_key,
+            "parentPid": os.getpid(),
+            "healthFile": str(self.cache_dir / "update-health.json"),
+            "healthNonce": secrets.token_hex(24),
+            "healthTimeoutSeconds": 60,
+            "relaunchOnRollback": True,
+            "telemetry": {
+                "endpoint": self.client.base_url.rstrip("/") + "/api/v1/client/updates/events",
+                "appId": int(decision["appId"]),
+                "deviceId": self.device_id,
+                "checkRequestId": decision["checkRequestId"],
+                "eventToken": decision["eventToken"],
+                "artifactId": artifact.get("artifactId"),
+                "fromVersion": self.current_version,
+                "targetVersion": decision["targetVersion"],
+                "platform": artifact["platform"],
+            },
+        }
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        job_path = self.cache_dir / "update-job.json"
+        job_path.write_text(json.dumps(job, ensure_ascii=False, indent=2), encoding="utf-8")
+        self.report(decision, "INSTALL_STARTED")
+        env = os.environ.copy()
+        env["PDK_UPDATER_DECISION_FILE"] = str(self.cache_dir / "pending-update.json")
+        env["PDK_UPDATER_API_BASE"] = self.client.base_url
+        env["PDK_UPDATER_DEVICE_ID"] = self.device_id
+        env["PDK_PYTHON_EXE"] = sys.executable  # 供 C++ 启动器拉起 .py 客户端
+        subprocess.Popen([str(native_exe), "--job", str(job_path)], env=env,
+                         close_fds=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+
+    def _launch_python(self, decision: dict[str, Any], package: Path, install_root: Path,
+                       entry_point: str, public_key: str) -> None:
+        artifact = decision["artifact"]
+        updater = Path(__file__).with_name("updater.py")
         args = [sys.executable, str(updater), "--package", str(package), "--install-root", str(install_root),
-                "--version", decision["targetVersion"], "--entry-point", str(self.config.get("entryPoint", "main.py")),
+                "--version", decision["targetVersion"], "--entry-point", entry_point,
                 "--app-id", str(decision["appId"]), "--platform", artifact["platform"], "--arch", artifact["arch"],
                 "--package-type", artifact["packageType"], "--file-size", str(artifact["fileSize"]),
                 "--sha256", artifact["sha256"], "--signature", artifact["signature"],

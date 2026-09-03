@@ -16,6 +16,12 @@ python E:\pdk\scripts\generate_update_keys.py `
   --public-base-url https://update.example.com
 ```
 
+
+python E:\pdk\scripts\generate_update_keys.py
+  --output-dir C:\Users\Administrator\.pdk\update-config 
+  --storage-root C:/pdk-data/client-updates 
+  --public-base-url http://127.0.0.1
+
 命令生成两个文件：
 
 ```text
@@ -77,13 +83,21 @@ python E:\pdk\scripts\build_update_package.py `
 
 后台创建 Release 时，版本、协议版本和最低 Updater 必须与打包命令一致。管理后台上传窗口会显示这份契约，并把错误区分为创建会话、ZIP 校验和 Ed25519 签名三个阶段。
 
+若要用 GUI 升级器离线安装或回滚版本，额外加 `--emit-job --private-key <私钥> --public-key <公钥>`，脚本会同时产出 GUI 可直接识别的签名清单 `*.job.json`。
+
 ## 5. 删除规则
 
 - `DRAFT` 且从未发布：允许在后台永久删除；同时删除 Release、Artifact 数据库记录、隔离临时文件和已上传构件文件，操作审计保留。
 - `READY`：先退回 DRAFT，再删除。
 - `PUBLISHED/SUSPENDED/ARCHIVED` 或曾经发布过：禁止物理删除，只允许暂停或归档，防止破坏已下发客户端及历史证据。
 
-## 6. 在管理后台生成手动下载地址
+## 6. 配置 Windows 原生升级器
+
+`native_updater/` 产出的 GUI 升级器需要一份 `updater-gui.json`，其中 `publicKey` 就是上面第 3 节写入客户端的同一把构件公钥（base64 SPKI-DER）。GUI 用它验签本地版本包，并据此列出可安装与可回滚的版本。
+
+完整字段说明、构建方式和回滚机制见 [Windows 原生升级器 native_updater](./NATIVE_UPDATER.md)。
+
+## 7. 在管理后台生成手动下载地址
 
 版本完成“上传、校验并签名”且状态发布为 `PUBLISHED` 后，进入“版本发布 → 构件 → 生成下载地址”。填写 1–168 小时有效期和生成原因，系统会产生可复制的带签名下载地址，管理员可以手动发送给用户。
 

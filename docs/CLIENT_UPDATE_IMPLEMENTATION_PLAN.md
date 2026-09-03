@@ -25,8 +25,9 @@
 - 登录界面前检查；`OPTIONAL` 可稍后，`REQUIRED` 阻止进入主界面。
 - 策略签名通过后才缓存；检查失败时只继续执行仍在宽限期内的已验签强制策略。
 - Range 断点下载，依次校验大小、SHA-256、构件 Ed25519 签名。
-- 主程序只负责校验和交接，`updater.py` 等待主进程退出后安装。
-- updater 使用 `versions/<version>` 和原子 `current.json`，安全解压、再次验签、启动健康确认，失败恢复原 current。
+- 主程序只负责校验和交接，独立 updater 等待主进程退出后安装。
+- 默认调用 Windows 原生升级器 `native_updater` 产出的 `pdk_updater.exe`；找不到时回退到 Python 版 `updater.py`。两者都执行安全解压、再次验签、启动健康确认，失败恢复上一版本。
+- 原生升级器采用「安装根整体替换 + 同级 `.backup-*` 隐藏目录」（而非 `versions/<version>` 多版本目录 + `current.json`）。旧版本以备份目录保留，因此可提供「回滚到某个特定版本」。详见 [Windows 原生升级器 native_updater](./NATIVE_UPDATER.md)。
 - Python SDK 增加检查/事件方法，并为普通业务请求携带版本、平台和架构 Header。
 
 ## 部署步骤

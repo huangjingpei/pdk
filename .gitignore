@@ -16,3 +16,9 @@ coverage/
 
 # Vite 构建临时产物
 vite.config.ts.timestamp-*.mjs
+
+# IDE / 编辑器产物
+.idea/
+
+# 扩展包 / 安装包（非项目源码）
+*.vsix

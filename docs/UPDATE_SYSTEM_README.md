@@ -1,14 +1,28 @@
 # 多业务客户端升级系统开发规格
 
-> 文档状态：需求与技术规格，尚未实现。
+> 文档状态：需求与技术规格，**已实现**。
 >
-> 本文用于指导后续开发，不代表当前仓库已经存在升级接口、数据表、管理页面或客户端安装器。
+> 本文是升级系统的权威规格。以下能力当前仓库均已具备：客户端升级 API、升级相关数据表、管理后台页面、客户端接入，以及独立的 Windows 原生升级器。
+>
+> 落地过程中若本文与代码出现冲突，以代码为准并回来修正本文。
 
 相关基线文档：
 
 - [多业务 appId/bizId 方案](./MULTI_BIZ_APPID_SOLUTION.md)
 - [编译、数据库初始化与部署手册](./BUILD_AND_DEPLOY.md)
 - [升级系统验收指南](./UPGRADE_TESTING_GUIDE.md)
+- [客户端升级配置](./CLIENT_UPDATE_CONFIGURATION.md)
+- [客户端升级系统一期实施方案](./CLIENT_UPDATE_IMPLEMENTATION_PLAN.md)
+- [Windows 原生升级器 native_updater](./NATIVE_UPDATER.md)
+
+实现位置速查：
+
+| 组成 | 位置 |
+| --- | --- |
+| 服务端接口与业务 | `backend-springboot/src/main/java/com/pdk/update/` |
+| 管理后台页面 | `admin-vue3/src/views/update/ClientUpdateManager.vue` |
+| Windows 原生升级器（CLI + GUI） | `native_updater/`（见 [NATIVE_UPDATER.md](./NATIVE_UPDATER.md)） |
+| 打包与密钥脚本 | `scripts/build_update_package.py`、`scripts/generate_update_keys.py` |
 
 ## 1. 建设目标
 
@@ -502,19 +516,20 @@ Windows 的 Authenticode 代码签名可以作为额外保护，但不能替代�
 
 运行中的 EXE 不能可靠覆盖自身。PyQt 主程序只负责检查、下载和验证，实际替换由独立 updater 执行。
 
-推荐采用版本目录：
-
-```text
-app/
-  current.json
-  versions/1.7.0/
-  versions/1.8.0/
-  updater/
-```
-
-安装步骤必须支持等待主进程退出、再次验证包、解压到新目录、原子切换 current、启动新版本、健康确认和失败回滚。不要直接在现有安装目录逐文件覆盖，否则断电或文件占用会留下半升级状态。
+安装步骤必须支持等待主进程退出、再次验证包、解压到新目录、原子切换、启动新版本、健康确认和失败回滚。不要直接在现有安装目录逐文件覆盖，否则断电或文件占用会留下半升级状态。
 
 updater 自身升级必须采用下一次运行生效的旁路替换或单独引导程序，不能让正在运行的 updater 覆盖自己。发布改变包布局、签名协议或入口规则前，必须先发布兼容旧格式的 updater 过渡版本。
+
+**已实现形态**：本仓库的原生升级器位于 `native_updater/`，产出一个命令行 `pdk_updater.exe` 和一个纯 Win32 GUI `pdk_updater_gui.exe`。它采用「安装根整体替换 + 同级隐藏备份目录」而非上文的 `versions/` 多版本目录布局：
+
+```text
+<install_root 的父目录>/
+  client/                      ← install_root，当前生效版本
+  .client.backup-<pid>-<tick>/ ← 上一次升级前的旧版本，可被 GUI 选中回滚
+  pdk_updater.exe              ← 升级器本体，必须放在 install_root 之外，避免自我覆盖
+```
+
+该布局同样满足原子切换与失败回滚要求，旧版本以备份目录形式保留，因此 GUI 才能提供「回滚到某个特定版本」的能力。完整构建、配置与回滚说明见 [Windows 原生升级器 native_updater](./NATIVE_UPDATER.md)。
 
 ### 10.3 现有客户端首次接入
 

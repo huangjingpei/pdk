@@ -1,0 +1,13 @@
+{
+  "appId": 1,
+  "installRoot": "C:/path/to/your/client",
+  "entryPoint": "main.py",
+  "publicKey": "BASE64_SPKI_DER_PUBLIC_KEY_HERE",
+  "packagesDir": "C:/path/to/packages",
+  "platform": "WINDOWS",
+  "arch": "X64",
+  "packageType": "ZIP",
+  "healthTimeoutSeconds": 60,
+  "relaunchOnRollback": true,
+  "requireHealthCheck": true
+}

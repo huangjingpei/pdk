@@ -1212,7 +1212,17 @@ def main() -> int:
     if health_file:
         try:
             from pathlib import Path
-            Path(health_file).write_text("ok", encoding="utf-8")
+            import json
+            nonce = os.getenv("PDK_UPDATE_HEALTH_NONCE", "")
+            if nonce:
+                # 被更新器（C++/Python）拉起：回写 nonce 与当前版本，供更新器做健康检查。
+                current_version = str(window.runner.build_config.get("version", ""))
+                Path(health_file).write_text(
+                    json.dumps({"nonce": nonce, "version": current_version}, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+            else:
+                Path(health_file).write_text("ok", encoding="utf-8")
         except OSError:
             pass
     return app.exec()

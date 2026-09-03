@@ -14,6 +14,8 @@ import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.HandlerInterceptor;
 
+import java.util.Locale;
+
 /** 第二道强制更新门禁。桥接期对缺少版本 Header 的旧客户端保持兼容。 */
 @Component
 @RequiredArgsConstructor
@@ -29,12 +31,25 @@ public class ClientVersionEnforcementInterceptor implements HandlerInterceptor {
         if (appRaw==null || version==null || platform==null || arch==null) return true;
         long appId;
         try { appId=Long.parseLong(appRaw); } catch(NumberFormatException e) { return true; }
-        Business business=businessService.requireByAppId(appId);
+        if (version.isBlank()) return true; // 空版本头等同缺失，桥接期放行
+        Business business;
+        try { business=businessService.requireByAppId(appId); }
+        catch (RuntimeException e) { return true; } // 业务不存在即无策略，交给后续鉴权处理
         ClientUpdatePolicy policy=policyMapper.selectOne(new LambdaQueryWrapper<ClientUpdatePolicy>()
                 .eq(ClientUpdatePolicy::getBizId,business.getId()).eq(ClientUpdatePolicy::getChannel,"STABLE")
-                .eq(ClientUpdatePolicy::getPlatform,platform.toUpperCase()).eq(ClientUpdatePolicy::getArch,arch.toUpperCase()).last("LIMIT 1"));
+                .eq(ClientUpdatePolicy::getPlatform,platform.toUpperCase(Locale.ROOT)).eq(ClientUpdatePolicy::getArch,arch.toUpperCase(Locale.ROOT)).last("LIMIT 1"));
         if (policy==null || policy.getUpdateEnabled()!=1 || policy.getServerEnforcementEnabled()!=1 || policy.getMinimumSupportedVersion()==null) return true;
-        if (SemanticVersion.parse(version).compareTo(SemanticVersion.parse(policy.getMinimumSupportedVersion()))>=0) return true;
+        SemanticVersion current, minimum;
+        try { current=SemanticVersion.parse(version); minimum=SemanticVersion.parse(policy.getMinimumSupportedVersion()); }
+        catch (RuntimeException e) {
+            // 版本号无法解析时无法证明其满足最低版本要求，按强制门禁一律拦截（fail-closed）。
+            return reject(response);
+        }
+        if (current.compareTo(minimum)>=0) return true;
+        return reject(response);
+    }
+
+    private boolean reject(HttpServletResponse response) throws Exception {
         response.setStatus(426); response.setCharacterEncoding("UTF-8"); response.setContentType(MediaType.APPLICATION_JSON_VALUE);
         objectMapper.writeValue(response.getWriter(), CommonResult.failed(42600, "客户端版本过低，请先完成强制更新"));
         return false;

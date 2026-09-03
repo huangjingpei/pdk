@@ -30,12 +30,12 @@
             <el-button link @click="showArtifacts(row)">构件</el-button>
             <el-button v-if="row.status==='DRAFT' && hasPermission('client-update:create')" link type="primary" @click="openUpload(row)">上传</el-button>
             <el-button v-if="row.status==='DRAFT' && hasPermission('client-update:create')" link type="danger" @click="deleteDraft(row)">删除草稿</el-button>
-            <el-button v-if="row.status==='DRAFT'" link type="primary" @click="act(row,'ready')">就绪</el-button>
-            <el-button v-if="row.status==='READY'" link type="success" @click="act(row,'publish')">发布</el-button>
-            <el-button v-if="row.status==='READY'" link @click="act(row,'draft')">退回草稿</el-button>
-            <el-button v-if="row.status==='PUBLISHED'" link type="warning" @click="act(row,'suspend')">暂停</el-button>
-            <el-button v-if="row.status==='SUSPENDED'" link type="success" @click="act(row,'resume')">恢复</el-button>
-            <el-button v-if="['PUBLISHED','SUSPENDED'].includes(row.status)" link type="danger" @click="act(row,'archive')">归档</el-button>
+            <el-button v-if="row.status==='DRAFT' && canAct('ready')" link type="primary" @click="act(row,'ready')">就绪</el-button>
+            <el-button v-if="row.status==='READY' && canAct('publish')" link type="success" @click="act(row,'publish')">发布</el-button>
+            <el-button v-if="row.status==='READY' && canAct('draft')" link @click="act(row,'draft')">退回草稿</el-button>
+            <el-button v-if="row.status==='PUBLISHED' && canAct('suspend')" link type="warning" @click="act(row,'suspend')">暂停</el-button>
+            <el-button v-if="row.status==='SUSPENDED' && canAct('resume')" link type="success" @click="act(row,'resume')">恢复</el-button>
+            <el-button v-if="['PUBLISHED','SUSPENDED'].includes(row.status) && canAct('archive')" link type="danger" @click="act(row,'archive')">归档</el-button>
           </template></el-table-column>
         </el-table>
         <Pagination :total="total" v-model:page="page" v-model:page-size="size" @change="loadReleases" />
@@ -75,7 +75,7 @@
         <el-descriptions-item label="协议版本">{{ uploadRelease.minimumProtocolVersion }}</el-descriptions-item>
         <el-descriptions-item label="最低 Updater">{{ uploadRelease.minimumUpdaterVersion }}</el-descriptions-item>
       </el-descriptions>
-      <el-upload drag :auto-upload="false" :limit="1" :on-change="onFile"><el-icon class="el-icon--upload"><UploadFilled/></el-icon><div>拖入或选择 ZIP 完整包</div></el-upload>
+      <el-upload ref="uploadRef" drag :auto-upload="false" :limit="1" :on-change="onFile"><el-icon class="el-icon--upload"><UploadFilled/></el-icon><div>拖入或选择 ZIP 完整包</div></el-upload>
       <template #footer><el-button @click="uploadVisible=false">取消</el-button><el-button type="primary" :loading="uploading" @click="uploadArtifact">上传、校验并签名</el-button></template>
     </el-dialog>
 
@@ -116,6 +116,10 @@ const bizId=ref<number>(), channel=ref('STABLE'), status=ref(''), page=ref(1), s
 const states=['DRAFT','READY','PUBLISHED','SUSPENDED','ARCHIVED']; const selectedBusiness=computed(()=>businesses.value.find(b=>b.bizId===bizId.value));
 const policy=reactive({updateEnabled:false,minimumSupportedVersion:'',mandatoryReleaseId:undefined as number|undefined,serverEnforcementEnabled:false,offlineGraceHours:24,checkIntervalSeconds:21600,policyRevision:undefined as number|undefined});
 const createVisible=ref(false), uploadVisible=ref(false), artifactVisible=ref(false), uploading=ref(false), uploadRelease=ref<ClientRelease>(), artifactRelease=ref<ClientRelease>(), selectedFile=ref<File>();
+const uploadRef=ref<{clearFiles:()=>void}>();
+// 状态流转动作与后端 @RequirePermission 保持一致，避免显示必被 403 拒绝的按钮。
+const ACTION_PERM:Record<string,string>={ready:'client-update:create',draft:'client-update:create',publish:'client-update:publish',resume:'client-update:publish',suspend:'client-update:suspend',archive:'client-update:suspend'};
+const canAct=(action:string)=>hasPermission(ACTION_PERM[action]);
 const downloadLinkVisible=ref(false), generatingLink=ref(false), downloadArtifact=ref<ClientArtifact>(), downloadHours=ref(24), downloadReason=ref(''), generatedLink=ref(''), linkExpiresAt=ref('');
 const createForm=reactive({version:'',channel:'STABLE',minimumProtocolVersion:1,minimumUpdaterVersion:'1.0.0',rolloutPercentage:100,releaseNotes:''});
 const requestId=()=>crypto.randomUUID(); const err=(e:unknown)=>ElMessage.error(e instanceof Error?e.message:'操作失败');
@@ -128,13 +132,19 @@ async function createRelease(){if(!bizId.value||!selectedBusiness.value)return;t
 async function act(row:ClientRelease,action:string){let reason:string;try{reason=(await ElMessageBox.prompt(`请输入${action}原因`,'高风险发布操作',{inputPattern:/.{2,}/,inputErrorMessage:'至少2个字符',type:'warning'})).value}catch{return}try{await api.post(`/api/v1/admin/client-updates/releases/${row.id}/${action}`,{requestId:requestId(),reason});ElMessage.success('状态已更新');await reloadAll()}catch(e){err(e)}}
 async function changeRollout(row:ClientRelease){let raw:string;try{raw=(await ElMessageBox.prompt('输入新灰度比例 0-100','调整已发布版本灰度',{inputValue:String(row.rolloutPercentage),inputPattern:/^(100|[1-9]?\d)$/,inputErrorMessage:'请输入 0-100'})).value}catch{return}try{await api.put(`/api/v1/admin/client-updates/releases/${row.id}/rollout`,{rolloutPercentage:Number(raw),requestId:requestId(),reason:`调整灰度 ${row.rolloutPercentage}% → ${raw}%`});ElMessage.success('灰度已更新');await loadReleases()}catch(e){err(e)}}
 async function deleteDraft(row:ClientRelease){let reason:string;try{reason=(await ElMessageBox.prompt(`将永久删除草稿 ${row.version}、构件数据库记录和已上传文件。请输入删除原因`,'删除未发布版本',{inputPattern:/.{2,}/,inputErrorMessage:'至少2个字符',confirmButtonText:'确认永久删除',type:'warning'})).value}catch{return}try{await api.delete(`/api/v1/admin/client-updates/releases/${row.id}`,{data:{requestId:requestId(),reason}});ElMessage.success('草稿版本和构件已删除');await loadReleases()}catch(e){err(e)}}
-async function showArtifacts(row:ClientRelease){artifactRelease.value=row;artifactVisible.value=true;const r=await api.get<ApiResult<ClientArtifact[]>>(`/api/v1/admin/client-updates/releases/${row.id}/artifacts`);artifacts.value=r.data.data;}
+async function showArtifacts(row:ClientRelease){artifactRelease.value=row;artifactVisible.value=true;artifacts.value=[];try{const r=await api.get<ApiResult<ClientArtifact[]>>(`/api/v1/admin/client-updates/releases/${row.id}/artifacts`);artifacts.value=r.data.data;}catch(e){err(e)}}
 function openDownloadLink(row:ClientArtifact){downloadArtifact.value=row;downloadHours.value=24;downloadReason.value='';generatedLink.value='';linkExpiresAt.value='';downloadLinkVisible.value=true;}
 async function generateDownloadLink(){if(!downloadArtifact.value)return;if(downloadReason.value.trim().length<2)return ElMessage.warning('请输入至少 2 个字符的生成原因');generatingLink.value=true;try{const r=await api.post<ApiResult<{downloadUrl:string,expiresAt:string}>>(`/api/v1/admin/client-updates/artifacts/${downloadArtifact.value.id}/download-link`,{validHours:downloadHours.value,requestId:requestId(),reason:downloadReason.value.trim()});generatedLink.value=r.data.data.downloadUrl;linkExpiresAt.value=r.data.data.expiresAt;const local=/\b(localhost|127\.0\.0\.1)\b/i.test(generatedLink.value);local?ElMessage.warning('地址已生成，但当前为本机地址，发送给其他用户前请配置 PDK_UPDATE_PUBLIC_BASE_URL'):ElMessage.success('下载地址已生成');}catch(e){err(e)}finally{generatingLink.value=false}}
 async function copyDownloadLink(){try{await navigator.clipboard.writeText(generatedLink.value);ElMessage.success('下载地址已复制')}catch{ElMessage.error('自动复制失败，请手动选择并复制')}}
-function openUpload(row:ClientRelease){uploadRelease.value=row;selectedFile.value=undefined;uploadVisible.value=true} function onFile(f:UploadFile){selectedFile.value=f.raw}
+function openUpload(row:ClientRelease){uploadRelease.value=row;selectedFile.value=undefined;uploadRef.value?.clearFiles();uploadVisible.value=true} function onFile(f:UploadFile){selectedFile.value=f.raw}
 async function uploadArtifact(){if(!uploadRelease.value||!selectedFile.value)return ElMessage.warning('请选择 ZIP 文件');uploading.value=true;let stage='创建上传会话';try{const session=await api.post<ApiResult<ClientArtifact>>(`/api/v1/admin/client-updates/releases/${uploadRelease.value.id}/artifacts/upload-session`,{platform:'WINDOWS',arch:'X64',packageType:'ZIP',fileName:selectedFile.value.name,requestId:requestId()});stage='上传并校验 ZIP';const fd=new FormData();fd.append('file',selectedFile.value);await api.put(`/api/v1/admin/client-updates/artifacts/${session.data.data.id}/content`,fd,{timeout:0});stage='生成 Ed25519 构件签名';await api.post(`/api/v1/admin/client-updates/artifacts/${session.data.data.id}/complete`,{requestId:requestId(),reason:'管理后台上传并完成服务端校验'});ElMessage.success('构件已校验并签名');uploadVisible.value=false;}catch(e){ElMessage.error(`${stage}失败：${e instanceof Error?e.message:'未知错误'}`)}finally{uploading.value=false}}
-async function savePolicy(){if(!bizId.value)return;let reason:string;try{reason=(await ElMessageBox.prompt('请输入策略变更原因','策略审计',{inputPattern:/.{2,}/,inputErrorMessage:'至少2个字符',type:'warning'})).value}catch{return}try{const body={channel:channel.value,platform:'WINDOWS',arch:'X64',updateEnabled:policy.updateEnabled,minimumSupportedVersion:policy.minimumSupportedVersion||null,mandatoryReleaseId:policy.minimumSupportedVersion?policy.mandatoryReleaseId:null,serverEnforcementEnabled:policy.serverEnforcementEnabled,offlineGraceHours:policy.offlineGraceHours,checkIntervalSeconds:policy.checkIntervalSeconds,policyRevision:policy.policyRevision,requestId:requestId(),reason};await api.put(`/api/v1/admin/client-updates/policies/${bizId.value}`,body);ElMessage.success('策略已原子保存');await loadPolicy()}catch(e){err(e)}}
+async function savePolicy(){if(!bizId.value)return;
+  const min=(policy.minimumSupportedVersion||'').trim();
+  if(min && !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(min))return ElMessage.warning('最低可运行版本必须是严格的 MAJOR.MINOR.PATCH，例如 1.8.0');
+  if(!min && policy.serverEnforcementEnabled)return ElMessage.warning('启用「服务端 426 拦截」前必须先填写最低可运行版本');
+  if(!min && policy.mandatoryReleaseId)return ElMessage.warning('未设置最低可运行版本时不能指定强制目标 Release ID');
+  if(min && !policy.mandatoryReleaseId)return ElMessage.warning('已设置最低可运行版本，必须同时指定强制目标 Release ID');
+  let reason:string;try{reason=(await ElMessageBox.prompt('请输入策略变更原因','策略审计',{inputPattern:/.{2,}/,inputErrorMessage:'至少2个字符',type:'warning'})).value}catch{return}try{const body={channel:channel.value,platform:'WINDOWS',arch:'X64',updateEnabled:policy.updateEnabled,minimumSupportedVersion:policy.minimumSupportedVersion||null,mandatoryReleaseId:policy.minimumSupportedVersion?policy.mandatoryReleaseId:null,serverEnforcementEnabled:policy.serverEnforcementEnabled,offlineGraceHours:policy.offlineGraceHours,checkIntervalSeconds:policy.checkIntervalSeconds,policyRevision:policy.policyRevision,requestId:requestId(),reason};await api.put(`/api/v1/admin/client-updates/policies/${bizId.value}`,body);ElMessage.success('策略已原子保存');await loadPolicy()}catch(e){err(e)}}
 function statusType(s:string){return ({PUBLISHED:'success',SUSPENDED:'warning',ARCHIVED:'info',READY:'primary'} as any)[s]||''}
 onMounted(async()=>{try{await loadBusinesses();await reloadAll()}catch(e){err(e)}});
 </script>

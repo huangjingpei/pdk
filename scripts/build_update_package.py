@@ -11,6 +11,7 @@ python scripts/build_update_package.py ^
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -32,6 +33,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--minimum-updater-version", default="1.0.0")
     parser.add_argument("--allow-config-mismatch", action="store_true", help="仅用于诊断；不建议发布不一致的内嵌配置")
     parser.add_argument("--dry-run", action="store_true", help="只校验并显示统计，不创建 ZIP")
+    parser.add_argument("--emit-job", action="store_true",
+                        help="同时产出 <包名>.job.json，供 native_updater 的 GUI 直接扫描安装")
+    parser.add_argument("--private-key", default=os.environ.get("PDK_UPDATE_ARTIFACT_PRIVATE_KEY"),
+                        help="Ed25519 构件私钥（PKCS8 DER 的 Base64）；--emit-job 时必需")
+    parser.add_argument("--public-key", default=os.environ.get("PDK_UPDATE_ARTIFACT_PUBLIC_KEY"),
+                        help="Ed25519 构件公钥（SPKI DER 的 Base64）；--emit-job 时必需")
+    parser.add_argument("--key-id", default=os.environ.get("PDK_UPDATE_ARTIFACT_KEY_ID", "client-release-2026-01"),
+                        help="签名 keyId，需与客户端内置公钥的 keyId 一致")
     return parser.parse_args()
 
 
@@ -54,6 +63,23 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def artifact_canonical(app_id: int, version: str, platform: str, arch: str,
+                       package_type: str, size: int, sha256: str) -> str:
+    """必须与服务端 ClientUpdateService.artifactCanonical 与 C++ crypto.cpp 完全一致。"""
+    return "\n".join(["PDK-ARTIFACT-V1", str(app_id), version, platform, arch,
+                      package_type, str(size), sha256])
+
+
+def sign_artifact(private_key_b64: str, canonical: str) -> str:
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    from cryptography.hazmat.primitives.serialization import load_der_private_key
+
+    key = load_der_private_key(base64.b64decode(private_key_b64), password=None)
+    if not isinstance(key, Ed25519PrivateKey):
+        raise ValueError("构件签名密钥必须是 Ed25519 私钥")
+    return base64.b64encode(key.sign(canonical.encode("utf-8"))).decode()
 
 
 def inspect_embedded_config(source: Path, app_id: int, version: str, entry_point: str) -> tuple[list[str], str | None]:
@@ -130,6 +156,12 @@ def main() -> int:
         print(f"警告: {warning}", file=sys.stderr)
     if warnings and not args.allow_config_mismatch:
         raise ValueError("内嵌构建配置与升级参数不一致；请先修正并重新执行打包")
+    if build_config is None and not args.allow_config_mismatch:
+        # 服务端 validateZip 会拒绝 buildConfig 为空的清单，在这里提前失败，避免上传后才发现。
+        raise ValueError(
+            "未能在源目录找到内嵌构建配置（要求根目录恰好一个含 appId 的 JSON）。"
+            "服务端会拒绝 buildConfig 为空的清单；如确需跳过请使用 --allow-config-mismatch。"
+        )
     if args.dry_run:
         print("dry-run 完成，未创建 ZIP")
         return 0
@@ -150,8 +182,36 @@ def main() -> int:
         raise
     print()
     print(f"升级包: {output}")
+    zip_sha = sha256_file(output)
     print(f"ZIP 大小: {output.stat().st_size / 1024 / 1024:.2f} MiB")
-    print(f"SHA-256: {sha256_file(output)}")
+    print(f"SHA-256: {zip_sha}")
+
+    if args.emit_job:
+        # 供 native_updater 的 GUI 扫描安装：canonical 串与服务端签名逻辑完全一致。
+        if not args.private_key or not args.public_key:
+            raise ValueError("--emit-job 需要 --private-key 与 --public-key（或对应的环境变量）")
+        size = output.stat().st_size
+        canonical = artifact_canonical(args.app_id, args.version, args.platform.upper(),
+                                      args.arch.upper(), "ZIP", size, zip_sha)
+        job = {
+            "schemaVersion": 1,
+            "packagePath": output.name,
+            "targetVersion": args.version,
+            "entryPoint": entry_point,
+            "appId": args.app_id,
+            "platform": args.platform.upper(),
+            "arch": args.arch.upper(),
+            "packageType": "ZIP",
+            "fileSize": size,
+            "sha256": zip_sha,
+            "signature": sign_artifact(args.private_key, canonical),
+            "publicKey": args.public_key,
+            "signingKeyId": args.key_id,
+        }
+        job_path = output.with_suffix(".job.json")
+        job_path.write_text(json.dumps(job, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"升级清单: {job_path}")
+        print(f"签名 keyId: {args.key_id}")
     return 0
 
 
