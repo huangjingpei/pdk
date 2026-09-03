@@ -6,7 +6,11 @@
   "channel": "STABLE",
   "updaterVersion": "1.0.0",
   "entryPoint": "main.py",
-  "artifactPublicKeys": {},
-  "policyPublicKeys": {},
+  "artifactPublicKeys": {
+    "client-release-2026-01": "MCowBQYDK2VwAyEAdkohm7YO9wdg+R0VG7wBKaCFcku9oTQuo6iZU3cXQQM="
+  },
+  "policyPublicKeys": {
+    "client-policy-2026-01": "MCowBQYDK2VwAyEAYRFQlsRCiOoHTGURxnkDY35OtGNV5r53IhSybIN5s84="
+  },
   "productionEditable": false
 }
