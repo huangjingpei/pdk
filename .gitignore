@@ -22,3 +22,7 @@ vite.config.ts.timestamp-*.mjs
 
 # 扩展包 / 安装包（非项目源码）
 *.vsix
+
+# 本机升级签名密钥（含私钥，绝不入库）。
+# 模板已入库：backend-springboot/config/client-update-keys.example.yml
+backend-springboot/config/client-update-keys.yml

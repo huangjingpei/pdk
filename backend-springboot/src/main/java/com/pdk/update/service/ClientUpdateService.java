@@ -28,6 +28,7 @@ import org.springframework.web.multipart.MultipartFile;
 import java.io.InputStream;
 import java.nio.file.*;
 import java.time.*;
+import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
@@ -370,10 +371,15 @@ public class ClientUpdateService {
     public static String artifactCanonical(long appId, ClientRelease r, ClientArtifact a) {
         return String.join("\n", "PDK-ARTIFACT-V1", String.valueOf(appId), r.getVersion(), a.getPlatform(), a.getArch(), a.getPackageType(), String.valueOf(a.getFileSize()), a.getSha256());
     }
+    // 与 CheckResponse 的 @JsonFormat 保持同一精度（固定 9 位纳秒），确保「签名串」与「返回字段」
+    // 逐字节一致。否则 LocalDateTime.toString()（9 位）与 Jackson 默认序列化（截尾 7 位）不一致，
+    // 客户端用返回的时间戳验签会失败。
+    private static final DateTimeFormatter CANONICAL_TS =
+            DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSSSSSSSS");
     public static String policyCanonical(int protocol, long appId, String channel, String platform, String arch, Long revision,
             String updatePolicy, String minimum, Long mandatoryId, String target, LocalDateTime issued, LocalDateTime expires) {
         return String.join("\n", "PDK-POLICY-V1", String.valueOf(protocol), String.valueOf(appId), channel, platform, arch,
-                String.valueOf(revision), updatePolicy, Objects.toString(minimum, ""), Objects.toString(mandatoryId, ""), Objects.toString(target, ""), issued.toString(), expires.toString());
+                String.valueOf(revision), updatePolicy, Objects.toString(minimum, ""), Objects.toString(mandatoryId, ""), Objects.toString(target, ""), CANONICAL_TS.format(issued), CANONICAL_TS.format(expires));
     }
 
     private CheckResponse none(String requestId, int protocol, Business business, String ch, String pf, String ar, String current, String updater, String reason, ClientUpdatePolicy policy, LocalDateTime now) {

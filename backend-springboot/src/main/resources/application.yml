@@ -4,6 +4,16 @@ server:
     context-path: /
 
 spring:
+  # 客户端升级的签名私钥/HMAC 密钥等敏感配置，统一从下面这个本地文件加载，
+  # 这是它们【唯一】的来源——不要改用环境变量注入。
+  #   原因：OS 环境变量在 Spring 中的优先级高于配置文件，一旦两边都存在，
+  #   会出现 key-id 取自文件、私钥取自环境变量的静默分裂，表现为
+  #   「后端签名正常、客户端验签必失败」，而日志毫无异常，极难排查。
+  # 文件缺失不阻塞启动，但启动日志会打印精确路径提示，且发布/签发策略会直接失败。
+  # 模板见：backend-springboot/config/client-update-keys.example.yml
+  config:
+    import:
+      - optional:file:./config/client-update-keys.yml
   application:
     name: pdk-commercial-system
   datasource:
@@ -118,19 +128,27 @@ pdk:
     scheduler-zone: Asia/Shanghai
     admin-password-pepper: ${PDK_ADMIN_PASSWORD_PEPPER:PDK_ADMIN_2026}
   client-update:
-    enabled: ${PDK_CLIENT_UPDATE_ENABLED:true}
-    storage-root: ${PDK_UPDATE_STORAGE_ROOT:${java.io.tmpdir}/pdk-client-updates}
-    public-base-url: ${PDK_UPDATE_PUBLIC_BASE_URL:http://localhost:8080}
-    download-token-secret: ${PDK_UPDATE_DOWNLOAD_TOKEN_SECRET:change-me-download-token-secret-at-least-32-bytes}
-    event-token-secret: ${PDK_UPDATE_EVENT_TOKEN_SECRET:change-me-event-token-secret-at-least-32-bytes}
-    rollout-hmac-secret: ${PDK_UPDATE_ROLLOUT_HMAC_SECRET:change-me-rollout-secret-at-least-32-bytes}
-    rollout-key-version: ${PDK_UPDATE_ROLLOUT_KEY_VERSION:1}
-    artifact-private-key: ${PDK_UPDATE_ARTIFACT_PRIVATE_KEY:}
-    artifact-key-id: ${PDK_UPDATE_ARTIFACT_KEY_ID:client-release-local-1}
-    policy-private-key: ${PDK_UPDATE_POLICY_PRIVATE_KEY:}
-    policy-key-id: ${PDK_UPDATE_POLICY_KEY_ID:client-policy-local-1}
-    download-url-ttl-seconds: ${PDK_UPDATE_DOWNLOAD_TTL_SECONDS:600}
-    policy-ttl-hours: ${PDK_UPDATE_POLICY_TTL_HOURS:24}
+    # 下面全部是「没有密钥文件时也能把服务起起来」的本地默认值。
+    # 真实值请写进 config/client-update-keys.yml，它会覆盖这里的同名项。
+    # 刻意不写成 ${ENV_VAR:default} 形式：环境变量优先级高于配置文件，
+    # 混用会导致 key-id 与私钥来自不同源的静默故障（详见上方 spring.config.import 注释）。
+    enabled: true
+    storage-root: ${java.io.tmpdir}/pdk-client-updates
+    public-base-url: http://localhost:8080
+    download-token-secret: change-me-download-token-secret-at-least-32-bytes
+    event-token-secret: change-me-event-token-secret-at-least-32-bytes
+    rollout-hmac-secret: change-me-rollout-secret-at-least-32-bytes
+    rollout-key-version: "1"
+    # 签名私钥默认留空：未配置时发布构件/签发策略会明确报错（50390），
+    # 而不是用一把「谁都有」的默认私钥静默签出不可信的升级包。
+    artifact-private-key: ""
+    artifact-key-id: client-release-local-1
+    artifact-public-key: ""
+    policy-private-key: ""
+    policy-key-id: client-policy-local-1
+    policy-public-key: ""
+    download-url-ttl-seconds: 600
+    policy-ttl-hours: 24
 
 management:
   endpoints:

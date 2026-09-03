@@ -17,8 +17,12 @@ public class ClientUpdateProperties {
     private String rolloutKeyVersion = "1";
     private String artifactPrivateKey;
     private String artifactKeyId;
+    /** 与 artifactPrivateKey 配对的公钥（SPKI base64）；声明后启动期会校验密钥对一致性。 */
+    private String artifactPublicKey;
     private String policyPrivateKey;
     private String policyKeyId;
+    /** 与 policyPrivateKey 配对的公钥（SPKI base64）；声明后启动期会校验密钥对一致性。 */
+    private String policyPublicKey;
     private long downloadUrlTtlSeconds = 600;
     private long policyTtlHours = 24;
 }

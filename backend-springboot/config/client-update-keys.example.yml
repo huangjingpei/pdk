@@ -1,0 +1,57 @@
+# ============================================================================
+# 客户端升级签名密钥 —— 配置模板
+#
+# 用法：把本文件复制为同目录下的 client-update-keys.yml，填入真实值。
+#       cp config/client-update-keys.example.yml config/client-update-keys.yml
+#
+#   - client-update-keys.yml 已被 .gitignore 忽略，不会进仓库（私钥绝不能入 git：
+#     任何能 clone 仓库的人都能伪造出通过客户端验签的升级包）。
+#   - 本 .example.yml 入 git，作为「换电脑 / 新同事」的唯一指引。
+#
+# 这是升级密钥的【唯一】配置来源。请不要改用环境变量注入：
+#   Spring 的配置优先级为 命令行 > 系统属性(-D) > OS 环境变量 > 本文件。
+#   一旦环境变量里残留了同名密钥，会出现 key-id 取自本文件、私钥取自环境变量的
+#   分裂状态——后端签名一切正常、日志毫无异常，但所有客户端验签都失败。
+#   为此后端在启动时会做密钥对自检（ClientUpdateKeyInspector），不配对将拒绝启动。
+#
+# 文件不存在时服务仍可启动，只是「发布构件 / 签发升级策略」会返回 50390，
+# 且启动日志会打印本文件应放置的绝对路径。
+# ============================================================================
+
+pdk:
+  client-update:
+    enabled: true
+
+    # 升级包在服务端的落盘根目录（绝对路径）
+    storage-root: "C:/pdk-data/client-updates"
+    # 客户端可访问到的下载基地址；跨机联调时必须是客户端能连上的地址，不能是 localhost
+    public-base-url: "http://127.0.0.1"
+
+    # ---- HMAC 密钥：各 32 字节以上随机十六进制，用 openssl rand -hex 32 生成 ----
+    download-token-secret: "REPLACE_WITH_RANDOM_HEX_32_BYTES"
+    event-token-secret: "REPLACE_WITH_RANDOM_HEX_32_BYTES"
+    rollout-hmac-secret: "REPLACE_WITH_RANDOM_HEX_32_BYTES"
+    rollout-key-version: "1"
+
+    # ---- Ed25519 签名密钥：用 python scripts/generate_update_keys.py 一次性生成 ----
+    # 该脚本会同时输出 private-key(PKCS#8 DER base64) 与 public-key(SPKI DER base64)，
+    # 三项（private/key-id/public）必须来自同一次运行，否则启动自检会直接拒绝启动。
+    #
+    # public-key 不是机密，需要同步填到客户端构建配置：
+    #   client-pyqt/config/{pdd,zhibo-ai,zhibo-live}.json
+    #   → artifactPublicKeys / policyPublicKeys，key 用下面的 key-id
+    # 客户端只信任内置公钥，公钥填错或漏填 = 无法升级。
+
+    # 构件签名（签升级包的 sha256 等元信息）
+    artifact-private-key: ""
+    artifact-key-id: "client-release-local-1"
+    artifact-public-key: ""
+
+    # 策略签名（签下发给客户端的升级策略）
+    policy-private-key: ""
+    policy-key-id: "client-policy-local-1"
+    policy-public-key: ""
+
+    # 下载地址有效期与策略有效期
+    download-url-ttl-seconds: 600
+    policy-ttl-hours: 24
