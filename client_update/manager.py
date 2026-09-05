@@ -147,8 +147,13 @@ class ClientUpdateManager:
         self._write_json_atomic(self.cache_dir / "pending-update.json", decision)
         return target, decision
 
-    def launch_updater(self, decision: dict[str, Any], package: Path) -> None:
-        """启动安装器。调用方随后必须结束当前主进程。"""
+    def launch_updater(self, decision: dict[str, Any], package: Path,
+                       resume_payload: dict | None = None) -> None:
+        """启动安装器。调用方随后必须结束当前主进程。
+
+        ``resume_payload`` 通过 ``PDK_UPDATE_RESUME`` 环境变量交给新进程，
+        用于在更新后由应用层恢复用户现场（无缝续接）。
+        """
         if not getattr(sys, "frozen", False):
             raise UpdateError("开发环境仅执行检查与下载；自动安装请使用 PyInstaller 发布版验证")
         artifact = decision["artifact"]
@@ -181,6 +186,8 @@ class ClientUpdateManager:
             "PDK_UPDATER_API_BASE": self.config.server_base_url,
             "PDK_UPDATER_DEVICE_ID": self.api.device_id,
         })
+        if resume_payload is not None:
+            env["PDK_UPDATE_RESUME"] = json.dumps(resume_payload, ensure_ascii=False)
         self.api.report(decision, "INSTALL_STARTED")
         try:
             subprocess.Popen(args, env=env, close_fds=True,

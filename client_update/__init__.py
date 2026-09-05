@@ -8,5 +8,9 @@ from .config import UpdateConfig
 from .errors import UpdateError
 from .health import mark_update_healthy
 from .manager import ClientUpdateManager
+from .background import BackgroundUpdateService, UpdateState, UpdateInfo
 
-__all__ = ["ClientUpdateManager", "UpdateConfig", "UpdateError", "mark_update_healthy"]
+__all__ = [
+    "ClientUpdateManager", "UpdateConfig", "UpdateError", "mark_update_healthy",
+    "BackgroundUpdateService", "UpdateState", "UpdateInfo",
+]

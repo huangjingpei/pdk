@@ -1186,28 +1186,44 @@ def main() -> int:
             QMessageBox.warning(None, "更新检查暂不可用", f"{exc}\n\n当前没有仍生效的已验签强制策略，将继续启动。")
     finally:
         checking.close()
-    if decision and decision.get("hasUpdate"):
-        required = decision.get("updatePolicy") == "REQUIRED"
-        buttons = QMessageBox.StandardButton.Yes if required else (QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-        answer = QMessageBox.question(None, "必须更新" if required else "发现新版本",
-            f"当前版本：{updates.current_version}\n目标版本：{decision.get('targetVersion')}\n\n{decision.get('releaseNotes') or '包含稳定性与安全更新'}\n\n{'必须完成更新后才能继续。' if required else '是否立即更新？'}",
-            buttons, QMessageBox.StandardButton.Yes)
-        if answer == QMessageBox.StandardButton.Yes:
-            progress = QProgressDialog("正在下载并验证升级包…", "取消" if not required else "", 0, 100)
-            progress.setWindowTitle("客户端升级")
-            if required: progress.setCancelButton(None)
-            progress.show()
-            try:
-                package = updates.download_and_verify(decision, lambda done,total: (progress.setValue(min(100,int(done*100/total))), app.processEvents()))
-                updates.launch_updater(decision, package)
-                return 0
-            except UpdateError as exc:
-                QMessageBox.critical(None, "更新失败", str(exc))
-                if required: return 2
-            finally: progress.close()
-        elif required:
+
+    # 强制更新必须在登录前完成（正确的阻断行为）；可选更新不再弹强制弹窗，
+    # 改为后台静默下载，READY 时由 integrate() 给出非阻塞的「重启以应用」提示。
+    required = bool(decision and decision.get("hasUpdate")
+                    and decision.get("updatePolicy") == "REQUIRED")
+    if required:
+        QMessageBox.question(None, "必须更新",
+            f"当前版本：{updates.current_version}\n目标版本：{decision.get('targetVersion')}\n\n"
+            f"{decision.get('releaseNotes') or '包含稳定性与安全更新'}\n\n必须完成更新后才能继续。",
+            QMessageBox.StandardButton.Yes, QMessageBox.StandardButton.Yes)
+        progress = QProgressDialog("正在下载并验证升级包…", "", 0, 100)
+        progress.setWindowTitle("客户端升级")
+        progress.setCancelButton(None)
+        progress.show()
+        try:
+            package = updates.download_and_verify(
+                decision, lambda done, total: (progress.setValue(min(100, int(done * 100 / total))) if total else None, app.processEvents()))
+            updates.launch_updater(decision, package)
+            return 0
+        except UpdateError as exc:
+            QMessageBox.critical(None, "更新失败", str(exc))
             return 2
+        finally:
+            progress.close()
+
     window.show()
+
+    # 零打扰：可选更新在后台静默下载验签，就绪后非阻塞提示，退出时自动应用。
+    try:
+        import sys as _sys
+        from pathlib import Path as _Path
+        _repo = _Path(__file__).resolve().parents[1]
+        if str(_repo) not in _sys.path:
+            _sys.path.insert(0, str(_repo))
+        from client_update.qt_flow import integrate
+        integrate(app, window, updates, window.runner.device_id)
+    except Exception as exc:  # 后台升级不影响主程序正常使用
+        print(f"[升级] 后台静默升级服务启动失败（已忽略）：{exc}")
     health_file = os.getenv("PDK_UPDATE_HEALTH_FILE", "")
     if health_file:
         try:

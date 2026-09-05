@@ -66,33 +66,69 @@ class ClientUpdateManager:
         return None
 
     def download_and_verify(self, decision: dict[str, Any], progress: Callable[[int, int], None] | None = None) -> Path:
+        """下载并验签构件。校验失败会自动清掉损坏文件并重下一次（关闭续传）。
+
+        这样即便服务端断点续传返回异常内容（历史上出现过 206 + 错误 JSON），
+        也不会把损坏文件永久留在缓存里导致后续每次下载都失败。
+        """
         artifact = decision.get("artifact") or {}
         url, expected_size = artifact.get("downloadUrl"), int(artifact.get("fileSize") or 0)
         if not url or expected_size <= 0:
             raise UpdateError("服务端没有提供可安装构件")
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         target = self.cache_dir / f"artifact-{artifact['artifactId']}.zip"
-        existing = target.stat().st_size if target.exists() else 0
-        if existing > expected_size:
-            target.unlink(); existing = 0
-        headers = {"Range": f"bytes={existing}-"} if existing else {}
+        last_error: UpdateError | None = None
+        for resume in (True, False):
+            try:
+                self._download_and_check(decision, url, expected_size, target, progress, resume=resume)
+                return target
+            except UpdateError as exc:
+                last_error = exc
+                # 续传得到的文件不可信：清掉残留，改用全量下载再试一次
+                target.unlink(missing_ok=True)
+        raise last_error  # type: ignore[misc]
+
+    @staticmethod
+    def _write_stream(response, output, done: int, expected_size: int,
+                      progress: Callable[[int, int], None] | None) -> None:
+        for chunk in response.iter_content(1024 * 1024):
+            if chunk:
+                output.write(chunk)
+                done += len(chunk)
+                if progress:
+                    progress(done, expected_size)
+
+    def _download_and_check(self, decision: dict[str, Any], url: str, expected_size: int, target: Path,
+                            progress: Callable[[int, int], None] | None, resume: bool) -> None:
+        artifact = decision.get("artifact") or {}
         self.report(decision, "DOWNLOAD_STARTED")
+        existing = target.stat().st_size if (resume and target.exists()) else 0
+        if existing > expected_size:
+            target.unlink(missing_ok=True)
+            existing = 0
         try:
+            headers = {"Range": f"bytes={existing}-"} if existing else {}
+            need_full = False
             with requests.get(url, headers=headers, stream=True, timeout=(10, 60)) as response:
                 if existing and response.status_code != 206:
-                    target.unlink(missing_ok=True); existing = 0
-                    return self.download_and_verify(decision, progress)
-                response.raise_for_status()
-                with target.open("ab" if existing else "wb") as output:
-                    done = existing
-                    for chunk in response.iter_content(1024 * 1024):
-                        if chunk:
-                            output.write(chunk); done += len(chunk)
-                            if progress: progress(done, expected_size)
+                    # 服务端未真正支持续传（返回了完整内容或错误响应）：丢弃残留，本次改为全量下载
+                    target.unlink(missing_ok=True)
+                    need_full = True
+                else:
+                    response.raise_for_status()
+                    with target.open("ab" if existing else "wb") as output:
+                        self._write_stream(response, output, existing, expected_size, progress)
+            if need_full:
+                with requests.get(url, stream=True, timeout=(10, 60)) as response:
+                    response.raise_for_status()
+                    with target.open("wb") as output:
+                        self._write_stream(response, output, 0, expected_size, progress)
         except requests.RequestException as exc:
-            raise UpdateError(f"升级包下载失败，可稍后断点续传：{exc}") from exc
-        if target.stat().st_size != expected_size:
-            raise UpdateError("升级包大小不一致")
+            raise UpdateError(f"升级包下载失败，可稍后重试：{exc}") from exc
+        # 注意：无论走续传还是全量，都必须落到这里的校验，不能提前 return。
+        actual = target.stat().st_size
+        if actual != expected_size:
+            raise UpdateError(f"升级包大小不一致（期望 {expected_size}，实际 {actual}）")
         self.report(decision, "DOWNLOAD_COMPLETED")
         hasher = hashlib.sha256()
         with target.open("rb") as source:
@@ -111,18 +147,30 @@ class ClientUpdateManager:
         self._verify(canonical, artifact.get("signature"), artifact.get("signingKeyId"), "artifact")
         self.report(decision, "VERIFY_SUCCEEDED")
         (self.cache_dir / "pending-update.json").write_text(json.dumps(decision, ensure_ascii=False, indent=2), encoding="utf-8")
-        return target
 
-    def launch_updater(self, decision: dict[str, Any], package: Path) -> None:
+    def launch_updater(self, decision: dict[str, Any], package: Path,
+                       resume_payload: dict | None = None) -> subprocess.Popen:
+        """启动安装器并返回其进程句柄。调用方随后必须结束当前主进程。
+
+        升级器的 stdout/stderr 会追加到 cache_dir/updater.log，便于安装失败后排障
+        （升级器在主进程退出后独立运行，否则其输出无处可查）。
+        """
         artifact = decision["artifact"]
         install_root = Path(os.getenv("PDK_INSTALL_ROOT", Path(__file__).resolve().parent))
         public_key = self._key(artifact.get("signingKeyId"), "artifact")
         entry_point = str(self.config.get("entryPoint", "main.py"))
         native = self._find_native_updater()
         if native is not None:
-            self._launch_native(decision, package, install_root, entry_point, public_key, native)
-        else:
-            self._launch_python(decision, package, install_root, entry_point, public_key)
+            return self._launch_native(decision, package, install_root, entry_point, public_key, native, resume_payload)
+        return self._launch_python(decision, package, install_root, entry_point, public_key, resume_payload)
+
+    def _open_updater_log(self, title: str):
+        """打开升级器日志文件（追加模式），进程句柄交由子进程继承。"""
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        log = (self.cache_dir / "updater.log").open("a", encoding="utf-8", errors="replace")
+        log.write(f"\n===== {time.strftime('%Y-%m-%d %H:%M:%S')} {title} =====\n")
+        log.flush()
+        return log
 
     @staticmethod
     def _find_native_updater() -> Path | None:
@@ -146,7 +194,8 @@ class ClientUpdateManager:
         return None
 
     def _launch_native(self, decision: dict[str, Any], package: Path, install_root: Path,
-                       entry_point: str, public_key: str, native_exe: Path) -> None:
+                       entry_point: str, public_key: str, native_exe: Path,
+                       resume_payload: dict | None = None) -> subprocess.Popen:
         artifact = decision["artifact"]
         job = {
             "schemaVersion": 1,
@@ -188,11 +237,16 @@ class ClientUpdateManager:
         env["PDK_UPDATER_API_BASE"] = self.client.base_url
         env["PDK_UPDATER_DEVICE_ID"] = self.device_id
         env["PDK_PYTHON_EXE"] = sys.executable  # 供 C++ 启动器拉起 .py 客户端
-        subprocess.Popen([str(native_exe), "--job", str(job_path)], env=env,
-                         close_fds=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        if resume_payload is not None:
+            env["PDK_UPDATE_RESUME"] = json.dumps(resume_payload, ensure_ascii=False)
+        log = self._open_updater_log(f"launch native updater: {native_exe} -> {install_root}")
+        return subprocess.Popen([str(native_exe), "--job", str(job_path)], env=env,
+                                stdout=log, stderr=subprocess.STDOUT,
+                                close_fds=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
 
     def _launch_python(self, decision: dict[str, Any], package: Path, install_root: Path,
-                       entry_point: str, public_key: str) -> None:
+                       entry_point: str, public_key: str,
+                       resume_payload: dict | None = None) -> subprocess.Popen:
         artifact = decision["artifact"]
         updater = Path(__file__).with_name("updater.py")
         args = [sys.executable, str(updater), "--package", str(package), "--install-root", str(install_root),
@@ -206,7 +260,11 @@ class ClientUpdateManager:
         env["PDK_UPDATER_DECISION_FILE"] = str(self.cache_dir / "pending-update.json")
         env["PDK_UPDATER_API_BASE"] = self.client.base_url
         env["PDK_UPDATER_DEVICE_ID"] = self.device_id
-        subprocess.Popen(args, env=env, close_fds=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        if resume_payload is not None:
+            env["PDK_UPDATE_RESUME"] = json.dumps(resume_payload, ensure_ascii=False)
+        log = self._open_updater_log(f"launch python updater -> {install_root}")
+        return subprocess.Popen(args, env=env, stdout=log, stderr=subprocess.STDOUT,
+                                close_fds=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
 
     def report(self, decision: dict[str, Any], event: str, error: str | None = None) -> None:
         try:

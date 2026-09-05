@@ -4,12 +4,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from PyQt5 import QtCore
 from PyQt5.QtCore import QThread, Qt, pyqtSignal
 from PyQt5.QtWidgets import QMessageBox, QProgressDialog, QWidget
 
 from .config import UpdateConfig
 from .errors import UpdateError
 from .manager import ClientUpdateManager
+from .background import BackgroundUpdateService, UpdateState, UpdateInfo
 
 
 class _Worker(QThread):
@@ -130,3 +132,114 @@ def run_startup_update(device_id: str, expected_version: str,
         return StartupUpdateResult(False, updater_started=True)
     finally:
         manager.close()
+
+
+class UpdateService(QtCore.QObject):
+    """``BackgroundUpdateService`` 的 Qt 包装：把后台状态变化转成信号。
+
+    后台线程通过回调触发 ``stateChanged`` / ``progressChanged``，Qt 会自动以
+    队列连接（QueuedConnection）把信号投递到 GUI 线程，因此可在槽里安全操作控件。
+    """
+
+    stateChanged = QtCore.pyqtSignal(object, object, object)  # (UpdateState, UpdateInfo|None, error|None)
+    progressChanged = QtCore.pyqtSignal(float)
+
+    def __init__(self, manager, device_id: str, enabled: bool = True, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._svc = BackgroundUpdateService(
+            manager, device_id,
+            on_state=self._on_state, on_progress=self._on_progress, enabled=enabled,
+        )
+
+    def _on_state(self, state: UpdateState, info: UpdateInfo | None, error: str | None) -> None:
+        self.stateChanged.emit(state, info, error)
+
+    def _on_progress(self, frac: float) -> None:
+        self.progressChanged.emit(frac)
+
+    # 透传控制面
+    def start(self) -> None:
+        self._svc.start()
+
+    def stop(self) -> None:
+        self._svc.stop()
+
+    def apply_pending(self, resume_payload: dict | None = None) -> bool:
+        return self._svc.apply_pending(resume_payload)
+
+    def skip_version(self) -> None:
+        self._svc.skip_version()
+
+    def download_now(self) -> None:
+        self._svc.download_now()
+
+    @property
+    def state(self) -> UpdateState:
+        return self._svc.state
+
+    @property
+    def has_pending(self) -> bool:
+        return self._svc.has_pending()
+
+    @property
+    def pending_target_version(self) -> str | None:
+        return self._svc.pending_target_version()
+
+
+def integrate(app, window: QWidget, manager, device_id: str,
+              status_bar: QWidget | None = None, enabled: bool = True) -> UpdateService:
+    """把零打扰升级接入应用：启动后后台检查可选更新，READY 时非阻塞提示，退出时应用。
+
+    调用方仍应保留「启动时必须更新(REQUIRED)就在登录前阻断」的逻辑；本助手只负责
+    可选更新的静默下载与「重启以应用」的轻量提示。
+    """
+    service = UpdateService(manager, device_id, enabled=enabled, parent=window)
+    prompted: dict[str, bool] = {"value": False}
+
+    def on_state(state: UpdateState, info: UpdateInfo | None, error: str | None) -> None:
+        if state in (UpdateState.READY_TO_INSTALL, UpdateState.AVAILABLE_REQUIRED) and info is not None:
+            if state == UpdateState.READY_TO_INSTALL and prompted["value"]:
+                return
+            if state == UpdateState.READY_TO_INSTALL:
+                prompted["value"] = True
+            required = state == UpdateState.AVAILABLE_REQUIRED
+            _show_update_ready(window, info, required,
+                               on_restart=lambda: _apply_and_quit(app, service))
+
+    service.stateChanged.connect(on_state)
+
+    def on_quit() -> None:
+        if service.has_pending():
+            try:
+                service.apply_pending()
+            except Exception:
+                pass
+
+    app.aboutToQuit.connect(on_quit)
+    service.start()
+    return service
+
+
+def _show_update_ready(window: QWidget, info: UpdateInfo, required: bool,
+                       on_restart: Callable[[], None]) -> None:
+    """非阻塞的「更新就绪」提示；用户可立即重启，也可忽略并在退出时自动应用。"""
+    box = QMessageBox(window)
+    box.setModal(False)
+    box.setWindowTitle("客户端更新")
+    box.setIcon(QMessageBox.Warning if required else QMessageBox.Information)
+    box.setText(f"新版本 {info.target_version} 已就绪")
+    notes = (info.release_notes or "包含稳定性与安全更新").strip()
+    box.setInformativeText(notes + ("\n\n必须重启客户端以完成本次更新。" if required
+                                     else "\n\n重启客户端即可完成更新；本次会话可继续使用。"))
+    restart_btn = box.addButton("重启并更新" if not required else "立即重启更新", QMessageBox.AcceptRole)
+    if not required:
+        later_btn = box.addButton("稍后", QMessageBox.RejectRole)
+        later_btn.clicked.connect(box.reject)
+    box.setDefaultButton(restart_btn)
+    restart_btn.clicked.connect(lambda: (box.accept(), on_restart()))
+    box.show()
+
+
+def _apply_and_quit(app, service: UpdateService) -> None:
+    if service.apply_pending():
+        app.quit()
