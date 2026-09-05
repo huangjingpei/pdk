@@ -231,8 +231,21 @@ CREATE TABLE IF NOT EXISTS `pdk_admin_user` (
     `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='管理后台多角色账号表';
 
--- 在线补丁：给历史部署的 pdk_admin_user 加上 must_change_password 列（IF NOT EXISTS 仅 MySQL 8.0.29+ 支持）
-ALTER TABLE `pdk_admin_user` ADD COLUMN IF NOT EXISTS `must_change_password` TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否强制下次登录改密';
+-- 在线补丁：给历史部署的 pdk_admin_user 加上 must_change_password 列。
+-- 注意：MySQL 不支持 ALTER TABLE ... ADD COLUMN IF NOT EXISTS（那是 MariaDB 语法），
+-- 幂等写法必须走 information_schema 判断 + 预处理语句，重复执行安全。
+SET @pdk_col_exists = (
+    SELECT COUNT(*) FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'pdk_admin_user'
+      AND COLUMN_NAME = 'must_change_password'
+);
+SET @pdk_patch_sql = IF(@pdk_col_exists = 0,
+    'ALTER TABLE `pdk_admin_user` ADD COLUMN `must_change_password` TINYINT(1) NOT NULL DEFAULT 0 COMMENT ''是否强制下次登录改密''',
+    'SELECT ''pdk_admin_user.must_change_password 已存在，跳过补丁'' AS patch');
+PREPARE pdk_patch_stmt FROM @pdk_patch_sql;
+EXECUTE pdk_patch_stmt;
+DEALLOCATE PREPARE pdk_patch_stmt;
 
 -- 初始化套餐数据
 -- INSERT INTO `pdk_package_template` (`id`, `name`, `price`, `duration_days`, `account_count_x`, `calls_per_account_y`, `description`) VALUES
