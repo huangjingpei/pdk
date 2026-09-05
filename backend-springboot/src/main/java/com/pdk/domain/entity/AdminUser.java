@@ -19,6 +19,8 @@ public class AdminUser {
     private String displayName;
     private String roleCode;
     private String status;
+    /** 强制下次登录改密：1=必须改密才能进系统；0=不强制 */
+    private Integer mustChangePassword;
     private LocalDateTime lastLoginAt;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;

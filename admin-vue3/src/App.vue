@@ -1,5 +1,5 @@
 <template>
-  <router-view v-if="route.meta.public" />
+  <router-view v-if="route.meta.public || route.meta.bare" />
   <el-container v-else class="layout-container" style="height: 100vh;">
     <!-- 侧边导航栏 -->
     <el-aside width="240px" class="bg-[#0f172a] text-white">

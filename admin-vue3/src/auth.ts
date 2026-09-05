@@ -9,6 +9,8 @@ export interface AdminSession {
   role: string;
   permissions: string[];
   invitationCode?: string;
+  /** 为 true 时被强制进入改密页，改完才能进系统 */
+  mustChangePassword?: boolean;
 }
 
 const STORAGE_KEY = 'pdk-admin-session';

@@ -34,8 +34,10 @@ async function submit(): Promise<void> {
   try {
     const response = await api.post<ApiResult<AdminSession>>('/api/v1/admin/auth/login', form);
     setSession(response.data.data);
+    const session = response.data.data;
     ElMessage.success('登录成功');
-    await router.replace('/dashboard');
+    // 首次登录 / 密码被重置：先强制改密，改完重新登录
+    await router.replace(session.mustChangePassword ? '/change-password' : '/dashboard');
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '登录失败');
   } finally {

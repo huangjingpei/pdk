@@ -185,6 +185,59 @@ docker logs -f pdk-mysql                    # MySQL 日志
 
 `05-rollback.sh` 只切换 jar 和前端文件，**不回滚数据库**。若 schema 含破坏性变更需人工处理。
 
+## 功能迭代：开发完新功能后如何再次部署（增量更新）
+
+服务器环境和数据库都是现成的，**不需要重跑完整部署**。分三种情况：
+
+### 情况 A：普通功能改动（无新表/新列）—— 最常见
+
+```bash
+# 1) 提交代码（可选，但强烈建议，便于回溯版本）
+git add -A && git commit -m "feat: xxx"
+
+# 2) 增量部署：上传源码 → 服务器编译 → 确认无误后上线
+cd E:/pdk/deploy/aliyun
+bash deploy.sh --build          # 打包上传源码并在服务器上编译（3-5 分钟）
+bash deploy.sh --deploy-only    # 把刚编译好的版本切换上线 + 健康检查
+```
+
+> ⚠️ 注意：`--deploy-only` 本身**只切换已经编译好的版本上线**，不上传源码、不编译。
+> 所以改完代码必须先跑 `--build` 再 `--deploy-only`，只跑 `--deploy-only` 上线的还是旧代码。
+>
+> 如果不想分两步，直接跑 `bash deploy.sh` 也可以（env.sh 中 `SKIP_PREPARE="yes"` 时
+> 会自动跳过环境安装，只做 初始化检查 → 上传编译 → 上线，初始化步骤是幂等的，不会重置密码/密钥），只是耗时略长。
+
+### 情况 B：新功能带了新表或新列
+
+```bash
+bash deploy.sh --build
+bash deploy.sh --deploy-only --migrate
+```
+
+和情况 A 一样，但上线时额外执行 `schema-mysql.sql` 增量导入（脚本里写的是 `ADD COLUMN IF NOT EXISTS` / `CREATE TABLE IF NOT EXISTS`，重复执行安全）。
+
+### 情况 C：改完只想先在服务器上编译试试，不上线
+
+```bash
+bash deploy.sh --build        # 只编译，产物存为待上线版本
+bash deploy.sh --deploy-only  # 确认没问题后再上线
+```
+
+### 部署出问题了怎么办
+
+```bash
+bash deploy.sh --rollback            # 回滚到上一个版本（只切 jar 和前端，不动数据库）
+bash deploy.sh --rollback 20260905-113000   # 回滚到指定时间戳版本
+bash deploy.sh --rollback --list     # 看有哪些可回滚版本
+```
+
+### 注意事项
+
+1. **后端改动上线后即生效**（systemd 会自动重启服务）；前端是静态文件替换，浏览器强刷（Ctrl+F5）即可看到新版本。
+2. schema 补丁**必须幂等**（`IF NOT EXISTS`），且优先新建表，避免给既有表加列导致 MyBatis-Plus 查询报 `Unknown column`。
+3. 小内存服务器编译偶发 OOM：加 `--skip-typecheck` 跳过前端 vue-tsc（本机已校验过类型的话安全）。
+4. 改了 `application.yml` 里的敏感配置时，确认没有把开发密码带进 commit。
+
 ## 常见问题
 
 **访问 <http://121.43.150.109> 打不开**  

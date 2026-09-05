@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.pdk.common.api.CommonResult;
 import com.pdk.common.exception.BusinessException;
 import com.pdk.common.utils.PasswordHashUtils;
+import com.pdk.domain.dto.AdminChangePasswordDTO;
 import com.pdk.domain.dto.AdminLoginDTO;
 import com.pdk.domain.entity.AdminUser;
 import com.pdk.mapper.AdminUserMapper;
@@ -16,6 +17,7 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDateTime;
@@ -58,14 +60,22 @@ public class AdminAuthController {
         adminUserMapper.updateById(admin);
         loginLogService.recordAdminLogin(admin.getId(), admin.getUsername(), true, null, request);
         AdminPrincipal principal = new AdminPrincipal(admin.getId(), admin.getUsername(),
-                admin.getDisplayName(), admin.getRoleCode(), "ADMIN", admin.getBizId());
+                admin.getDisplayName(), admin.getRoleCode(), "ADMIN", admin.getBizId(),
+                admin.getMustChangePassword());
         return CommonResult.success(sessionPayload(principal), "登录成功");
     }
 
 
     @GetMapping("/me")
     public CommonResult<Map<String, Object>> me(HttpServletRequest request) {
-        return CommonResult.success(sessionPayload((AdminPrincipal) request.getAttribute("pdkAdminPrincipal")));
+        AdminPrincipal p = (AdminPrincipal) request.getAttribute("pdkAdminPrincipal");
+        // 每次 /me 都从 DB 重新读取 mustChangePassword，避免改密后前端缓存还显示旧值
+        AdminUser fresh = adminUserMapper.selectById(p.id());
+        if (fresh != null) {
+            p = new AdminPrincipal(p.id(), p.username(), p.displayName(), p.roleCode(), "ADMIN",
+                    p.bizId(), fresh.getMustChangePassword());
+        }
+        return CommonResult.success(sessionPayload(p));
     }
 
     @PostMapping("/logout")
@@ -79,6 +89,42 @@ public class AdminAuthController {
         return CommonResult.success("已安全退出");
     }
 
+    /**
+     * 管理员自助改密：当前已登录状态下输入旧密码 + 新密码。
+     * 用于首次登录强制改密场景，也支持日常自助修改。改密成功后清掉 must_change_password，
+     * 并把当前 token 踢下线，要求用户用新密码重新登录。
+     */
+    @PostMapping("/change-password")
+    @Transactional(rollbackFor = Exception.class)
+    public CommonResult<String> changePassword(@Valid @RequestBody AdminChangePasswordDTO dto,
+                                              HttpServletRequest request) {
+        AdminPrincipal principal = (AdminPrincipal) request.getAttribute("pdkAdminPrincipal");
+        if (principal == null) throw new BusinessException(40101, "请先登录");
+
+        AdminUser admin = adminUserMapper.selectById(principal.id());
+        if (admin == null || !"ACTIVE".equals(admin.getStatus())) {
+            throw new BusinessException(40111, "账号不存在或已停用");
+        }
+
+        String oldHash = PasswordHashUtils.sha256(passwordPepper, dto.getOldPassword());
+        if (!PasswordHashUtils.constantTimeEquals(admin.getPasswordHash(), oldHash)) {
+            throw new BusinessException(40112, "当前密码不正确");
+        }
+        String newHash = PasswordHashUtils.sha256(passwordPepper, dto.getNewPassword());
+        if (PasswordHashUtils.constantTimeEquals(admin.getPasswordHash(), newHash)) {
+            throw new BusinessException(40019, "新密码不能与当前密码相同");
+        }
+
+        admin.setPasswordHash(newHash);
+        admin.setMustChangePassword(0);
+        adminUserMapper.updateById(admin);
+
+        // 踢下线当前会话，让用户用新密码重新登录
+        adminStpLogic.logout();
+
+        return CommonResult.success("密码已修改，请使用新密码重新登录");
+    }
+
     private Map<String, Object> sessionPayload(AdminPrincipal admin) {
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("tokenName", adminStpLogic.getTokenName());
@@ -89,6 +135,7 @@ public class AdminAuthController {
         data.put("role", admin.roleCode());
         data.put("bizId", admin.bizId());
         data.put("permissions", RolePermissions.forRole(admin.roleCode()));
+        data.put("mustChangePassword", admin.requiresPasswordChange());
         return data;
     }
 }

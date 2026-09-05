@@ -9,7 +9,10 @@
     </div>
 
     <div v-for="g in groups" :key="g.key" class="card">
-      <div class="card-title">{{ g.label }}</div>
+      <div class="card-title">
+        <el-icon class="card-title-icon"><component :is="g.icon" /></el-icon>
+        <span>{{ g.label }}</span>
+      </div>
       <div v-for="item in g.items" :key="item.configKey" class="row">
         <div class="row-meta">
           <div class="row-label">{{ item.configLabel }}</div>
@@ -72,14 +75,14 @@ interface SystemConfigItem {
 const configs = ref<SystemConfigItem[]>([]);
 const saving = ref(false);
 
-const GROUP_ORDER: { key: string; label: string }[] = [
-  { key: 'ACCOUNT', label: '账号与 Token' },
-  { key: 'SMS', label: '短信' },
-  { key: 'SECURITY', label: '安全' },
-  { key: 'GENERAL', label: '其他' },
+const GROUP_ORDER: { key: string; label: string; icon: string }[] = [
+  { key: 'ACCOUNT', label: '账号与 Token', icon: 'Key' },
+  { key: 'SMS', label: '短信', icon: 'Message' },
+  { key: 'SECURITY', label: '安全', icon: 'Lock' },
+  { key: 'GENERAL', label: '其他', icon: 'Tools' },
 ];
 
-const groups = ref<{ key: string; label: string; items: SystemConfigItem[] }[]>([]);
+const groups = ref<{ key: string; label: string; icon: string; items: SystemConfigItem[] }[]>([]);
 
 function parseOptions(raw: string): { value: string; label: string }[] {
   if (!raw) return [];
@@ -105,6 +108,7 @@ function buildGroups() {
   groups.value = GROUP_ORDER.filter((g) => map.has(g.key)).map((g) => ({
     key: g.key,
     label: g.label,
+    icon: g.icon,
     items: map.get(g.key)!,
   }));
 }
@@ -140,7 +144,8 @@ onMounted(load);
 h2 { margin: 0; }
 p { color: #64748b; font-size: 13px; margin: 4px 0 0; }
 .card { background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 8px 20px 12px; margin-bottom: 16px; }
-.card-title { font-weight: 600; color: #0f172a; padding: 12px 0 4px; border-bottom: 1px solid #f1f5f9; margin-bottom: 8px; }
+.card-title { font-weight: 600; color: #0f172a; padding: 12px 0 4px; border-bottom: 1px solid #f1f5f9; margin-bottom: 8px; display: flex; align-items: center; gap: 8px; }
+.card-title-icon { color: #6366f1; font-size: 18px; }
 .row { display: flex; justify-content: space-between; align-items: center; padding: 12px 0; border-bottom: 1px dashed #f1f5f9; }
 .row:last-child { border-bottom: none; }
 .row-label { font-weight: 500; color: #1e293b; }

@@ -225,10 +225,14 @@ CREATE TABLE IF NOT EXISTS `pdk_admin_user` (
     `display_name` VARCHAR(64) NOT NULL COMMENT '显示名称',
     `role_code` VARCHAR(32) NOT NULL COMMENT 'SUPER_ADMIN, PARTNER（后台仅两种身份：超级管理员与代理商）',
     `status` VARCHAR(20) NOT NULL DEFAULT 'ACTIVE' COMMENT 'ACTIVE, DISABLED',
+    `must_change_password` TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否强制下次登录改密：1=必须改密才能进系统',
     `last_login_at` DATETIME DEFAULT NULL COMMENT '最后登录时间',
     `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='管理后台多角色账号表';
+
+-- 在线补丁：给历史部署的 pdk_admin_user 加上 must_change_password 列（IF NOT EXISTS 仅 MySQL 8.0.29+ 支持）
+ALTER TABLE `pdk_admin_user` ADD COLUMN IF NOT EXISTS `must_change_password` TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否强制下次登录改密';
 
 -- 初始化套餐数据
 -- INSERT INTO `pdk_package_template` (`id`, `name`, `price`, `duration_days`, `account_count_x`, `calls_per_account_y`, `description`) VALUES
@@ -525,8 +529,9 @@ CREATE TABLE IF NOT EXISTS `pdk_live_stream_session` (
 -- ON DUPLICATE KEY UPDATE `name` = VALUES(`name`);
 
 -- 唯一平台超级管理员。旧演示管理角色停用，避免继续产生混乱权限。
-INSERT INTO `pdk_admin_user` (`username`, `password_hash`, `display_name`, `role_code`, `status`) VALUES
-('13454118762', '3fe7dd4057e685865075f0c208ccebb407485dd81db2d2b8e8aed31f26feb8c1', '平台超级管理员', 'SUPER_ADMIN', 'ACTIVE')
+-- 默认 must_change_password=1，部署后首次登录会被强制改密（自动生成的初始密码不能让用户长期使用）。
+INSERT INTO `pdk_admin_user` (`username`, `password_hash`, `display_name`, `role_code`, `status`, `must_change_password`) VALUES
+('13454118762', '3fe7dd4057e685865075f0c208ccebb407485dd81db2d2b8e8aed31f26feb8c1', '平台超级管理员', 'SUPER_ADMIN', 'ACTIVE', 1)
 ON DUPLICATE KEY UPDATE `display_name` = VALUES(`display_name`), `role_code` = 'SUPER_ADMIN', `status` = 'ACTIVE';
 
 UPDATE `pdk_admin_user` SET `status` = 'DISABLED'

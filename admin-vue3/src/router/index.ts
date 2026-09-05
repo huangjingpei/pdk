@@ -6,6 +6,7 @@ import CardGenerator from '../views/card/CardGenerator.vue';
 import TokenPoolManager from '../views/token/TokenPoolManager.vue';
 import TestingWorkbench from '../views/testing/TestingWorkbench.vue';
 import Login from '../views/auth/Login.vue';
+import ChangePassword from '../views/auth/ChangePassword.vue';
 import UserManager from '../views/user/UserManager.vue';
 import SystemConfig from '../views/settings/SystemConfig.vue';
 import PackageManager from '../views/package/PackageManager.vue';
@@ -15,7 +16,7 @@ import LoginLog from '../views/log/LoginLog.vue';
 import AuditLog from '../views/log/AuditLog.vue';
 import DeviceLicenseManager from '../views/license/DeviceLicenseManager.vue';
 import ClientUpdateManager from '../views/update/ClientUpdateManager.vue';
-import { hasPermission, isLoggedIn } from '../auth';
+import { hasPermission, isLoggedIn, authState } from '../auth';
 
 const router = createRouter({
   history: createWebHistory(),
@@ -25,6 +26,13 @@ const router = createRouter({
       name: 'Login',
       component: Login,
       meta: { title: '管理员登录', public: true },
+    },
+    {
+      // bare = 不带侧边栏布局渲染（App.vue 对 bare 路由只渲染 router-view）
+      path: '/change-password',
+      name: 'ChangePassword',
+      component: ChangePassword,
+      meta: { title: '修改登录密码', bare: true },
     },
     {
       path: '/',
@@ -130,8 +138,15 @@ const router = createRouter({
 });
 
 router.beforeEach((to) => {
+  // 首次登录 / 密码被重置：未改密前锁死在改密页，其他任何页面都不放行
+  if (isLoggedIn.value && authState.session?.mustChangePassword && to.path !== '/change-password') {
+    return '/change-password';
+  }
   if (to.meta.public) {
-    return isLoggedIn.value && to.path === '/login' ? '/dashboard' : true;
+    if (isLoggedIn.value) {
+      return authState.session?.mustChangePassword ? '/change-password' : '/dashboard';
+    }
+    return true;
   }
   if (!isLoggedIn.value) {
     return { path: '/login', query: { redirect: to.fullPath } };
