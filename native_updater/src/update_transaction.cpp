@@ -48,14 +48,35 @@ int run_update(const UpdateJob& job) {
     std::error_code ignored;
     std::filesystem::remove(job.health_file, ignored);
 
+    // 全新安装：目标目录尚不存在（首次部署 / 换目录安装）。此时没有旧版本可备份，
+    // 也没有可回滚的目标，因此跳过备份与回滚，直接激活暂存目录。
+    const bool fresh_install = !std::filesystem::exists(job.install_root);
+
     bool old_moved = false;
     bool new_installed = false;
+
+    // 失败收尾：把已激活的新版本隔离到 failed，非全新安装时再恢复旧版本。
+    auto rollback = [&]() {
+        rename_checked(job.install_root, failed, "cannot quarantine failed new install");
+        new_installed = false;
+        remove_tree(failed);
+        if (!fresh_install) {
+            rename_checked(backup, job.install_root, "cannot restore previous install");
+            old_moved = false;
+        }
+    };
+
     try {
         std::filesystem::create_directories(stage);
         validate_and_extract(job, stage);
-        rename_checked(job.install_root, backup, "cannot move current install to backup");
-        old_moved = true;
-        rename_checked(stage, job.install_root, "cannot activate staged install");
+        if (fresh_install) {
+            std::filesystem::create_directories(parent);
+            rename_checked(stage, job.install_root, "cannot activate fresh install");
+        } else {
+            rename_checked(job.install_root, backup, "cannot move current install to backup");
+            old_moved = true;
+            rename_checked(stage, job.install_root, "cannot activate staged install");
+        }
         new_installed = true;
 
         if (job.require_health) {
@@ -70,18 +91,16 @@ int run_update(const UpdateJob& job) {
                 return 0;
             }
             terminate_process(process);
-            rename_checked(job.install_root, failed, "cannot quarantine failed new install");
-            new_installed = false;
-            rename_checked(backup, job.install_root, "cannot restore previous install");
-            old_moved = false;
-            if (job.relaunch_on_rollback) {
+            rollback();
+            if (!fresh_install && job.relaunch_on_rollback) {
                 auto old_process = launch_client(job.install_root, job.entry_point, nullptr, nullptr);
                 if (old_process.hThread) CloseHandle(old_process.hThread);
                 if (old_process.hProcess) CloseHandle(old_process.hProcess);
             }
-            remove_tree(failed);
             report_event(job, "INSTALL_FAILED", "HEALTH_CHECK_FAILED");
-            throw UpdateError("new client failed health check; previous version restored", 70);
+            throw UpdateError(fresh_install
+                ? "new client failed health check; fresh install rolled back"
+                : "new client failed health check; previous version restored", 70);
         } else {
             // 非强制健康检查：给客户端 3 秒启动窗口，若立即退出才当作失败并回滚。
             auto process = launch_client(job.install_root, job.entry_point,
@@ -91,18 +110,16 @@ int run_update(const UpdateJob& job) {
                 DWORD code = 0;
                 GetExitCodeProcess(process.hProcess, &code);
                 terminate_process(process);
-                rename_checked(job.install_root, failed, "cannot quarantine failed new install");
-                new_installed = false;
-                rename_checked(backup, job.install_root, "cannot restore previous install");
-                old_moved = false;
-                if (job.relaunch_on_rollback) {
+                rollback();
+                if (!fresh_install && job.relaunch_on_rollback) {
                     auto old_process = launch_client(job.install_root, job.entry_point, nullptr, nullptr);
                     if (old_process.hThread) CloseHandle(old_process.hThread);
                     if (old_process.hProcess) CloseHandle(old_process.hProcess);
                 }
-                remove_tree(failed);
                 report_event(job, "INSTALL_FAILED", "CLIENT_EXITED_IMMEDIATELY");
-                throw UpdateError("client exited immediately after launch; previous version restored", 70);
+                throw UpdateError(fresh_install
+                    ? "client exited immediately after launch; fresh install rolled back"
+                    : "client exited immediately after launch; previous version restored", 70);
             }
             if (process.hThread) CloseHandle(process.hThread);
             if (process.hProcess) CloseHandle(process.hProcess);
@@ -124,6 +141,9 @@ int run_update(const UpdateJob& job) {
             } catch (...) {
                 // 保留 backup/failed 目录供人工恢复，不覆盖原始异常。
             }
+        } else if (fresh_install && new_installed) {
+            // 全新安装在健康检查之前失败：清掉半成品，避免留下不可用的空壳目录。
+            remove_tree(job.install_root);
         }
         throw;
     }
