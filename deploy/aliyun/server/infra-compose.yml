@@ -1,0 +1,37 @@
+# ============================================================================
+# PDK 基础设施：仅 Redis（MySQL 复用服务器已有实例）
+#
+# 为什么不在这里起 MySQL：
+#   本服务器 3306 已被本机 MySQL 8.0.46 占用，容器再绑 3306 会直接启动失败。
+#   建库 / 建账号 / 导表结构由 02-init-infra.sh 直连本机 MySQL 完成。
+#
+# 变量来源：/opt/pdk/.env（docker compose --env-file 自动注入）
+# 数据目录：/opt/pdk/data/redis
+# 安全：端口只绑 127.0.0.1，公网无法直连
+# ============================================================================
+services:
+  redis:
+    image: redis:7.4-alpine
+    container_name: pdk-redis
+    restart: unless-stopped
+    stop_grace_period: 20s
+    environment:
+      REDIS_PASSWORD: ${SPRING_DATA_REDIS_PASSWORD}
+      TZ: Asia/Shanghai
+    command:
+      - sh
+      - -c
+      - redis-server --requirepass "$$REDIS_PASSWORD" --appendonly yes --maxmemory 96mb --maxmemory-policy allkeys-lru
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - /opt/pdk/data/redis:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a $$REDIS_PASSWORD ping | grep -q PONG"]
+      interval: 10s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    # 小内存机器：给容器设硬上限，避免异常时吃光内存拖垮同机的 MySQL / Nginx
+    mem_limit: 128m
+    memswap_limit: 256m

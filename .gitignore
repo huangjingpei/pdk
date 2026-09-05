@@ -26,3 +26,6 @@ vite.config.ts.timestamp-*.mjs
 # 本机升级签名密钥（含私钥，绝不入库）。
 # 模板已入库：backend-springboot/config/client-update-keys.example.yml
 backend-springboot/config/client-update-keys.yml
+
+# 阿里云部署配置（含管理员初始密码，绝不入库）。模板：deploy/aliyun/env.example.sh
+deploy/aliyun/env.sh
