@@ -94,7 +94,10 @@
         </el-menu-item>
 
         <el-menu-item v-if="hasPermission('system:config')" index="/settings">
-          <el-icon><Setting /></el-icon>
+          <!-- 用 Tools 而非 Setting：Chromium 对 Setting 路径在选中行(el-menu-item.is-active)
+               的绘制上下文里光栅化失败（18px 缩放 + 大量圆弧路径），图标会整体消失；
+               Tools 外观几乎相同且实测渲染正常。详见 2026-09-05 排查记录。 -->
+          <el-icon><Tools /></el-icon>
           <span>系统设置</span>
         </el-menu-item>
 
