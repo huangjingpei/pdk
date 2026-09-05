@@ -214,7 +214,11 @@ bash deploy.sh --build
 bash deploy.sh --deploy-only --migrate
 ```
 
-和情况 A 一样，但上线时额外执行 `schema-mysql.sql` 增量导入（脚本里写的是 `ADD COLUMN IF NOT EXISTS` / `CREATE TABLE IF NOT EXISTS`，重复执行安全）。
+和情况 A 一样，但上线时额外执行 `schema-mysql.sql` 增量导入。schema 全文按幂等写法维护（`CREATE TABLE IF NOT EXISTS` + `information_schema` 判断的加列补丁），重复执行安全。
+
+> ⚠️ **MySQL 不支持 `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`**（那是 MariaDB 语法，MySQL 8.0 上报 1064）。
+> 给既有表加列的幂等补丁必须用 information_schema.COLUMNS 计数 + PREPARE/EXECUTE 写法，
+> 参考 `schema-mysql.sql` 里 `pdk_admin_user.must_change_password` 的补丁段。
 
 ### 情况 C：改完只想先在服务器上编译试试，不上线
 
@@ -234,9 +238,43 @@ bash deploy.sh --rollback --list     # 看有哪些可回滚版本
 ### 注意事项
 
 1. **后端改动上线后即生效**（systemd 会自动重启服务）；前端是静态文件替换，浏览器强刷（Ctrl+F5）即可看到新版本。
-2. schema 补丁**必须幂等**（`IF NOT EXISTS`），且优先新建表，避免给既有表加列导致 MyBatis-Plus 查询报 `Unknown column`。
+2. schema 补丁**必须幂等**：建表用 `CREATE TABLE IF NOT EXISTS`；给既有表加列用 information_schema 判断 + PREPARE/EXECUTE（MySQL 不支持 `ADD COLUMN IF NOT EXISTS`）。优先新建表，避免给既有表加列导致 MyBatis-Plus 查询报 `Unknown column`。
 3. 小内存服务器编译偶发 OOM：加 `--skip-typecheck` 跳过前端 vue-tsc（本机已校验过类型的话安全）。
 4. 改了 `application.yml` 里的敏感配置时，确认没有把开发密码带进 commit。
+
+### 部署机制原理（代码是怎么到服务器上的）
+
+`deploy.sh --build` 传的是**源码包**，编译在服务器上完成，本机只需要 bash + ssh + tar：
+
+```
+本机                                服务器 121.43.150.109
+──────                              ─────────────────────
+tar 打包 backend-springboot /
+        admin-vue3 / scripts
+(排除 node_modules/target/.git/
+ 私钥/日志)
+        │ scp
+        ▼
+                            /tmp/pdk-src.tar.gz → 解压到 /opt/pdk/src（覆盖旧源码）
+                            03-build.sh（服务器编译）:
+                              ├─ mvn package  → app.jar (53M)
+                              └─ npm ci + vue-tsc + vite build → dist
+                            产物 → /opt/pdk/releases/<时间戳>/   ← 版本目录，保留最近 5 个
+        │
+        ▼  --deploy-only（04-deploy.sh，原子切换）
+                            ├─ [--migrate] 导入 schema-mysql.sql（幂等）
+                            ├─ 新 jar → /opt/pdk/app/app.jar
+                            ├─ 新 dist → /opt/pdk/www/admin
+                            ├─ systemctl restart pdk-backend
+                            └─ 健康检查 /actuator/health 最多 120s
+                               └─ 失败 → 自动回滚旧版本
+```
+
+关键点：
+
+- **版本目录 + 健康检查**是安全网：任何一次上线失败都会自动退回旧版本；手动回退用 `--rollback`
+- 数据库、Redis、Nginx 证书、systemd 配置都是首次部署一次性建好的，增量更新完全不碰
+- 编译产物在服务器上生成，本机环境（Windows）无需 JDK/Maven
 
 ## 常见问题
 
