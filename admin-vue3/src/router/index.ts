@@ -16,6 +16,7 @@ import LoginLog from '../views/log/LoginLog.vue';
 import AuditLog from '../views/log/AuditLog.vue';
 import DeviceLicenseManager from '../views/license/DeviceLicenseManager.vue';
 import ClientUpdateManager from '../views/update/ClientUpdateManager.vue';
+import LiveCenter from '../views/live/LiveCenter.vue';
 import { hasPermission, isLoggedIn, authState } from '../auth';
 
 const router = createRouter({
@@ -103,6 +104,12 @@ const router = createRouter({
       name: 'ClientUpdateManager',
       component: ClientUpdateManager,
       meta: { title: '客户端升级', permission: 'client-update:view' },
+    },
+    {
+      path: '/live/center',
+      name: 'LiveCenter',
+      component: LiveCenter,
+      meta: { title: '直播中心', permission: 'live:overview:view' },
     },
     {
       path: '/business/manager',

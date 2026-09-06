@@ -74,12 +74,14 @@ services:
     build: ./mediamtx
     restart: unless-stopped
     environment:
-      MTX_AUTHHTTPADDRESS: http://backend:8080/api/v1/internal/mediamtx/auth?serviceToken=${PDK_MEDIAMTX_INTERNAL_SERVICE_TOKEN:?set PDK_MEDIAMTX_INTERNAL_SERVICE_TOKEN}
+      MTX_AUTHHTTPADDRESS: http://backend:8080/api/v1/internal/mediamtx/auth?serviceToken=${PDK_MEDIAMTX_INTERNAL_SERVICE_TOKEN:?set PDK_MEDIAMTX_INTERNAL_SERVICE_TOKEN}&nodeCode=mediamtx-docker-1
       PDK_MEDIAMTX_EVENT_BASE_URL: http://backend:8080/api/v1/internal/mediamtx/events
       PDK_MEDIAMTX_INTERNAL_SERVICE_TOKEN: ${PDK_MEDIAMTX_INTERNAL_SERVICE_TOKEN:?set PDK_MEDIAMTX_INTERNAL_SERVICE_TOKEN}
+      PDK_MEDIAMTX_NODE_CODE: mediamtx-docker-1
       TZ: Asia/Shanghai
     ports:
       - "${PDK_MEDIAMTX_RTMP_PORT:-1935}:1935"
+      - "${PDK_MEDIAMTX_HLS_PORT:-8888}:8888"
     depends_on:
       backend:
         condition: service_healthy

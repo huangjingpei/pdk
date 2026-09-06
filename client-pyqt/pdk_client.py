@@ -309,6 +309,17 @@ class PdkApiClient:
         """登录前读取当前构建 appId 的名称、描述、注册策略与可用状态。"""
         return self.request("GET", f"/api/v1/client/business/by-app/{self.app_id}")
 
+    def live_media_info(self) -> dict[str, Any]:
+        """登录前获取 ZHIBO_LIVE 公网媒体入口；完整推流 URL 仍由登录后票据接口签发。"""
+        if self.app_id != 3:
+            raise ValueError("直播媒体配置仅适用于 appId=3")
+        body = self.business_info()
+        data = body.get("data", body)
+        live = data.get("liveMedia") if isinstance(data, dict) else None
+        if not isinstance(live, dict) or not live.get("enabled"):
+            raise RuntimeError(str((live or {}).get("status") or "当前没有可用流媒体节点"))
+        return live
+
     def check_update(
         self,
         current_version: str,

@@ -5,6 +5,7 @@ import com.pdk.business.zhibo.live.entity.LiveStreamSession;
 import com.pdk.common.exception.BusinessException;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
+import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
 
@@ -21,6 +22,9 @@ public class MediaMtxControlClient {
                     .uri("/v3/" + group + "/kick/{id}", session.getMediamtxConnectionId())
                     .retrieve()
                     .toBodilessEntity();
+        } catch (HttpClientErrorException.NotFound ignored) {
+            // The connection has already gone away.  Treat stop as idempotent so
+            // LiveStreamSessionService can persist ENDED and unblock the next ticket.
         } catch (RestClientException e) {
             throw new BusinessException(50371, "MediaMTX 踢流失败，请稍后重试");
         }

@@ -15,8 +15,11 @@ public class MediaMtxAuthController {
 
     @PostMapping("/auth")
     public ResponseEntity<Void> auth(@RequestParam(required = false) String serviceToken,
+                                     @RequestParam(required = false) String nodeCode,
                                      @RequestBody(required = false) MediaMtxAuthRequest request) {
-        MediaMtxAuthResult result = authService.authorize(serviceToken, request);
+        MediaMtxAuthResult result = nodeCode == null || nodeCode.isBlank()
+                ? authService.authorize(serviceToken, request)
+                : authService.authorize(serviceToken, nodeCode, request);
         return ResponseEntity.status(result.status())
                 .header("X-PDK-MediaMTX-Reason", result.reason())
                 .build();

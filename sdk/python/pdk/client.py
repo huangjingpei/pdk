@@ -391,6 +391,17 @@ class PdkApiClient:
         """登录前读取当前 appId 的公开业务元数据和注册策略。"""
         return self.request("GET", f"/api/v1/client/business/by-app/{self.app_id}")
 
+    def live_media_info(self):
+        """登录前读取 appId=3 的公开媒体入口，不能替代登录后的推流票据。"""
+        if self.app_id != 3:
+            raise ValueError("直播媒体配置仅适用于 appId=3")
+        body = self.business_info()
+        data = body.get("data", body)
+        live = data.get("liveMedia") if isinstance(data, dict) else None
+        if not isinstance(live, dict) or not live.get("enabled"):
+            raise RuntimeError(str((live or {}).get("status") or "当前没有可用流媒体节点"))
+        return live
+
     def check_update(self, current_version=None, channel="STABLE", protocol_version=1,
                      updater_version="1.0.0", platform_name=None, arch=None):
         """登录前检查客户端升级；响应中的 targetVersion 才是本次实际安装目标。"""

@@ -1,0 +1,46 @@
+<svg viewBox="0 0 680 660" width="100%" role="img" xmlns="http://www.w3.org/2000/svg">
+  <title>MediaMTX 推流三方调用时序</title>
+  <desc>客户端向后端签发推流票据，凭票据向 MediaMTX 推流，MediaMTX 回调后端完成鉴权与开播扣次</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+  </defs>
+
+  <g class="c-blue"><rect x="50" y="30" width="140" height="44" rx="10" stroke-width="0.5"/><text class="th" x="120" y="52" text-anchor="middle" dominant-baseline="central">客户端·直播伴侣</text></g>
+  <g class="c-teal"><rect x="270" y="30" width="140" height="44" rx="10" stroke-width="0.5"/><text class="th" x="340" y="52" text-anchor="middle" dominant-baseline="central">后端 Spring Boot</text></g>
+  <g class="c-amber"><rect x="490" y="30" width="140" height="44" rx="10" stroke-width="0.5"/><text class="th" x="560" y="52" text-anchor="middle" dominant-baseline="central">MediaMTX :1935</text></g>
+
+  <line x1="120" y1="74" x2="120" y2="610" stroke="#B4B2A9" stroke-width="0.5" stroke-dasharray="3 4"/>
+  <line x1="340" y1="74" x2="340" y2="610" stroke="#B4B2A9" stroke-width="0.5" stroke-dasharray="3 4"/>
+  <line x1="560" y1="74" x2="560" y2="610" stroke="#B4B2A9" stroke-width="0.5" stroke-dasharray="3 4"/>
+
+  <line x1="120" y1="130" x2="340" y2="130" stroke="#185FA5" stroke-width="1.5" marker-end="url(#arrow)" fill="none"/>
+  <text class="ts" x="230" y="118" text-anchor="middle" fill="#0C447C">① POST /publish-tickets 签发票据</text>
+
+  <line x1="340" y1="182" x2="120" y2="182" stroke="#185FA5" stroke-width="1.5" marker-end="url(#arrow)" fill="none"/>
+  <text class="ts" x="230" y="170" text-anchor="middle" fill="#0C447C">publishUrl + ticket（TTL 90s）</text>
+
+  <line x1="120" y1="234" x2="560" y2="234" stroke="#854F0B" stroke-width="1.5" marker-end="url(#arrow)" fill="none"/>
+  <text class="ts" x="340" y="222" text-anchor="middle" fill="#633806">② RTMP 推流 rtmp://…/zhibo-live/ls_xxx?token=ticket</text>
+
+  <line x1="560" y1="286" x2="340" y2="286" stroke="#854F0B" stroke-width="1.5" marker-end="url(#arrow)" fill="none"/>
+  <text class="ts" x="450" y="274" text-anchor="middle" fill="#633806">③ POST /internal/mediamtx/auth 鉴权钩子</text>
+
+  <line x1="340" y1="338" x2="560" y2="338" stroke="#854F0B" stroke-width="1.5" marker-end="url(#arrow)" fill="none"/>
+  <text class="ts" x="450" y="326" text-anchor="middle" fill="#633806">2xx 放行 / 4xx 拒绝 + X-PDK-Reason</text>
+
+  <line x1="560" y1="396" x2="340" y2="396" stroke="#3B6D11" stroke-width="1.5" marker-end="url(#arrow)" fill="none"/>
+  <text class="ts" x="450" y="384" text-anchor="middle" fill="#27500A">events/available：AUTHORIZED→LIVE·扣次数</text>
+
+  <line x1="560" y1="448" x2="340" y2="448" stroke="#3B6D11" stroke-width="1.5" marker-end="url(#arrow)" fill="none"/>
+  <text class="ts" x="450" y="436" text-anchor="middle" fill="#27500A">events/unavailable：→ENDED·算时长</text>
+
+  <line x1="120" y1="510" x2="340" y2="510" stroke="#185FA5" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#arrow)" fill="none"/>
+  <text class="ts" x="230" y="498" text-anchor="middle" fill="#0C447C">可选：POST /streams/{no}/stop</text>
+
+  <line x1="340" y1="562" x2="560" y2="562" stroke="#185FA5" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#arrow)" fill="none"/>
+  <text class="ts" x="450" y="550" text-anchor="middle" fill="#0C447C">控制 API kick 踢断 RTMP 连接</text>
+
+  <text class="ts" x="340" y="636" text-anchor="middle">票据一次性：签发→鉴权（ISSUED→AUTHORIZED）→开播（→LIVE）→断流（→ENDED）</text>
+</svg>

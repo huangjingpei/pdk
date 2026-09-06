@@ -11,25 +11,34 @@
 3. MediaMTX 在 RTMP publish 前调用后端 HTTP auth。
 4. 无票据、伪造票据、过期票据、错误业务、错误 path 和票据重放均返回非 2xx。
 5. 首次有效鉴权返回裸 HTTP 204；MediaMTX 才允许推流。
-6. `runOnAvailable/runOnUnavailable` 驱动 `LIVE/ENDED` 状态，并在首次 LIVE 时扣一次。
+6. `runOnReady/runOnNotReady`（v1.11）或 `runOnAvailable/runOnUnavailable`（新版）驱动 `LIVE/ENDED`，并在首次 LIVE 时扣一次。
 7. 客户端和管理员可查看会话、停止/踢掉在线连接。
+8. 数据库管理 MediaMTX/SRS 节点；登录前发现公开地址，开播时按健康、容量和权重选择节点。
+9. read/unread 或 SRS on_play/on_stop 独立记录拉流连接，节点指标定时采集并在后台展示。
 
 ## 2. 代码布局
 
 ```text
 backend-springboot/src/main/java/com/pdk/business/zhibo/live/
 ├─ config/       MediaMtxProperties
-├─ controller/   客户端、管理员、MediaMTX auth/event 接口
-├─ dto/          票据申请与 MediaMTX auth payload
-├─ entity/       LiveStreamSession
-├─ mapper/       LiveStreamSessionMapper
-├─ service/      票据、鉴权、事件、Control API
+├─ controller/   客户端、管理员、MediaMTX auth/event、SRS callback
+├─ dto/          票据、节点配置与媒体服务器 payload
+├─ entity/       推流、拉流、节点、节点快照
+├─ mapper/       对应 MyBatis-Plus Mapper
+├─ media/        MediaMTX/SRS Provider SPI
+├─ service/      票据、鉴权、事件、节点调度、采集与 Control API
 └─ vo/           客户端安全响应
 
 deploy/mediamtx/
 ├─ Dockerfile
 ├─ mediamtx.yml
 └─ event-hook.sh
+
+deploy/srs/
+├─ srs.conf.example
+└─ README.md
+
+mtx/mediamtx/    用户本机 Windows v1.11.3 可运行配置
 
 client-pyqt/
 ├─ pdk_client.py
@@ -77,20 +86,29 @@ POST /api/v1/client/zhibo-live/streams/{streamSessionNo}/stop
 POST /api/v1/internal/mediamtx/auth?serviceToken=...
 POST /api/v1/internal/mediamtx/events/available
 POST /api/v1/internal/mediamtx/events/unavailable
+POST /api/v1/internal/mediamtx/events/read
+POST /api/v1/internal/mediamtx/events/unread
+POST /api/v1/internal/srs/callback
 ```
 
 auth 接口严格返回 HTTP 语义，不套 `CommonResult`：允许为 204，拒绝为 401/403/409/503。
-事件接口使用表单字段 `serviceToken/path/sourceId`；Hook 明确不转发 `MTX_QUERY`。
+事件接口携带 `serviceToken/nodeCode/path` 和对应 source/reader 字段；Hook 明确不转发 `MTX_QUERY`。
 
 ## 5. 管理接口
 
 ```text
 GET  /api/v1/admin/zhibo-live/streams?status=LIVE
 POST /api/v1/admin/zhibo-live/streams/{streamSessionNo}/kick
+GET  /api/v1/admin/zhibo-live/overview
+GET  /api/v1/admin/zhibo-live/play-sessions
+GET  /api/v1/admin/zhibo-live/media-nodes
+POST /api/v1/admin/zhibo-live/media-nodes
+PUT  /api/v1/admin/zhibo-live/media-nodes/{nodeId}
+PUT  /api/v1/admin/zhibo-live/media-nodes/{nodeId}/status
+POST /api/v1/admin/zhibo-live/media-nodes/{nodeId}/test
 ```
 
-权限分别是 `LIVE_STREAM_VIEW`、`LIVE_STREAM_KICK`。SUPER_ADMIN 拥有两项；PARTNER 也具有操作权限，
-但仍受既有 `AdminBusinessScope` 的业务范围限制。
+SUPER_ADMIN 可管理节点并查看全局指标；ZHIBO_LIVE PARTNER 只能查看和停止自己名下卡密许可证产生的推流、拉流和概览。其他业务的 PARTNER 登录响应不下发直播权限。
 
 ## 6. 配置
 
@@ -98,13 +116,15 @@ POST /api/v1/admin/zhibo-live/streams/{streamSessionNo}/kick
 | --- | --- | --- |
 | `PDK_ENABLED_BIZ_CODES` | 是 | 包含 `ZHIBO` 或 `ZHIBO_LIVE` |
 | `PDK_MEDIAMTX_ENABLED` | 是 | `true` |
-| `PDK_MEDIAMTX_PUBLIC_RTMP_BASE_URL` | 是 | `rtmp://live.example.com:1935` |
-| `PDK_MEDIAMTX_CONTROL_BASE_URL` | 是 | 私网 `http://mediamtx:9997` |
-| `PDK_MEDIAMTX_NODE_CODE` | 是 | 当前单节点标识 |
+| `PDK_MEDIAMTX_PUBLIC_RTMP_BASE_URL` | 是 | 旧单节点兼容/首次引导地址；最终以节点表为准 |
+| `PDK_MEDIAMTX_CONTROL_BASE_URL` | 是 | 旧单节点兼容地址；最终以节点表为准 |
+| `PDK_MEDIAMTX_NODE_CODE` | 是 | 当前 MediaMTX 实例必须与节点表 nodeCode 一致 |
 | `PDK_MEDIAMTX_INTERNAL_SERVICE_TOKEN` | 是 | 至少 32 字节随机秘密 |
 | `PDK_MEDIAMTX_TICKET_TTL_SECONDS` | 否 | 默认 90，代码限制为 30～300 秒 |
 
-另外必须在管理后台把 `ZHIBO_LIVE` 从 `DISABLED` 切换成 `ACTIVE`。部署 allowlist 和数据库开关必须同时满足。
+流媒体公开地址、内部 API、Metrics、协议、权重和容量以 `pdk_media_server_node`/直播中心配置为准。内部服务令牌仍由安全配置持有，不保存明文到数据库。必须先使至少一个节点健康并置为 ACTIVE，才能在管理后台启用 ZHIBO_LIVE；部署 allowlist 和数据库开关必须同时满足。
+
+Docker 使用 `nodeCode=mediamtx-docker-1`，首次部署需在直播中心创建对应节点，内部 API 填 `http://mediamtx:9997`、Metrics 填 `http://mediamtx:9998/metrics`。本机配置使用 `mediamtx-local`，schema 已提供该开发节点。
 
 ## 7. 本地运行
 

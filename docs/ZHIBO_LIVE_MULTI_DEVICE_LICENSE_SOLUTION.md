@@ -817,7 +817,7 @@ DEVICE_UNBOUND
 ### 20.1 自动化
 
 ```text
-后端 Maven：68 tests, 0 failures, 0 errors, 0 skipped
+后端 Maven：81 tests, 0 failures, 0 errors, 0 skipped（含后续媒体节点/Hook 回归）
 管理后台：vue-tsc + vite build 通过
 Python：client-pyqt 与 sdk/python/pdk compileall 通过
 ```

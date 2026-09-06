@@ -7,6 +7,8 @@ export interface AdminSession {
   username: string;
   displayName: string;
   role: string;
+  bizId?: number;
+  appId?: number;
   permissions: string[];
   invitationCode?: string;
   /** 为 true 时被强制进入改密页，改完才能进系统 */

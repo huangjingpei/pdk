@@ -112,7 +112,7 @@ pdk:
       template-code: ${ALIYUN_SMS_TEMPLATE_CODE:}
   zhibo-live:
     mediamtx:
-      enabled: ${PDK_MEDIAMTX_ENABLED:false}
+      enabled: ${PDK_MEDIAMTX_ENABLED:true}
       public-rtmp-base-url: ${PDK_MEDIAMTX_PUBLIC_RTMP_BASE_URL:rtmp://localhost:1935}
       control-base-url: ${PDK_MEDIAMTX_CONTROL_BASE_URL:http://localhost:9997}
       node-code: ${PDK_MEDIAMTX_NODE_CODE:mediamtx-local}

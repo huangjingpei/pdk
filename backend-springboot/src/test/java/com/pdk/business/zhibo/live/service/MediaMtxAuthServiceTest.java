@@ -66,6 +66,19 @@ class MediaMtxAuthServiceTest {
     }
 
     @Test
+    void mediaMtx111QueryTokenIsAcceptedForCompatibility() {
+        LiveStreamSession session = session("ISSUED", null);
+        when(sessionMapper.selectOne(any())).thenReturn(session);
+        when(businessService.requireAvailableByAppId(3)).thenReturn(LiveStreamSessionServiceTest.context());
+        when(userMapper.selectById(31L)).thenReturn(LiveStreamSessionServiceTest.entitledUser());
+        when(sessionMapper.update(any(), any())).thenReturn(1);
+        MediaMtxAuthRequest request = new MediaMtxAuthRequest("", "", null, "127.0.0.1", "publish",
+                session.getPath(), "rtmp", "CONN-QUERY", "token=" + PUBLISH_TICKET, "ffmpeg");
+
+        assertEquals(HttpStatus.NO_CONTENT, service.authorize(SERVICE_TOKEN, request).status());
+    }
+
+    @Test
     void validTicketFromLoggedInUserAllowsPublishWithHttp204() {
         LiveStreamSession session = session("ISSUED", null);
         User user = LiveStreamSessionServiceTest.entitledUser();

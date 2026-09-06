@@ -9,6 +9,7 @@ import com.pdk.domain.dto.AdminChangePasswordDTO;
 import com.pdk.domain.dto.AdminLoginDTO;
 import com.pdk.domain.entity.AdminUser;
 import com.pdk.mapper.AdminUserMapper;
+import com.pdk.mapper.BusinessMapper;
 import com.pdk.security.AdminPrincipal;
 import com.pdk.service.LoginLogService;
 import com.pdk.security.RolePermissions;
@@ -22,13 +23,16 @@ import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.Map;
+import java.util.Set;
 
 @RestController
 @RequestMapping("/api/v1/admin/auth")
 @RequiredArgsConstructor
 public class AdminAuthController {
     private final AdminUserMapper adminUserMapper;
+    private final BusinessMapper businessMapper;
     private final LoginLogService loginLogService;
     @Qualifier("adminStpLogic")
     private final StpLogic adminStpLogic;
@@ -127,6 +131,16 @@ public class AdminAuthController {
 
     private Map<String, Object> sessionPayload(AdminPrincipal admin) {
         Map<String, Object> data = new LinkedHashMap<>();
+        Long appId = null;
+        if (admin.bizId() != null) {
+            var business = businessMapper.selectById(admin.bizId());
+            appId = business == null ? null : business.getAppId();
+        }
+        Set<String> permissions = new LinkedHashSet<>(RolePermissions.forRole(admin.roleCode()));
+        // PARTNER 的基础角色权限跨业务复用，直播权限只对其所属 ZHIBO_LIVE 业务下发。
+        if (!admin.isSuperAdmin() && !Long.valueOf(3).equals(appId)) {
+            permissions.removeIf(permission -> permission.startsWith("live:"));
+        }
         data.put("tokenName", adminStpLogic.getTokenName());
         data.put("tokenValue", adminStpLogic.getTokenValue());
         data.put("id", admin.id());
@@ -134,7 +148,8 @@ public class AdminAuthController {
         data.put("displayName", admin.displayName());
         data.put("role", admin.roleCode());
         data.put("bizId", admin.bizId());
-        data.put("permissions", RolePermissions.forRole(admin.roleCode()));
+        data.put("appId", appId);
+        data.put("permissions", permissions);
         data.put("mustChangePassword", admin.requiresPasswordChange());
         return data;
     }

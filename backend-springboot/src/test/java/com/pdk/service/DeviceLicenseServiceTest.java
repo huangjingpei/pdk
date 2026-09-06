@@ -94,7 +94,7 @@ class DeviceLicenseServiceTest {
     }
 
     @Test
-    void firstBindingStartsIndependentExpiryAndPerSeatCalls() {
+    void firstBindingStartsIndependentExpiryAndUnlimitedTimeBasedCalls() {
         when(deviceMapper.selectOne(any())).thenReturn(null);
         CardKey card = card(300L, 10L, "ASSIGNED");
         DeviceLicense license = new DeviceLicense();
@@ -114,7 +114,7 @@ class DeviceLicenseServiceTest {
         ClientLicenseContext result = service.authenticateAndBind(business(), user(), login("PC-01", "CARD-NEW"));
 
         assertEquals("ACTIVE", result.license().getStatus());
-        assertEquals(25, result.license().getRemainingCalls());
+        assertEquals(DeviceLicenseService.UNLIMITED_CALLS, result.license().getRemainingCalls());
         assertEquals(51L, result.license().getUserDeviceId());
         assertTrue(result.license().getExpireAt().isAfter(before.plusHours(719)));
         assertEquals("ACTIVATED", card.getStatus());

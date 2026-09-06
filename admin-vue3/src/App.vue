@@ -78,6 +78,11 @@
           <span>用户管理</span>
         </el-menu-item>
 
+        <el-menu-item v-if="hasPermission('live:overview:view')" index="/live/center">
+          <el-icon><VideoCamera /></el-icon>
+          <span>直播中心</span>
+        </el-menu-item>
+
         <el-menu-item v-if="hasPermission('dispatch:view')" index="/testing/workbench">
           <el-icon><Aim /></el-icon>
           <span>测试平台</span>

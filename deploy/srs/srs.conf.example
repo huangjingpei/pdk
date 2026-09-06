@@ -1,0 +1,20 @@
+# ZHIBO_LIVE SRS 参考配置。将 PDK_MEDIA_SERVICE_TOKEN 替换为后端
+# pdk.zhibo-live.mediamtx.internal-service-token 的实际值，并在管理后台创建同 nodeCode 的 SRS 节点。
+listen              1935;
+max_connections     1000;
+daemon              off;
+
+http_api {
+    enabled on;
+    listen 1985;
+}
+
+vhost __defaultVhost__ {
+    http_hooks {
+        enabled on;
+        on_publish   http://pdk-backend:8080/api/v1/internal/srs/callback?serviceToken=PDK_MEDIA_SERVICE_TOKEN&nodeCode=srs-local;
+        on_unpublish http://pdk-backend:8080/api/v1/internal/srs/callback?serviceToken=PDK_MEDIA_SERVICE_TOKEN&nodeCode=srs-local;
+        on_play      http://pdk-backend:8080/api/v1/internal/srs/callback?serviceToken=PDK_MEDIA_SERVICE_TOKEN&nodeCode=srs-local;
+        on_stop      http://pdk-backend:8080/api/v1/internal/srs/callback?serviceToken=PDK_MEDIA_SERVICE_TOKEN&nodeCode=srs-local;
+    }
+}

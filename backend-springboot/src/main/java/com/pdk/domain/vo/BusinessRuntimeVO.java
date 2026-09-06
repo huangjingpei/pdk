@@ -1,5 +1,7 @@
 package com.pdk.domain.vo;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
+import com.pdk.business.zhibo.live.vo.LiveMediaPublicVO;
 import lombok.Builder;
 import lombok.Data;
 
@@ -32,6 +34,10 @@ public class BusinessRuntimeVO {
     private Long packageCount;
     private Long resourceCount;
     private Long availableResourceCount;
+    private Long mediaNodeCount;
+    private Long availableMediaNodeCount;
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    private LiveMediaPublicVO liveMedia;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 }

@@ -4,6 +4,8 @@
 > [开发说明](./ZHIBO_LIVE_MEDIAMTX_DEVELOPMENT.md)、[技术说明](./ZHIBO_LIVE_MEDIAMTX_TECHNICAL.md)、
 > [测试说明](./ZHIBO_LIVE_MEDIAMTX_TEST.md)、[完成情况](./ZHIBO_LIVE_MEDIAMTX_IMPLEMENTATION_STATUS.md)。
 > 当前 MVP 使用 RTMP 完成端到端准入；生产公网必须补配证书并切换 RTMPS 后再上线。
+> 多 MediaMTX/SRS 节点、登录前公开媒体入口、推拉流管理、带宽指标和 Dashboard 的已落地方案见
+> [ZHIBO_LIVE 流媒体节点、推拉流与监控管理技术方案](./ZHIBO_LIVE_MEDIA_SERVER_MANAGEMENT_SOLUTION.md)。
 
 ## 1. 结论
 

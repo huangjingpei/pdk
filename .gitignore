@@ -29,3 +29,8 @@ backend-springboot/config/client-update-keys.yml
 
 # 阿里云部署配置（含管理员初始密码，绝不入库）。模板：deploy/aliyun/env.example.sh
 deploy/aliyun/env.sh
+
+# MediaMTX 本地解包的二进制发行目录（31MB exe 不进仓库）
+mtx/
+# 本地素材/截图暂存
+assets/

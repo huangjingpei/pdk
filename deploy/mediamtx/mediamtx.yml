@@ -11,12 +11,15 @@ authHTTPExclude:
 
 api: true
 apiAddress: :9997
+metrics: true
+metricsAddress: :9998
 
-# 当前部署只承担 ZHIBO_LIVE 的 RTMP 推流入口；关闭未使用协议以缩小暴露面。
+# 当前部署承担 ZHIBO_LIVE 的 RTMP 推流与 HLS 拉流；其他协议保持关闭。
 rtsp: false
 rtmp: true
 rtmpAddress: :1935
-hls: false
+hls: true
+hlsAddress: :8888
 webrtc: false
 srt: false
 moq: false
@@ -25,6 +28,8 @@ pathDefaults:
   overridePublisher: false
   runOnAvailable: /usr/local/bin/pdk-mediamtx-event available
   runOnUnavailable: /usr/local/bin/pdk-mediamtx-event unavailable
+  runOnRead: /usr/local/bin/pdk-mediamtx-event read
+  runOnUnread: /usr/local/bin/pdk-mediamtx-event unread
 
 paths:
   "~^zhibo-live/ls_[A-Za-z0-9]{16,64}$": {}

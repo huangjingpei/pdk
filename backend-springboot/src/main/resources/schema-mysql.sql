@@ -485,7 +485,50 @@ CREATE TABLE IF NOT EXISTS `pdk_license_export_stub` (
     INDEX `idx_stub_created` (`created_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='卡密导出存根，服务器留存原文以备追溯';
 
--- 17. ZHIBO_LIVE MediaMTX 推流会话。票据只保存 SHA-256；活动许可证生成列保证单席位单流。
+-- 17. ZHIBO_LIVE 流媒体节点。业务配置在数据库，敏感令牌仍由应用安全配置持有。
+CREATE TABLE IF NOT EXISTS `pdk_media_server_node` (
+    `id` BIGINT AUTO_INCREMENT PRIMARY KEY,
+    `biz_id` BIGINT NOT NULL COMMENT '只能关联 ZHIBO_LIVE 业务',
+    `node_code` VARCHAR(64) NOT NULL COMMENT '部署内稳定节点编号',
+    `node_name` VARCHAR(100) NOT NULL,
+    `provider_type` VARCHAR(20) NOT NULL DEFAULT 'MEDIAMTX' COMMENT 'MEDIAMTX/SRS',
+    `region_code` VARCHAR(32) DEFAULT NULL,
+    `public_publish_base_url` VARCHAR(255) NOT NULL COMMENT '客户端公开推流入口，不含 path/token',
+    `public_hls_base_url` VARCHAR(255) DEFAULT NULL,
+    `public_webrtc_base_url` VARCHAR(255) DEFAULT NULL,
+    `internal_api_base_url` VARCHAR(255) NOT NULL COMMENT '仅后端访问的 Control/HTTP API',
+    `internal_metrics_url` VARCHAR(255) DEFAULT NULL COMMENT '仅后端访问的 Prometheus metrics',
+    `secret_ref` VARCHAR(128) NOT NULL DEFAULT 'application' COMMENT 'Secret 引用，禁止保存明文密钥',
+    `supported_publish_protocols` VARCHAR(128) NOT NULL DEFAULT 'RTMP',
+    `supported_play_protocols` VARCHAR(128) DEFAULT NULL,
+    `weight` INT NOT NULL DEFAULT 100,
+    `max_publishers` INT NOT NULL DEFAULT 100,
+    `max_readers` INT NOT NULL DEFAULT 1000,
+    `status` VARCHAR(20) NOT NULL DEFAULT 'DISABLED' COMMENT 'ACTIVE/DRAINING/DISABLED',
+    `health_status` VARCHAR(20) NOT NULL DEFAULT 'UNKNOWN' COMMENT 'UP/DOWN/DEGRADED/UNKNOWN',
+    `last_health_at` DATETIME DEFAULT NULL,
+    `last_health_error` VARCHAR(255) DEFAULT NULL,
+    `config_revision` BIGINT NOT NULL DEFAULT 1,
+    `version` INT NOT NULL DEFAULT 0,
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY `uk_media_node_biz_code` (`biz_id`, `node_code`),
+    INDEX `idx_media_node_select` (`biz_id`, `status`, `health_status`, `weight`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='ZHIBO_LIVE 流媒体服务器节点';
+
+-- 本地开发默认节点；生产环境由超级管理员修改公网地址后再启用 ZHIBO_LIVE。
+INSERT INTO `pdk_media_server_node`
+(`id`, `biz_id`, `node_code`, `node_name`, `provider_type`, `region_code`,
+ `public_publish_base_url`, `public_hls_base_url`, `internal_api_base_url`, `internal_metrics_url`,
+ `secret_ref`, `supported_publish_protocols`, `supported_play_protocols`, `weight`,
+ `max_publishers`, `max_readers`, `status`)
+VALUES
+(1, 3, 'mediamtx-local', '本机 MediaMTX', 'MEDIAMTX', 'LOCAL',
+ 'rtmp://127.0.0.1:1935', 'http://127.0.0.1:8888', 'http://127.0.0.1:9997',
+ 'http://127.0.0.1:9998/metrics', 'application', 'RTMP', 'RTMP,HLS', 100, 100, 1000, 'ACTIVE')
+ON DUPLICATE KEY UPDATE `node_name` = VALUES(`node_name`);
+
+-- 18. ZHIBO_LIVE 推流会话。一场推流只创建一行；后续 auth/hook/客户端停止只更新状态。
 CREATE TABLE IF NOT EXISTS `pdk_live_stream_session` (
     `id` BIGINT AUTO_INCREMENT PRIMARY KEY,
     `biz_id` BIGINT NOT NULL COMMENT '固定归属 ZHIBO_LIVE 业务',
@@ -526,6 +569,51 @@ CREATE TABLE IF NOT EXISTS `pdk_live_stream_session` (
     INDEX `idx_live_ticket_expire` (`status`, `ticket_expires_at`),
     INDEX `idx_live_path` (`path`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='ZHIBO_LIVE 推流会话与短效票据';
+
+-- 19. 拉流连接与推流会话是 N:1，独立存储，避免重复创建推流记录。
+CREATE TABLE IF NOT EXISTS `pdk_live_play_session` (
+    `id` BIGINT AUTO_INCREMENT PRIMARY KEY,
+    `biz_id` BIGINT NOT NULL,
+    `stream_session_id` BIGINT NOT NULL,
+    `media_node_code` VARCHAR(64) NOT NULL,
+    `provider_client_id` VARCHAR(128) NOT NULL,
+    `protocol` VARCHAR(16) NOT NULL,
+    `client_ip_hash` CHAR(64) DEFAULT NULL,
+    `status` VARCHAR(20) NOT NULL DEFAULT 'PLAYING' COMMENT 'PLAYING/ENDED',
+    `started_at` DATETIME NOT NULL,
+    `ended_at` DATETIME DEFAULT NULL,
+    `duration_seconds` BIGINT DEFAULT NULL,
+    `outbound_bytes` BIGINT DEFAULT NULL,
+    `end_reason` VARCHAR(64) DEFAULT NULL,
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    `active_client_guard` VARCHAR(128) GENERATED ALWAYS AS (
+        CASE WHEN `status` = 'PLAYING' THEN `provider_client_id` ELSE NULL END
+    ) STORED,
+    UNIQUE KEY `uk_play_active_client` (`media_node_code`, `active_client_guard`),
+    INDEX `idx_play_node_client` (`media_node_code`, `provider_client_id`, `started_at`),
+    INDEX `idx_play_stream_status` (`stream_session_id`, `status`, `started_at`),
+    INDEX `idx_play_node_status` (`media_node_code`, `status`, `started_at`),
+    INDEX `idx_play_biz_created` (`biz_id`, `created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='ZHIBO_LIVE 拉流连接';
+
+-- 20. 每节点只保存一份最新快照；历史趋势可后续接 Prometheus/Grafana。
+CREATE TABLE IF NOT EXISTS `pdk_media_server_node_snapshot` (
+    `node_id` BIGINT PRIMARY KEY,
+    `collected_at` DATETIME NOT NULL,
+    `collect_status` VARCHAR(20) NOT NULL COMMENT 'SUCCESS/FAILED/UNSUPPORTED',
+    `active_publishers` INT DEFAULT NULL,
+    `active_readers` INT DEFAULT NULL,
+    `active_paths` INT DEFAULT NULL,
+    `inbound_bytes_total` BIGINT DEFAULT NULL,
+    `outbound_bytes_total` BIGINT DEFAULT NULL,
+    `inbound_bps` BIGINT DEFAULT NULL,
+    `outbound_bps` BIGINT DEFAULT NULL,
+    `provider_version` VARCHAR(64) DEFAULT NULL,
+    `error_message` VARCHAR(255) DEFAULT NULL,
+    `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX `idx_media_snapshot_collected` (`collected_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='流媒体节点最新监控快照';
 
 -- 为升级前已存在的代理补齐稳定邀请码；重复启动不会重复生成。
 -- INSERT INTO `pdk_invitation_code` (`code`, `owner_user_id`, `status`, `used_count`)

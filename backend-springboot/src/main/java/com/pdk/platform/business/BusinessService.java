@@ -16,6 +16,9 @@ import com.pdk.mapper.BusinessMapper;
 import com.pdk.mapper.PackagePlanMapper;
 import com.pdk.mapper.TokenPoolMapper;
 import com.pdk.mapper.UserMapper;
+import com.pdk.business.zhibo.live.entity.MediaServerNode;
+import com.pdk.business.zhibo.live.mapper.MediaServerNodeMapper;
+import com.pdk.business.zhibo.ZhiboBusinessHandler;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -33,6 +36,7 @@ public class BusinessService {
     private final UserMapper userMapper;
     private final PackagePlanMapper packagePlanMapper;
     private final TokenPoolMapper tokenPoolMapper;
+    private final MediaServerNodeMapper mediaServerNodeMapper;
 
     public Business requireByAppId(long appId) {
         Business business = businessMapper.selectOne(new LambdaQueryWrapper<Business>()
@@ -89,6 +93,13 @@ public class BusinessService {
         } else if (!healthy) {
             effective = "HANDLER_UNHEALTHY";
             reason = handler.healthMessage();
+        } else if (ZhiboBusinessHandler.LIVE_CODE.equals(code)
+                && mediaServerNodeMapper.selectCount(new LambdaQueryWrapper<MediaServerNode>()
+                .eq(MediaServerNode::getBizId, business.getId())
+                .eq(MediaServerNode::getStatus, "ACTIVE")
+                .in(MediaServerNode::getHealthStatus, "UP", "DEGRADED", "UNKNOWN")) == 0) {
+            effective = "MEDIA_NODE_MISSING";
+            reason = "ZHIBO_LIVE 尚未配置或当前没有健康的流媒体节点";
         } else {
             effective = "AVAILABLE";
         }
@@ -101,6 +112,13 @@ public class BusinessService {
         Long available = includeStats ? tokenPoolMapper.selectCount(new LambdaQueryWrapper<TokenPool>()
                 .eq(TokenPool::getBizId, business.getId()).eq(TokenPool::getIsDiscarded, 0)
                 .eq(TokenPool::getHealthStatus, "HEALTHY")) : null;
+        Long mediaNodes = includeStats && ZhiboBusinessHandler.LIVE_CODE.equals(code)
+                ? mediaServerNodeMapper.selectCount(new LambdaQueryWrapper<MediaServerNode>()
+                .eq(MediaServerNode::getBizId, business.getId())) : null;
+        Long availableMediaNodes = includeStats && ZhiboBusinessHandler.LIVE_CODE.equals(code)
+                ? mediaServerNodeMapper.selectCount(new LambdaQueryWrapper<MediaServerNode>()
+                .eq(MediaServerNode::getBizId, business.getId()).eq(MediaServerNode::getStatus, "ACTIVE")
+                .in(MediaServerNode::getHealthStatus, "UP", "DEGRADED", "UNKNOWN")) : null;
         return BusinessRuntimeVO.builder()
                 .bizId(business.getId()).appId(business.getAppId()).bizCode(code)
                 .businessName(business.getBizName()).businessDescription(business.getDescription())
@@ -116,6 +134,7 @@ public class BusinessService {
                 .supportedActions(handler == null ? Set.of() : handler.supportedActions())
                 .effectiveStatus(effective).unavailableReason(reason)
                 .userCount(users).packageCount(plans).resourceCount(resources).availableResourceCount(available)
+                .mediaNodeCount(mediaNodes).availableMediaNodeCount(availableMediaNodes)
                 .createdAt(business.getCreatedAt()).updatedAt(business.getUpdatedAt()).build();
     }
 
@@ -180,6 +199,12 @@ public class BusinessService {
                 throw new BusinessException(50350, "当前运行包缺少业务 Handler: " + code);
             BusinessHandler handler = handlerRegistry.require(code);
             if (!handler.healthy()) throw new BusinessException(50350, handler.healthMessage());
+            if (ZhiboBusinessHandler.LIVE_CODE.equals(code)
+                    && mediaServerNodeMapper.selectCount(new LambdaQueryWrapper<MediaServerNode>()
+                    .eq(MediaServerNode::getBizId, bizId).eq(MediaServerNode::getStatus, "ACTIVE")
+                    .in(MediaServerNode::getHealthStatus, "UP", "DEGRADED", "UNKNOWN")) == 0) {
+                throw new BusinessException(50372, "请先配置并启用至少一个 ZHIBO_LIVE 流媒体节点");
+            }
             validateTrial(business);
         }
         business.setStatus(enabled ? "ACTIVE" : "DISABLED");

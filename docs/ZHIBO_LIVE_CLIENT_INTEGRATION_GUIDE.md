@@ -206,7 +206,17 @@ X-PDK-App-ID: 3
     "configuredStatus": "ACTIVE",
     "effectiveStatus": "AVAILABLE",
     "unavailableReason": null,
-    "supportedActions": ["LIVE_PUBLISH"]
+    "supportedActions": ["LIVE_PUBLISH"],
+    "liveMedia": {
+      "enabled": true,
+      "status": "AVAILABLE",
+      "mediaServerAddress": "rtmp://live.example.com:1935",
+      "preferredPublishProtocol": "RTMP",
+      "supportedPublishProtocols": ["RTMP"],
+      "supportedPlayProtocols": ["RTMP", "HLS"],
+      "configRevision": 3,
+      "discoveredAt": "2026-09-06T12:00:00"
+    }
   }
 }
 ```
@@ -218,13 +228,20 @@ appId == 3
 bizCode == ZHIBO_LIVE
 effectiveStatus == AVAILABLE
 supportedActions 包含 LIVE_PUBLISH
+liveMedia.enabled == true
+liveMedia.status == AVAILABLE
 ```
+
+`liveMedia.mediaServerAddress` 是登录前的公开服务发现地址，只用于网络预检、可用性提示和展示。它不含 path 和短效票据，不能据此自行拼接最终推流 URL；真正开播仍必须调用第 10 节票据接口，并把服务端返回的完整 `publishUrl` 当作不透明字符串交给 FFmpeg/OBS。
+
+项目 Python、PyQt 和 Python SDK 客户端均提供 `live_media_info()`：它只允许 appId=3 调用，并返回上述公开信息。该方法不要求先登录。
 
 若不可用：
 
 - `DISABLED_BY_ADMIN`：显示“业务维护中”；
 - `NOT_IN_DEPLOYMENT`：显示“当前服务器未部署直播业务”；
 - `HANDLER_MISSING/HANDLER_UNHEALTHY`：显示“直播服务暂不可用”；
+- `MEDIA_NODE_MISSING/NO_AVAILABLE_NODE`：显示“暂无可用直播节点”，禁用开播并允许稍后重试发现；
 - 禁用登录后的业务操作和开始直播按钮。
 
 ## 7. 账号来源与登录

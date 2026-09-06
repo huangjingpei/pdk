@@ -202,6 +202,90 @@ export interface BusinessRuntime {
   packageCount?: number;
   resourceCount?: number;
   availableResourceCount?: number;
+  mediaNodeCount?: number;
+  availableMediaNodeCount?: number;
+}
+
+export interface LiveOverview {
+  totalNodes: number;
+  availableNodes: number;
+  abnormalNodes: number;
+  activePublishers: number;
+  activeReaders: number;
+  inboundBps?: number;
+  outboundBps?: number;
+  todayStreamStarts: number;
+  collectedAt?: string;
+}
+
+export interface MediaServerNode {
+  id: number;
+  bizId: number;
+  nodeCode: string;
+  nodeName: string;
+  providerType: 'MEDIAMTX' | 'SRS';
+  regionCode?: string;
+  publicPublishBaseUrl: string;
+  publicHlsBaseUrl?: string;
+  publicWebrtcBaseUrl?: string;
+  internalApiBaseUrl: string;
+  internalMetricsUrl?: string;
+  secretRef: string;
+  supportedPublishProtocols: string;
+  supportedPlayProtocols?: string;
+  weight: number;
+  maxPublishers: number;
+  maxReaders: number;
+  status: 'ACTIVE' | 'DRAINING' | 'DISABLED';
+  healthStatus: 'UP' | 'DOWN' | 'DEGRADED' | 'UNKNOWN';
+  lastHealthAt?: string;
+  lastHealthError?: string;
+  configRevision: number;
+  activePublishers?: number;
+  activeReaders?: number;
+  activePaths?: number;
+  inboundBytesTotal?: number;
+  outboundBytesTotal?: number;
+  inboundBps?: number;
+  outboundBps?: number;
+  metricsCollectedAt?: string;
+  collectStatus?: string;
+  providerVersion?: string;
+}
+
+export interface LiveStreamSession {
+  streamSessionNo: string;
+  bizId: number;
+  userId: number;
+  userDeviceId?: number;
+  deviceLicenseId?: number;
+  path: string;
+  protocol: string;
+  status: string;
+  mediaNodeCode: string;
+  ticketExpiresAt?: string;
+  authorizedAt?: string;
+  startedAt?: string;
+  endedAt?: string;
+  durationSeconds?: number;
+  billedUnits: number;
+  endReason?: string;
+  createdAt: string;
+}
+
+export interface LivePlaySession {
+  id: number;
+  bizId: number;
+  streamSessionId: number;
+  mediaNodeCode: string;
+  providerClientId: string;
+  protocol: string;
+  status: string;
+  startedAt: string;
+  endedAt?: string;
+  durationSeconds?: number;
+  outboundBytes?: number;
+  endReason?: string;
 }
 
 export interface DeviceLicenseItem {

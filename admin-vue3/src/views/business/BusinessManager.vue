@@ -48,9 +48,13 @@
       <el-table-column label="用户/套餐/资源" width="150">
         <template #default="s">{{ s.row.userCount ?? 0 }} / {{ s.row.packageCount ?? 0 }} / {{ s.row.availableResourceCount ?? 0 }}可用</template>
       </el-table-column>
-      <el-table-column label="操作" width="170" fixed="right">
+      <el-table-column label="媒体节点" width="120">
+        <template #default="s"><span v-if="s.row.bizCode==='ZHIBO_LIVE'">{{ s.row.availableMediaNodeCount ?? 0 }} / {{ s.row.mediaNodeCount ?? 0 }} 可用</span><span v-else>--</span></template>
+      </el-table-column>
+      <el-table-column label="操作" width="260" fixed="right">
         <template #default="s">
           <el-button size="small" @click="openEdit(s.row)">配置</el-button>
+          <el-button v-if="s.row.bizCode==='ZHIBO_LIVE'" size="small" type="primary" plain @click="router.push('/live/center')">直播节点</el-button>
           <el-button size="small" :type="s.row.configuredStatus === 'ACTIVE' ? 'danger' : 'success'"
             :disabled="s.row.configuredStatus !== 'ACTIVE' && (!s.row.deploymentEnabled || !s.row.handlerRegistered || s.row.handlerHealth !== 'UP')"
             @click="toggle(s.row)">{{ s.row.configuredStatus === 'ACTIVE' ? '关闭' : '启用' }}</el-button>
@@ -92,10 +96,12 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
+import { useRouter } from 'vue-router';
 import { api, type ApiResult } from '../../api';
 import type { BusinessRuntime } from '../../types';
 
 const rows = ref<BusinessRuntime[]>([]); const loading = ref(false); const visible = ref(false); const saving = ref(false); const editingId = ref<number | null>(null);
+const router = useRouter();
 const form = reactive({ appId: 4, bizCode: '', bizName: '', description: '', registrationMode: 'ADMIN_ONLY' as 'SELF_SERVICE'|'ADMIN_ONLY', authorizationMode: 'USER_SUBSCRIPTION' as 'USER_SUBSCRIPTION'|'DEVICE_LICENSE', trialEnabled: false, trialDurationHours: 0, trialAccountCount: 0, trialCallsPerAccount: 0, forceInitialPasswordChange: true });
 async function load(){ loading.value=true; try { const r=await api.get<ApiResult<BusinessRuntime[]>>('/api/v1/admin/business/list'); rows.value=r.data.data; } catch(e){ ElMessage.error(e instanceof Error?e.message:'加载失败'); } finally { loading.value=false; } }
 function reset(){ Object.assign(form,{appId:4,bizCode:'',bizName:'',description:'',registrationMode:'ADMIN_ONLY',authorizationMode:'USER_SUBSCRIPTION',trialEnabled:false,trialDurationHours:0,trialAccountCount:0,trialCallsPerAccount:0,forceInitialPasswordChange:true}); }

@@ -22,15 +22,32 @@ public class MediaMtxEventService {
     private final UserMapper userMapper;
     private final DeviceLicenseMapper licenseMapper;
     private final MediaMtxProperties properties;
+    private final LivePlaySessionService playSessionService;
+    private final MediaServerNodeService nodeService;
 
     public boolean trusted(String token) {
         return properties.isEnabled()
                 && LiveStreamSecurity.constantTimeEquals(properties.getInternalServiceToken(), token);
     }
 
+    public boolean trusted(String token, String nodeCode) {
+        if (!trusted(token)) return false;
+        try {
+            var node = nodeService.requireByCode(nodeCode);
+            return !"DISABLED".equals(node.getStatus()) && "MEDIAMTX".equals(node.getProviderType());
+        } catch (RuntimeException e) {
+            return false;
+        }
+    }
+
     @Transactional(rollbackFor = Exception.class)
     public boolean available(String path, String sourceId) {
-        LiveStreamSession session = byPath(path);
+        return available(properties.getNodeCode(), path, sourceId);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public boolean available(String nodeCode, String path, String sourceId) {
+        LiveStreamSession session = byPath(nodeCode, path);
         if (session == null) return false;
         if ("LIVE".equals(session.getStatus())) return true;
         if (!"AUTHORIZED".equals(session.getStatus())) return false;
@@ -77,7 +94,12 @@ public class MediaMtxEventService {
 
     @Transactional(rollbackFor = Exception.class)
     public boolean unavailable(String path, String sourceId) {
-        LiveStreamSession session = byPath(path);
+        return unavailable(properties.getNodeCode(), path, sourceId);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public boolean unavailable(String nodeCode, String path, String sourceId) {
+        LiveStreamSession session = byPath(nodeCode, path);
         if (session == null) return false;
         if ("ENDED".equals(session.getStatus())) return true;
         if (!java.util.Set.of("AUTHORIZED", "LIVE", "KICK_REQUESTED").contains(session.getStatus())) return false;
@@ -95,9 +117,19 @@ public class MediaMtxEventService {
                 .set(LiveStreamSession::getUpdatedAt, now)) == 1;
     }
 
-    private LiveStreamSession byPath(String path) {
+    public boolean read(String nodeCode, String path, String readerId, String readerType, String clientIp) {
+        return playSessionService.started(nodeCode, path, readerId, readerType, clientIp);
+    }
+
+    public boolean unread(String nodeCode, String path, String readerId) {
+        return playSessionService.stopped(nodeCode, path, readerId, "READER_DISCONNECTED");
+    }
+
+    private LiveStreamSession byPath(String nodeCode, String path) {
         if (path == null || path.isBlank()) return null;
         return sessionMapper.selectOne(new LambdaQueryWrapper<LiveStreamSession>()
-                .eq(LiveStreamSession::getPath, path).last("LIMIT 1"));
+                .eq(LiveStreamSession::getPath, path)
+                .eq(nodeCode != null && !nodeCode.isBlank(), LiveStreamSession::getMediaNodeCode, nodeCode)
+                .last("LIMIT 1"));
     }
 }

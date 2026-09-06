@@ -87,6 +87,8 @@
               <el-button v-if="canResetPassword" type="danger" size="small" @click="openReset(scope.row)">重置密码</el-button>
               <el-button v-if="canResetPassword" :type="scope.row.mustChangePassword ? 'warning' : 'success'" size="small"
                 @click="toggleForceChange(scope.row)">{{ scope.row.mustChangePassword ? '取消强制改密' : '强制改密' }}</el-button>
+              <el-button v-if="scope.row.appId===3 && hasPermission('live:stream:view')" type="primary" plain size="small"
+                @click="router.push('/live/center')">直播会话</el-button>
             </div>
           </template>
         </el-table-column>
@@ -257,8 +259,10 @@ import { api, type ApiResult, type PageResult } from '../../api';
 import Pagination from '../../components/Pagination.vue';
 import { hasPermission, authState } from '../../auth';
 import type { ClientUser, PackagePlanLite, UserAssignmentDetail, BusinessRuntime, LoginLog } from '../../types';
+import { useRouter } from 'vue-router';
 
 const rows = ref<ClientUser[]>([]);
+const router = useRouter();
 const loading = ref(false);
 const total = ref(0);
 const page = ref(1);

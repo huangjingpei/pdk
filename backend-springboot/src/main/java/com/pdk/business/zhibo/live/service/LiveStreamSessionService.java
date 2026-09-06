@@ -6,6 +6,7 @@ import com.pdk.business.zhibo.ZhiboBusinessHandler;
 import com.pdk.business.zhibo.live.config.MediaMtxProperties;
 import com.pdk.business.zhibo.live.dto.CreatePublishTicketDTO;
 import com.pdk.business.zhibo.live.entity.LiveStreamSession;
+import com.pdk.business.zhibo.live.entity.MediaServerNode;
 import com.pdk.business.zhibo.live.mapper.LiveStreamSessionMapper;
 import com.pdk.business.zhibo.live.vo.LiveStreamSessionVO;
 import com.pdk.business.zhibo.live.vo.PublishTicketVO;
@@ -14,7 +15,7 @@ import com.pdk.domain.entity.User;
 import com.pdk.domain.entity.DeviceLicense;
 import com.pdk.domain.entity.UserDevice;
 import com.pdk.platform.business.BusinessContext;
-import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -25,9 +26,9 @@ import java.time.LocalDateTime;
 import java.util.Base64;
 import java.util.List;
 import java.util.UUID;
+import java.util.Set;
 
 @Service
-@RequiredArgsConstructor
 public class LiveStreamSessionService {
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
     private static final List<String> ACTIVE_STATUSES = List.of("ISSUED", "AUTHORIZED", "LIVE", "KICK_REQUESTED");
@@ -35,6 +36,22 @@ public class LiveStreamSessionService {
     private final LiveStreamSessionMapper sessionMapper;
     private final MediaMtxProperties properties;
     private final MediaMtxControlClient controlClient;
+    private final MediaServerNodeService nodeService;
+
+    @Autowired
+    public LiveStreamSessionService(LiveStreamSessionMapper sessionMapper, MediaMtxProperties properties,
+                                    MediaMtxControlClient controlClient, MediaServerNodeService nodeService) {
+        this.sessionMapper = sessionMapper;
+        this.properties = properties;
+        this.controlClient = controlClient;
+        this.nodeService = nodeService;
+    }
+
+    /** 保持既有单元测试和旧单节点调用可构造；Spring 运行时始终使用上面的节点服务构造器。 */
+    LiveStreamSessionService(LiveStreamSessionMapper sessionMapper, MediaMtxProperties properties,
+                             MediaMtxControlClient controlClient) {
+        this(sessionMapper, properties, controlClient, null);
+    }
 
     @Transactional(rollbackFor = Exception.class)
     public PublishTicketVO issue(BusinessContext business, User user, CreatePublishTicketDTO dto, String clientIp) {
@@ -61,6 +78,8 @@ public class LiveStreamSessionService {
             throw new BusinessException(40970, "clientRequestId 已使用，请生成新的请求 ID");
         }
 
+        String protocol = resolveProtocol(dto);
+        MediaServerNode selectedNode = nodeService == null ? null : nodeService.selectForPublish(business.bizId(), protocol);
         String ticket = randomTicket();
         String sessionNo = "ls_" + UUID.randomUUID().toString().replace("-", "");
         String path = "zhibo-live/" + sessionNo;
@@ -74,9 +93,9 @@ public class LiveStreamSessionService {
         session.setDeviceLicenseId(license == null ? null : license.getId());
         session.setStreamSessionNo(sessionNo);
         session.setClientRequestId(requestId);
-        session.setMediaNodeCode(properties.getNodeCode());
+        session.setMediaNodeCode(selectedNode == null ? properties.getNodeCode() : selectedNode.getNodeCode());
         session.setPath(path);
-        session.setProtocol(resolveProtocol(dto));
+        session.setProtocol(protocol);
         session.setStatus("ISSUED");
         session.setTicketHash(LiveStreamSecurity.sha256(ticket));
         session.setTicketExpiresAt(now.plusSeconds(ttl));
@@ -92,8 +111,10 @@ public class LiveStreamSessionService {
             throw new BusinessException(40971, "当前账号已有待推流或正在推流的会话，请先停止后重试");
         }
 
-        String base = properties.getPublicRtmpBaseUrl().replaceAll("/+$", "");
-        return new PublishTicketVO(sessionNo, base + "/" + path + "?token=" + ticket,
+        String publishUrl = selectedNode == null
+                ? properties.getPublicRtmpBaseUrl().replaceAll("/+$", "") + "/" + path + "?token=" + ticket
+                : nodeService.buildPublishUrl(selectedNode, path, ticket);
+        return new PublishTicketVO(sessionNo, publishUrl,
                 session.getTicketExpiresAt(), ttl, session.getStatus());
     }
 
@@ -114,11 +135,26 @@ public class LiveStreamSessionService {
     }
 
     public List<LiveStreamSessionVO> listForAdmin(long bizId, String status) {
+        return listForAdmin(bizId, status, null);
+    }
+
+    public List<LiveStreamSessionVO> listForAdmin(long bizId, String status, Set<Long> allowedLicenseIds) {
+        if (allowedLicenseIds != null && allowedLicenseIds.isEmpty()) return List.of();
         LambdaQueryWrapper<LiveStreamSession> query = new LambdaQueryWrapper<LiveStreamSession>()
                 .eq(LiveStreamSession::getBizId, bizId)
                 .orderByDesc(LiveStreamSession::getId).last("LIMIT 500");
         if (status != null && !status.isBlank()) query.eq(LiveStreamSession::getStatus, status.trim().toUpperCase());
+        if (allowedLicenseIds != null) query.in(LiveStreamSession::getDeviceLicenseId, allowedLicenseIds);
         return sessionMapper.selectList(query).stream().map(LiveStreamSessionVO::from).toList();
+    }
+
+    public Set<Long> sessionIdsForLicenses(long bizId, Set<Long> licenseIds) {
+        if (licenseIds == null) return null;
+        if (licenseIds.isEmpty()) return Set.of();
+        return sessionMapper.selectList(new LambdaQueryWrapper<LiveStreamSession>()
+                        .eq(LiveStreamSession::getBizId, bizId)
+                        .in(LiveStreamSession::getDeviceLicenseId, licenseIds))
+                .stream().map(LiveStreamSession::getId).collect(java.util.stream.Collectors.toSet());
     }
 
     @Transactional(rollbackFor = Exception.class)
@@ -143,6 +179,16 @@ public class LiveStreamSessionService {
     }
 
     @Transactional(rollbackFor = Exception.class)
+    public void stopByAdmin(long bizId, String sessionNo, String reason, Set<Long> allowedLicenseIds) {
+        LiveStreamSession session = requireSession(bizId, sessionNo);
+        if (allowedLicenseIds != null && (session.getDeviceLicenseId() == null
+                || !allowedLicenseIds.contains(session.getDeviceLicenseId()))) {
+            throw new BusinessException(40311, "无权停止其他代理负责的直播");
+        }
+        stop(session, reason);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
     public void revokeUserSessions(long bizId, long userId, String reason) {
         List<LiveStreamSession> sessions = sessionMapper.selectList(new LambdaQueryWrapper<LiveStreamSession>()
                 .eq(LiveStreamSession::getBizId, bizId).eq(LiveStreamSession::getUserId, userId)
@@ -161,7 +207,9 @@ public class LiveStreamSessionService {
     private void stop(LiveStreamSession session, String reason) {
         if (!ACTIVE_STATUSES.contains(session.getStatus())) return;
         if (session.getMediamtxConnectionId() != null && !session.getMediamtxConnectionId().isBlank()) {
-            controlClient.kick(session);
+            if (nodeService == null) controlClient.kick(session);
+            else nodeService.kick(nodeService.requireByCode(session.getMediaNodeCode()),
+                    session.getMediamtxConnectionId(), session.getProtocol());
         }
         LocalDateTime now = LocalDateTime.now();
         session.setStatus("ENDED");

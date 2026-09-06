@@ -476,6 +476,16 @@ class PdkClient:
     def business_info(self) -> dict[str, Any]:
         return self._request("GET", f"/api/v1/client/business/by-app/{self.app_id}")
 
+    def live_media_info(self) -> dict[str, Any]:
+        """appId=3 登录前读取公开媒体入口；最终推流仍必须使用票据接口返回的 publishUrl。"""
+        if self.app_id != 3:
+            raise PdkClientError(40370, "直播媒体配置仅适用于 appId=3 / ZHIBO_LIVE")
+        info = self.business_info()
+        live = info.get("liveMedia")
+        if not isinstance(live, dict) or not live.get("enabled"):
+            raise PdkClientError(50372, str((live or {}).get("status") or "当前没有可用流媒体节点"), data=info)
+        return live
+
     def ensure_business_available(self, *, expected_biz_code: str = "",
                                   expected_authorization_mode: str = "") -> dict[str, Any]:
         info = self.business_info()
