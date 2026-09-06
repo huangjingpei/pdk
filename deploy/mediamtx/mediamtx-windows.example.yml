@@ -1,0 +1,444 @@
+# Windows 本地开发用 MediaMTX 配置模板
+# 用法：由 scripts/start-mediamtx-win.ps1 渲染 __PDK_MEDIAMTX_TOKEN__ 后写入 mtx/mediamtx/mediamtx.yml
+# 不要直接把真实令牌写进本文件（本文件进 git）。钩子在 Windows 上用 curl.exe + %MTX_*% 变量，
+# 不能沿用 Linux 的 event-hook.sh（bash 脚本在 Windows 上无法执行）。
+# 生成：scripts/start-mediamtx-win.ps1 ；校验：scripts/verify-zhibo-live-auth.ps1
+
+###############################################
+# Global settings
+
+# Settings in this section are applied anywhere.
+
+###############################################
+# Global settings -> General
+
+# Verbosity of the program; available values are "error", "warn", "info", "debug".
+logLevel: info
+# Destinations of log messages; available values are "stdout", "file" and "syslog".
+logDestinations: [stdout]
+# If "file" is in logDestinations, this is the file which will receive the logs.
+logFile: mediamtx.log
+
+# Timeout of read operations.
+readTimeout: 10s
+# Timeout of write operations.
+writeTimeout: 10s
+# Size of the queue of outgoing packets.
+# A higher value allows to increase throughput, a lower value allows to save RAM.
+writeQueueSize: 512
+# Maximum size of outgoing UDP packets.
+# This can be decreased to avoid fragmentation on networks with a low UDP MTU.
+udpMaxPayloadSize: 1472
+
+# Command to run when a client connects to the server.
+# This is terminated with SIGINT when a client disconnects from the server.
+# The following environment variables are available:
+# * MTX_CONN_TYPE: connection type
+# * MTX_CONN_ID: connection ID
+# * RTSP_PORT: RTSP server port
+runOnConnect:
+# Restart the command if it exits.
+runOnConnectRestart: no
+# Command to run when a client disconnects from the server.
+# Environment variables are the same of runOnConnect.
+runOnDisconnect:
+
+###############################################
+# Global settings -> Authentication
+
+# Authentication method. Available values are:
+# * internal: users are stored in the configuration file
+# * http: an external HTTP URL is contacted to perform authentication
+# * jwt: an external identity server provides authentication through JWTs
+authMethod: http
+
+# Internal authentication.
+# list of users.
+authInternalUsers:
+  # Default unprivileged user.
+  # Username. 'any' means any user, including anonymous ones.
+- user: any
+  # Password. Not used in case of 'any' user.
+  pass:
+  # IPs or networks allowed to use this user. An empty list means any IP.
+  ips: []
+  # List of permissions.
+  permissions:
+    # Available actions are: publish, read, playback, api, metrics, pprof.
+  - action: publish
+    # Paths can be set to further restrict access to a specific path.
+    # An empty path means any path.
+    # Regular expressions can be used by using a tilde as prefix.
+    path:
+  - action: read
+    path:
+  - action: playback
+    path:
+
+  # Default administrator.
+  # This allows to use API, metrics and PPROF without authentication,
+  # if the IP is localhost.
+- user: any
+  pass:
+  ips: ['127.0.0.1', '::1']
+  permissions:
+  - action: api
+  - action: metrics
+  - action: pprof
+
+# HTTP-based authentication.
+# URL called to perform authentication. Every time a user wants
+# to authenticate, the server calls this URL with the POST method
+# and a body containing:
+# {
+#   "user": "user",
+#   "password": "password",
+#   "ip": "ip",
+#   "action": "publish|read|playback|api|metrics|pprof",
+#   "path": "path",
+#   "protocol": "rtsp|rtmp|hls|webrtc|srt",
+#   "id": "id",
+#   "query": "query"
+# }
+# If the response code is 20x, authentication is accepted, otherwise
+# it is discarded.
+authHTTPAddress: http://127.0.0.1:8080/api/v1/internal/mediamtx/auth?serviceToken=__PDK_MEDIAMTX_TOKEN__&nodeCode=mediamtx-local
+# Actions to exclude from HTTP-based authentication.
+# Format is the same as the one of user permissions.
+authHTTPExclude:
+- action: api
+- action: metrics
+- action: pprof
+
+# JWT-based authentication.
+# Users have to login through an external identity server and obtain a JWT.
+# This JWT must contain the claim "mediamtx_permissions" with permissions,
+# for instance:
+# {
+#  ...
+#  "mediamtx_permissions": [
+#     {
+#       "action": "publish",
+#       "path": "somepath"
+#     }
+#   ]
+# }
+# Users are expected to pass the JWT in the Authorization header or as a query parameter.
+# This is the JWKS URL that will be used to pull (once) the public key that allows
+# to validate JWTs.
+authJWTJWKS:
+# name of the claim that contains permissions.
+authJWTClaimKey: mediamtx_permissions
+
+###############################################
+# Global settings -> Control API
+
+# Enable controlling the server through the Control API.
+api: yes
+# Address of the Control API listener.
+apiAddress: 127.0.0.1:9997
+# Enable TLS/HTTPS on the Control API server.
+apiEncryption: no
+# Path to the server key. This is needed only when encryption is yes.
+# This can be generated with:
+# openssl genrsa -out server.key 2048
+# openssl req -new -x509 -sha256 -key server.key -out server.crt -days 3650
+apiServerKey: server.key
+# Path to the server certificate.
+apiServerCert: server.crt
+# Value of the Access-Control-Allow-Origin header provided in every HTTP response.
+apiAllowOrigin: '*'
+# List of IPs or CIDRs of proxies placed before the HTTP server.
+# If the server receives a request from one of these entries, IP in logs
+# will be taken from the X-Forwarded-For header.
+apiTrustedProxies: []
+
+###############################################
+# Global settings -> Metrics
+
+# Enable Prometheus-compatible metrics.
+metrics: yes
+# Address of the metrics HTTP listener.
+metricsAddress: 127.0.0.1:9998
+# Enable TLS/HTTPS on the Metrics server.
+metricsEncryption: no
+# Path to the server key. This is needed only when encryption is yes.
+# This can be generated with:
+# openssl genrsa -out server.key 2048
+# openssl req -new -x509 -sha256 -key server.key -out server.crt -days 3650
+metricsServerKey: server.key
+# Path to the server certificate.
+metricsServerCert: server.crt
+# Value of the Access-Control-Allow-Origin header provided in every HTTP response.
+metricsAllowOrigin: '*'
+# List of IPs or CIDRs of proxies placed before the HTTP server.
+# If the server receives a request from one of these entries, IP in logs
+# will be taken from the X-Forwarded-For header.
+metricsTrustedProxies: []
+
+###############################################
+# Global settings -> PPROF
+
+# Enable pprof-compatible endpoint to monitor performances.
+pprof: no
+# Address of the pprof listener.
+pprofAddress: :9999
+# Enable TLS/HTTPS on the pprof server.
+pprofEncryption: no
+# Path to the server key. This is needed only when encryption is yes.
+# This can be generated with:
+# openssl genrsa -out server.key 2048
+# openssl req -new -x509 -sha256 -key server.key -out server.crt -days 3650
+pprofServerKey: server.key
+# Path to the server certificate.
+pprofServerCert: server.crt
+# Value of the Access-Control-Allow-Origin header provided in every HTTP response.
+pprofAllowOrigin: '*'
+# List of IPs or CIDRs of proxies placed before the HTTP server.
+# If the server receives a request from one of these entries, IP in logs
+# will be taken from the X-Forwarded-For header.
+pprofTrustedProxies: []
+
+###############################################
+# Global settings -> Playback server
+
+# Enable downloading recordings from the playback server.
+playback: no
+# Address of the playback server listener.
+playbackAddress: :9996
+# Enable TLS/HTTPS on the playback server.
+playbackEncryption: no
+# Path to the server key. This is needed only when encryption is yes.
+# This can be generated with:
+# openssl genrsa -out server.key 2048
+# openssl req -new -x509 -sha256 -key server.key -out server.crt -days 3650
+playbackServerKey: server.key
+# Path to the server certificate.
+playbackServerCert: server.crt
+# Value of the Access-Control-Allow-Origin header provided in every HTTP response.
+playbackAllowOrigin: '*'
+# List of IPs or CIDRs of proxies placed before the HTTP server.
+# If the server receives a request from one of these entries, IP in logs
+# will be taken from the X-Forwarded-For header.
+playbackTrustedProxies: []
+
+
+rtsp: no           # 禁用RTSP
+hls: yes           # 开启 HLS 拉流；read 动作仍由业务服务器鉴权
+webrtc: no         # 禁用WebRTC
+srt: no            # 禁用SRT
+###############################################
+# Global settings -> RTMP server
+
+# Enable publishing and reading streams with the RTMP protocol.
+rtmp: yes
+# Address of the RTMP listener. This is needed only when encryption is "no" or "optional".
+rtmpAddress: :1935
+# Encrypt connections with TLS (RTMPS).
+# Available values are "no", "strict", "optional".
+rtmpEncryption: "no"
+# Address of the RTMPS listener. This is needed only when encryption is "strict" or "optional".
+rtmpsAddress: :1936
+# Path to the server key. This is needed only when encryption is "strict" or "optional".
+# This can be generated with:
+# openssl genrsa -out server.key 2048
+# openssl req -new -x509 -sha256 -key server.key -out server.crt -days 3650
+rtmpServerKey: server.key
+# Path to the server certificate. This is needed only when encryption is "strict" or "optional".
+rtmpServerCert: server.crt
+
+
+###############################################
+# Default path settings
+
+# Settings in "pathDefaults" are applied anywhere,
+# unless they are overridden in "paths".
+pathDefaults:
+
+  ###############################################
+  # Default path settings -> General
+
+  # Source of the stream. This can be:
+  # * publisher -> the stream is provided by a RTSP, RTMP, WebRTC or SRT client
+  # * rtsp://existing-url -> the stream is pulled from another RTSP server / camera
+  # * rtsps://existing-url -> the stream is pulled from another RTSP server / camera with RTSPS
+  # * rtmp://existing-url -> the stream is pulled from another RTMP server / camera
+  # * rtmps://existing-url -> the stream is pulled from another RTMP server / camera with RTMPS
+  # * http://existing-url/stream.m3u8 -> the stream is pulled from another HLS server / camera
+  # * https://existing-url/stream.m3u8 -> the stream is pulled from another HLS server / camera with HTTPS
+  # * udp://ip:port -> the stream is pulled with UDP, by listening on the specified IP and port
+  # * srt://existing-url -> the stream is pulled from another SRT server / camera
+  # * whep://existing-url -> the stream is pulled from another WebRTC server / camera
+  # * wheps://existing-url -> the stream is pulled from another WebRTC server / camera with HTTPS
+  # * redirect -> the stream is provided by another path or server
+  # * rpiCamera -> the stream is provided by a Raspberry Pi Camera
+  # The following variables can be used in the source string:
+  # * $MTX_QUERY: query parameters (passed by first reader)
+  # * $G1, $G2, ...: regular expression groups, if path name is
+  #   a regular expression.
+  source: publisher
+  # If the source is a URL, and the source certificate is self-signed
+  # or invalid, you can provide the fingerprint of the certificate in order to
+  # validate it anyway. It can be obtained by running:
+  # openssl s_client -connect source_ip:source_port </dev/null 2>/dev/null | sed -n '/BEGIN/,/END/p' > server.crt
+  # openssl x509 -in server.crt -noout -fingerprint -sha256 | cut -d "=" -f2 | tr -d ':'
+  sourceFingerprint:
+  # If the source is a URL, it will be pulled only when at least
+  # one reader is connected, saving bandwidth.
+  sourceOnDemand: no
+  # If sourceOnDemand is "yes", readers will be put on hold until the source is
+  # ready or until this amount of time has passed.
+  sourceOnDemandStartTimeout: 10s
+  # If sourceOnDemand is "yes", the source will be closed when there are no
+  # readers connected and this amount of time has passed.
+  sourceOnDemandCloseAfter: 10s
+  # Maximum number of readers. Zero means no limit.
+  maxReaders: 0
+  # SRT encryption passphrase require to read from this path
+  srtReadPassphrase:
+  # If the stream is not available, redirect readers to this path.
+  # It can be can be a relative path (i.e. /otherstream) or an absolute RTSP URL.
+  fallback:
+
+  ###############################################
+  # Default path settings -> Record
+
+  # Record streams to disk.
+  record: no
+  # Path of recording segments.
+  # Extension is added automatically.
+  # Available variables are %path (path name), %Y %m %d %H %M %S %f %s (time in strftime format)
+  recordPath: ./recordings/%path/%Y-%m-%d_%H-%M-%S-%f
+  # Format of recorded segments.
+  # Available formats are "fmp4" (fragmented MP4) and "mpegts" (MPEG-TS).
+  recordFormat: fmp4
+  # fMP4 segments are concatenation of small MP4 files (parts), each with this duration.
+  # MPEG-TS segments are concatenation of 188-bytes packets, flushed to disk with this period.
+  # When a system failure occurs, the last part gets lost.
+  # Therefore, the part duration is equal to the RPO (recovery point objective).
+  recordPartDuration: 1s
+  # Minimum duration of each segment.
+  recordSegmentDuration: 1h
+  # Delete segments after this timespan.
+  # Set to 0s to disable automatic deletion.
+  recordDeleteAfter: 1d
+
+
+
+  ###############################################
+  # Default path settings -> Publisher source (when source is "publisher")
+
+  # Allow another client to disconnect the current publisher and publish in its place.
+  overridePublisher: no
+  # SRT encryption passphrase required to publish to this path
+  srtPublishPassphrase:
+
+  ###############################################
+  # Default path settings -> Hooks
+
+  # Command to run when this path is initialized.
+  # This can be used to publish a stream when the server is launched.
+  # This is terminated with SIGINT when the program closes.
+  # The following environment variables are available:
+  # * MTX_PATH: path name
+  # * RTSP_PORT: RTSP server port
+  # * G1, G2, ...: regular expression groups, if path name is
+  #   a regular expression.
+  runOnInit:
+  # Restart the command if it exits.
+  runOnInitRestart: no
+
+  # Command to run when this path is requested by a reader
+  # and no one is publishing to this path yet.
+  # This can be used to publish a stream on demand.
+  # This is terminated with SIGINT when there are no readers anymore.
+  # The following environment variables are available:
+  # * MTX_PATH: path name
+  # * MTX_QUERY: query parameters (passed by first reader)
+  # * RTSP_PORT: RTSP server port
+  # * G1, G2, ...: regular expression groups, if path name is
+  #   a regular expression.
+  runOnDemand:
+  # Restart the command if it exits.
+  runOnDemandRestart: no
+  # Readers will be put on hold until the runOnDemand command starts publishing
+  # or until this amount of time has passed.
+  runOnDemandStartTimeout: 10s
+  # The command will be closed when there are no
+  # readers connected and this amount of time has passed.
+  runOnDemandCloseAfter: 10s
+  # Command to run when there are no readers anymore.
+  # Environment variables are the same of runOnDemand.
+  runOnUnDemand:
+
+  # Command to run when the stream is ready to be read, whenever it is
+  # published by a client or pulled from a server / camera.
+  # This is terminated with SIGINT when the stream is not ready anymore.
+  # The following environment variables are available:
+  # * MTX_PATH: path name
+  # * MTX_QUERY: query parameters (passed by publisher)
+  # * MTX_SOURCE_TYPE: source type
+  # * MTX_SOURCE_ID: source ID
+  # * RTSP_PORT: RTSP server port
+  # * G1, G2, ...: regular expression groups, if path name is
+  #   a regular expression.
+  runOnReady: curl.exe -fsS -X POST "http://127.0.0.1:8080/api/v1/internal/mediamtx/events/available?serviceToken=__PDK_MEDIAMTX_TOKEN__&nodeCode=mediamtx-local&path=%MTX_PATH%&sourceId=%MTX_SOURCE_ID%"
+  # Restart the command if it exits.
+  runOnReadyRestart: no
+  # Command to run when the stream is not available anymore.
+  # Environment variables are the same of runOnReady.
+  runOnNotReady: curl.exe -fsS -X POST "http://127.0.0.1:8080/api/v1/internal/mediamtx/events/unavailable?serviceToken=__PDK_MEDIAMTX_TOKEN__&nodeCode=mediamtx-local&path=%MTX_PATH%&sourceId=%MTX_SOURCE_ID%"
+
+  # Command to run when a client starts reading.
+  # This is terminated with SIGINT when a client stops reading.
+  # The following environment variables are available:
+  # * MTX_PATH: path name
+  # * MTX_QUERY: query parameters (passed by reader)
+  # * MTX_READER_TYPE: reader type
+  # * MTX_READER_ID: reader ID
+  # * RTSP_PORT: RTSP server port
+  # * G1, G2, ...: regular expression groups, if path name is
+  #   a regular expression.
+  runOnRead: curl.exe -fsS -X POST "http://127.0.0.1:8080/api/v1/internal/mediamtx/events/read?serviceToken=__PDK_MEDIAMTX_TOKEN__&nodeCode=mediamtx-local&path=%MTX_PATH%&readerId=%MTX_READER_ID%&readerType=%MTX_READER_TYPE%"
+  # Restart the command if it exits.
+  runOnReadRestart: no
+  # Command to run when a client stops reading.
+  # Environment variables are the same of runOnRead.
+  runOnUnread: curl.exe -fsS -X POST "http://127.0.0.1:8080/api/v1/internal/mediamtx/events/unread?serviceToken=__PDK_MEDIAMTX_TOKEN__&nodeCode=mediamtx-local&path=%MTX_PATH%&readerId=%MTX_READER_ID%"
+
+  # Command to run when a recording segment is created.
+  # The following environment variables are available:
+  # * MTX_PATH: path name
+  # * MTX_SEGMENT_PATH: segment file path
+  # * RTSP_PORT: RTSP server port
+  # * G1, G2, ...: regular expression groups, if path name is
+  #   a regular expression.
+  runOnRecordSegmentCreate: curl http://127.0.0.1:11969/webhook?path=$MTX_PATH&segment_path=$MTX_SEGMENT_PATH
+
+# Command to run when a recording segment is complete.
+# The following environment variables are available:
+# * MTX_PATH: path name
+# * MTX_SEGMENT_PATH: segment file path
+# * MTX_SEGMENT_DURATION: segment duration
+# * RTSP_PORT: RTSP server port
+# * G1, G2, ...: regular expression groups, if path name is
+#   a regular expression.
+  runOnRecordSegmentComplete: curl http://127.0.0.1:11969/webhook?path=$MTX_PATH&segment_path=$MTX_SEGMENT_PATH
+
+###############################################
+# Path settings
+
+# Settings in "paths" are applied to specific paths, and the map key
+# is the name of the path.
+# Any setting in "pathDefaults" can be overridden here.
+# It's possible to use regular expressions by using a tilde as prefix,
+# for example "~^(test1|test2)$" will match both "test1" and "test2",
+# for example "~^prefix" will match all paths that start with "prefix".
+paths:
+  # example:
+  # my_camera:
+  #   source: rtsp://my_camera
+
+  # Settings under path "all_others" are applied to all paths that
+  # do not match another entry.
+  "~^zhibo-live/ls_[A-Za-z0-9]{16,64}$":

@@ -59,6 +59,8 @@ else
 # ============================================================================
 TZ=Asia/Shanghai
 SERVER_PORT=8080
+# 只监听回环：Nginx 反代到 127.0.0.1:8080，禁止公网直连后端（内部 mediamtx 接口等）
+SERVER_ADDRESS=127.0.0.1
 
 # ---- 数据库（复用服务器上已有的 MySQL，不是 Docker 容器）----
 # 本服务器 3306 已被本机 MySQL 8.0.46 占用，容器起不来，因此直接复用。
@@ -105,6 +107,17 @@ JAVA_OPTS="-Xms192m -Xmx${JAVA_XMX:-448m} -XX:MaxMetaspaceSize=128m -XX:+UseG1GC
 EOF
   chmod 600 "${ENV_FILE}"
   log ".env 生成完毕（权限 600）"
+fi
+
+# ---- 幂等补齐：历史 .env 未限制监听地址时收紧为回环（已设置则不动）----
+if ! grep -q '^SERVER_ADDRESS=' "${ENV_FILE}"; then
+  {
+    echo ""
+    echo "# ---- 只监听回环：Nginx 反代走 127.0.0.1:8080，禁止公网直连后端 ----"
+    echo "SERVER_ADDRESS=127.0.0.1"
+  } >> "${ENV_FILE}"
+  chmod 600 "${ENV_FILE}"
+  log ".env 缺少 SERVER_ADDRESS，已追加 127.0.0.1（收紧公网暴露）"
 fi
 
 # ---- 幂等补齐：历史 .env 没有 MediaMTX 令牌时自动生成追加（已存在则不动）----
