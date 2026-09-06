@@ -33,3 +33,10 @@ JAVA_XMX="768m"
 # ---------------- 可选：跳过已完成的初始化 ----------------
 # 服务器环境已装好时设为 yes，可省去重复的 apt 安装（快很多）
 SKIP_PREPARE="no"
+
+# ---------------- 直播 MediaMTX ----------------
+# 业务后端与 MediaMTX 共用的内部令牌（至少 32 字节随机值），两边必须一致：
+#   - 后端经 systemd EnvironmentFile(/opt/pdk/.env) 读取
+#   - MediaMTX 容器经 docker-compose / event-hook.sh 读取
+# 本地开发用 Windows 用户环境变量同名配置（setx），不要写进 application.yml 默认值
+PDK_MEDIAMTX_INTERNAL_SERVICE_TOKEN=""
