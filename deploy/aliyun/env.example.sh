@@ -39,4 +39,5 @@ SKIP_PREPARE="no"
 #   - 后端经 systemd EnvironmentFile(/opt/pdk/.env) 读取
 #   - MediaMTX 容器经 docker-compose / event-hook.sh 读取
 # 本地开发用 Windows 用户环境变量同名配置（setx），不要写进 application.yml 默认值
+# 服务器部署无需手动填写：02-init-infra.sh 检测到 .env 缺失时会自动 openssl rand -hex 32 生成
 PDK_MEDIAMTX_INTERNAL_SERVICE_TOKEN=""

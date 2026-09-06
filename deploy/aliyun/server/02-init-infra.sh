@@ -77,6 +77,9 @@ SPRING_DATA_REDIS_DATABASE=0
 # ---- 业务安全（生产随机值，切勿使用默认值）----
 PDK_ADMIN_PASSWORD_PEPPER=$(rand_hex)
 PDK_FP_SALT=$(rand_hex)
+
+# ---- 直播 MediaMTX：业务后端与 MediaMTX 共用的内部令牌（至少 32 字节随机）----
+PDK_MEDIAMTX_INTERNAL_SERVICE_TOKEN=$(rand_hex)
 PDK_ENABLED_BIZ_CODES=PDD,ZHIBO
 
 # ---- 日志字符集：application.yml 里写死了 GBK，Linux 必须覆盖为 UTF-8 ----
@@ -102,6 +105,18 @@ JAVA_OPTS="-Xms192m -Xmx${JAVA_XMX:-448m} -XX:MaxMetaspaceSize=128m -XX:+UseG1GC
 EOF
   chmod 600 "${ENV_FILE}"
   log ".env 生成完毕（权限 600）"
+fi
+
+# ---- 幂等补齐：历史 .env 没有 MediaMTX 令牌时自动生成追加（已存在则不动）----
+if [[ -z "${PDK_MEDIAMTX_INTERNAL_SERVICE_TOKEN:-}" ]]; then
+  PDK_MEDIAMTX_INTERNAL_SERVICE_TOKEN=$(rand_hex)
+  {
+    echo ""
+    echo "# ---- 直播 MediaMTX 共享令牌（缺失时由脚本自动生成）----"
+    echo "PDK_MEDIAMTX_INTERNAL_SERVICE_TOKEN=${PDK_MEDIAMTX_INTERNAL_SERVICE_TOKEN}"
+  } >> "${ENV_FILE}"
+  chmod 600 "${ENV_FILE}"
+  log ".env 缺少 PDK_MEDIAMTX_INTERNAL_SERVICE_TOKEN，已自动生成并追加"
 fi
 
 # shellcheck disable=SC1090
