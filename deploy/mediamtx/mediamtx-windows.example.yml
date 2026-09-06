@@ -382,12 +382,16 @@ pathDefaults:
   # * RTSP_PORT: RTSP server port
   # * G1, G2, ...: regular expression groups, if path name is
   #   a regular expression.
-  runOnReady: curl.exe -fsS -X POST "http://127.0.0.1:8080/api/v1/internal/mediamtx/events/available?serviceToken=__PDK_MEDIAMTX_TOKEN__&nodeCode=mediamtx-local&path=%MTX_PATH%&sourceId=%MTX_SOURCE_ID%"
+  # Windows: hook via cmd.exe /c "...\event-hook.bat" so cmd expands %MTX_*%.
+  # Writing curl.exe directly would NOT expand them (MediaMTX CreateProcess does
+  # not go through a shell), causing backend to receive literal %MTX_PATH% and
+  # respond with MissingServletRequestParameterException (HTTP 500).
+  runOnReady: cmd.exe /c "E:\pdk\deploy\mediamtx\event-hook.bat" available
   # Restart the command if it exits.
   runOnReadyRestart: no
   # Command to run when the stream is not available anymore.
   # Environment variables are the same of runOnReady.
-  runOnNotReady: curl.exe -fsS -X POST "http://127.0.0.1:8080/api/v1/internal/mediamtx/events/unavailable?serviceToken=__PDK_MEDIAMTX_TOKEN__&nodeCode=mediamtx-local&path=%MTX_PATH%&sourceId=%MTX_SOURCE_ID%"
+  runOnNotReady: cmd.exe /c "E:\pdk\deploy\mediamtx\event-hook.bat" unavailable
 
   # Command to run when a client starts reading.
   # This is terminated with SIGINT when a client stops reading.
@@ -399,12 +403,12 @@ pathDefaults:
   # * RTSP_PORT: RTSP server port
   # * G1, G2, ...: regular expression groups, if path name is
   #   a regular expression.
-  runOnRead: curl.exe -fsS -X POST "http://127.0.0.1:8080/api/v1/internal/mediamtx/events/read?serviceToken=__PDK_MEDIAMTX_TOKEN__&nodeCode=mediamtx-local&path=%MTX_PATH%&readerId=%MTX_READER_ID%&readerType=%MTX_READER_TYPE%"
+  runOnRead: cmd.exe /c "E:\pdk\deploy\mediamtx\event-hook.bat" read
   # Restart the command if it exits.
   runOnReadRestart: no
   # Command to run when a client stops reading.
   # Environment variables are the same of runOnRead.
-  runOnUnread: curl.exe -fsS -X POST "http://127.0.0.1:8080/api/v1/internal/mediamtx/events/unread?serviceToken=__PDK_MEDIAMTX_TOKEN__&nodeCode=mediamtx-local&path=%MTX_PATH%&readerId=%MTX_READER_ID%"
+  runOnUnread: cmd.exe /c "E:\pdk\deploy\mediamtx\event-hook.bat" unread
 
   # Command to run when a recording segment is created.
   # The following environment variables are available:
