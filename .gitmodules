@@ -1,3 +1,4 @@
 [submodule "obs-plugin-zhibo-live/deps/obs-studio-headers"]
 	path = obs-plugin-zhibo-live/deps/obs-studio-headers
 	url = https://github.com/obsproject/obs-studio.git
+	ignore = untracked
