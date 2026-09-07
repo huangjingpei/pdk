@@ -33,11 +33,24 @@ public class ZhiboLiveClientController {
     }
 
     @GetMapping("/streams/current")
-    public CommonResult<List<LiveStreamSessionVO>> current(HttpServletRequest request) {
+    public CommonResult<List<LiveStreamSessionVO>> current(
+            @RequestParam(value = "scope", required = false) String scope,
+            HttpServletRequest request) {
         BusinessContext business = BusinessRequestResolver.context(request);
         LiveStreamSessionService.requireLiveBusiness(business);
         User user = requireUser(request);
-        return CommonResult.success(streamService.listOwnedLicense(business.bizId(), user.getId(), requireLicense(request).getId()));
+        DeviceLicense license = requireLicense(request);
+
+        List<LiveStreamSessionVO> list = streamService.listOwnedLicense(business.bizId(), user.getId(), license.getId());
+        boolean hasActive = list.stream().anyMatch(s -> "LIVE".equalsIgnoreCase(s.status())
+                || "AUTHORIZED".equalsIgnoreCase(s.status()) || "ISSUED".equalsIgnoreCase(s.status()));
+        if (!hasActive || "account".equalsIgnoreCase(scope) || "user".equalsIgnoreCase(scope)) {
+            List<LiveStreamSessionVO> accountList = streamService.listOwned(business.bizId(), user.getId());
+            if (!accountList.isEmpty()) {
+                list = accountList;
+            }
+        }
+        return CommonResult.success(list);
     }
 
     @PostMapping("/streams/{sessionNo}/stop")
