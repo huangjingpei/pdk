@@ -1,0 +1,13 @@
+﻿build/
+*.user
+*.suo
+.vs/
+.cache/
+bin/
+
+# 父仓库根 .gitignore 有 assets/（忽略主项目营销图），会误伤本插件的本地化资源
+!assets/
+!assets/**
+
+# 链接生成的导出文件（中间产物），构建需要的是 .lib + .def
+*.exp
