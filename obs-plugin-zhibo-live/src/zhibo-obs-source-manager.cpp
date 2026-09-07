@@ -96,6 +96,11 @@ void ZhiboObsSourceManager::set_active_stream(const std::string &rtmp_url) {
         }
         obs_source_release(source);
     }
+
+    // 自动挂载去重变异滤镜
+    if (ZhiboConfig::instance().is_channel_variant_enabled()) {
+        sync_channel_variant_filters(true);
+    }
 }
 
 void ZhiboObsSourceManager::clear_active_stream() {
@@ -167,6 +172,54 @@ bool ZhiboObsSourceManager::is_stream_active() {
     }
 
     return is_streaming_;
+}
+
+void ZhiboObsSourceManager::sync_channel_variant_filters(bool enable) {
+    std::string source_name = ZhiboConfig::instance().get_source_name();
+    if (source_name.empty()) source_name = "智播拉流源";
+
+    obs_source_t *source = obs_get_source_by_name(source_name.c_str());
+    if (!source) return;
+
+    const char *v_filter_name = "智播渠道去重-画面微调";
+    const char *a_filter_name = "智播渠道去重-音频微调";
+
+    if (enable) {
+        obs_source_t *vf = obs_source_get_filter_by_name(source, v_filter_name);
+        if (!vf) {
+            vf = obs_source_create("zhibo_video_variant_filter", v_filter_name, nullptr, nullptr);
+            if (vf) {
+                obs_source_filter_add(source, vf);
+                blog(LOG_INFO, "[ZhiboLive] 成功为拉流源 [%s] 挂载视频去重变异滤镜", source_name.c_str());
+            }
+        }
+        if (vf) obs_source_release(vf);
+
+        obs_source_t *af = obs_source_get_filter_by_name(source, a_filter_name);
+        if (!af) {
+            af = obs_source_create("zhibo_audio_variant_filter", a_filter_name, nullptr, nullptr);
+            if (af) {
+                obs_source_filter_add(source, af);
+                blog(LOG_INFO, "[ZhiboLive] 成功为拉流源 [%s] 挂载音频去重变异滤镜", source_name.c_str());
+            }
+        }
+        if (af) obs_source_release(af);
+    } else {
+        obs_source_t *vf = obs_source_get_filter_by_name(source, v_filter_name);
+        if (vf) {
+            obs_source_filter_remove(source, vf);
+            obs_source_release(vf);
+            blog(LOG_INFO, "[ZhiboLive] 已从拉流源 [%s] 移除视频去重变异滤镜", source_name.c_str());
+        }
+        obs_source_t *af = obs_source_get_filter_by_name(source, a_filter_name);
+        if (af) {
+            obs_source_filter_remove(source, af);
+            obs_source_release(af);
+            blog(LOG_INFO, "[ZhiboLive] 已从拉流源 [%s] 移除音频去重变异滤镜", source_name.c_str());
+        }
+    }
+
+    obs_source_release(source);
 }
 
 } // namespace zhibo

@@ -75,6 +75,13 @@ public:
     std::string get_source_name() const;
     void set_source_name(const std::string &name);
 
+    // 渠道去重变异 (Channel Variant)
+    bool is_channel_variant_enabled() const;
+    void set_channel_variant_enabled(bool enabled);
+
+    uint32_t get_channel_variant_seed() const;
+    void set_channel_variant_seed(uint32_t seed);
+
     bool is_configured() const;
     bool is_activated() const;
 
@@ -87,9 +94,15 @@ private:
     std::string get_config_file_path() const;
 
     mutable std::mutex mutex_;
+#if defined(PDK_RELEASE_BUILD) || defined(NDEBUG)
     PdkEnv env_ = PdkEnv::PRODUCTION;
     std::string server_url_ = PROD_SERVER_URL;
     std::string rtmp_base_url_ = PROD_RTMP_BASE_URL;
+#else
+    PdkEnv env_ = PdkEnv::LOCAL_DEBUG;
+    std::string server_url_ = LOCAL_SERVER_URL;
+    std::string rtmp_base_url_ = LOCAL_RTMP_BASE_URL;
+#endif
     int app_id_ = 3;
 
     std::string phone_;
@@ -107,6 +120,9 @@ private:
     bool auto_pull_ = true;
     int poll_interval_sec_ = 5;
     std::string source_name_ = "智播拉流源";
+
+    bool channel_variant_enabled_ = true;
+    uint32_t channel_variant_seed_ = 0;
 };
 
 } // namespace zhibo

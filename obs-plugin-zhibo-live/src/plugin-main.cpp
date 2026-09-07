@@ -8,6 +8,8 @@
 #include "zhibo-stream-poller.hpp"
 #include "zhibo-obs-source-manager.hpp"
 #include "ui/activation-dialog.hpp"
+#include "filters/video-variant-filter.hpp"
+#include "filters/audio-variant-filter.hpp"
 
 OBS_DECLARE_MODULE()
 OBS_MODULE_USE_DEFAULT_LOCALE("obs-zhibo-live", "zh-CN")
@@ -30,11 +32,23 @@ void on_tools_menu_clicked(void *private_data) {
 void on_frontend_event(enum obs_frontend_event event, void *private_data) {
     Q_UNUSED(private_data);
 
+    if (event == OBS_FRONTEND_EVENT_SCENE_CHANGED) {
+        if (zhibo::ZhiboConfig::instance().is_channel_variant_enabled()) {
+            zhibo::ZhiboObsSourceManager::instance().sync_channel_variant_filters(true);
+        }
+        return;
+    }
+
     if (event == OBS_FRONTEND_EVENT_FINISHED_LOADING) {
         blog(LOG_INFO, "[ZhiboLive] OBS 启动加载完成，开始执行智播云控插件初始化与激活检测");
 
         auto &cfg = zhibo::ZhiboConfig::instance();
         auto &auth = zhibo::ZhiboAuthClient::instance();
+
+        // 自动同步拉流源去重变异滤镜
+        if (cfg.is_channel_variant_enabled()) {
+            zhibo::ZhiboObsSourceManager::instance().sync_channel_variant_filters(true);
+        }
 
         // 1. 若本地完全没有配置手机号和密码，直接弹出激活窗口
         if (!cfg.is_configured()) {
@@ -72,11 +86,25 @@ void on_frontend_event(enum obs_frontend_event event, void *private_data) {
 } // namespace
 
 bool obs_module_load(void) {
-    blog(LOG_INFO, "[ZhiboLive] 正在加载 PDK 智播云控插件 (obs-zhibo-live v1.0.0)");
+    uint32_t ver = obs_get_version();
+    uint8_t major = (uint8_t)(ver >> 24);
+    uint8_t minor = (uint8_t)(ver >> 16);
+    blog(LOG_INFO, "[ZhiboLive] 正在加载 PDK 智播云控插件 (obs-zhibo-live v1.0.0, 宿主 OBS: v%u.%u / %s)",
+         major, minor, obs_get_version_string());
+
+    // 运行环境与版本兼容守卫：本插件采用 Qt6 开发，必须运行在 OBS 28+ 环境中 (推荐 OBS 29/30+)
+    if (major < 28) {
+        blog(LOG_ERROR, "[ZhiboLive] 宿主 OBS 版本过低 (v%u.%u)，插件需要 OBS 29.0 或更高版本以支持 Qt6 界面", major, minor);
+        return false;
+    }
 
     // 预热配置与生成设备标识
     zhibo::ZhiboConfig::instance().load();
     zhibo::ZhiboAuthClient::instance().get_or_create_device_id();
+
+    // 注册渠道变异去重音视频滤镜 (支持作为独立滤镜添加或拉流源自动挂载)
+    obs_register_source(&zhibo_video_variant_filter_info);
+    obs_register_source(&zhibo_audio_variant_filter_info);
 
     // 注册 OBS 前端事件监听
     obs_frontend_add_event_callback(on_frontend_event, nullptr);

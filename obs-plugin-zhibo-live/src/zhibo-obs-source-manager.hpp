@@ -24,6 +24,9 @@ public:
     // 检查 OBS 内部当前拉流源是否正在正常活跃拉流播放中
     bool is_stream_active();
 
+    // 挂载或同步渠道去重滤镜
+    void sync_channel_variant_filters(bool enable);
+
 private:
     ZhiboObsSourceManager();
     ~ZhiboObsSourceManager() = default;

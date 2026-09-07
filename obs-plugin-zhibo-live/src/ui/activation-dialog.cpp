@@ -95,8 +95,8 @@ void ActivationDialog::init_ui() {
     form_auth->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
     form_auth->setSpacing(10);
 
-    local_env_check_ = new QCheckBox(tr("使用本地联调环境 (127.0.0.1:8080)"));
-    form_auth->addRow(tr("环境设置:"), local_env_check_);
+    env_label_ = new QLabel(this);
+    form_auth->addRow(tr("当前环境:"), env_label_);
 
     phone_edit_ = new QLineEdit();
     phone_edit_->setPlaceholderText(tr("请输入注册手机号"));
@@ -146,9 +146,12 @@ void ActivationDialog::init_ui() {
     main_layout->addLayout(cards_layout);
 
     // 3. 运行选项
+    QHBoxLayout *options_layout = new QHBoxLayout();
     auto_pull_check_ = new QCheckBox(tr("探测到活动直播时自动接入 OBS 场景 (智播拉流源)"), this);
-    auto_pull_check_->setChecked(true);
-    main_layout->addWidget(auto_pull_check_);
+    channel_variant_check_ = new QCheckBox(tr("启用渠道去重变异 (画面微裁色温 + 自然音频微扰防重)"), this);
+    options_layout->addWidget(auto_pull_check_);
+    options_layout->addWidget(channel_variant_check_);
+    main_layout->addLayout(options_layout);
 
     // 4. 底部消息提示
     message_label_ = new QLabel();
@@ -175,13 +178,20 @@ void ActivationDialog::init_ui() {
 
 void ActivationDialog::load_config_to_ui() {
     auto &cfg = ZhiboConfig::instance();
-    local_env_check_->setChecked(cfg.get_environment() == PdkEnv::LOCAL_DEBUG);
+    if (cfg.get_environment() == PdkEnv::PRODUCTION) {
+        env_label_->setText(tr("生产环境 (Release · pdk.graddu.com)"));
+        env_label_->setStyleSheet("color: #52c41a; font-weight: bold; font-size: 11px;");
+    } else {
+        env_label_->setText(tr("本地调试 (Debug · 127.0.0.1:8080)"));
+        env_label_->setStyleSheet("color: #faad14; font-weight: bold; font-size: 11px;");
+    }
 
     phone_edit_->setText(QString::fromStdString(cfg.get_phone()));
     password_edit_->setText(QString::fromStdString(cfg.get_password()));
     card_key_edit_->setText(QString::fromStdString(cfg.get_card_key()));
     device_id_label_->setText(QString::fromStdString(ZhiboAuthClient::instance().get_or_create_device_id()));
     auto_pull_check_->setChecked(cfg.is_auto_pull());
+    channel_variant_check_->setChecked(cfg.is_channel_variant_enabled());
 }
 
 void ActivationDialog::update_status_ui() {
@@ -219,8 +229,6 @@ void ActivationDialog::update_status_ui() {
 
 void ActivationDialog::on_activate_clicked() {
     auto &cfg = ZhiboConfig::instance();
-    PdkEnv env = local_env_check_->isChecked() ? PdkEnv::LOCAL_DEBUG : PdkEnv::PRODUCTION;
-    cfg.set_environment(env);
 
     QString phone = phone_edit_->text().trimmed();
     QString password = password_edit_->text().trimmed();
@@ -236,7 +244,10 @@ void ActivationDialog::on_activate_clicked() {
     cfg.set_password(password.toStdString());
     cfg.set_card_key(card_key.toStdString());
     cfg.set_auto_pull(auto_pull_check_->isChecked());
+    cfg.set_channel_variant_enabled(channel_variant_check_->isChecked());
     cfg.save();
+
+    ZhiboObsSourceManager::instance().sync_channel_variant_filters(channel_variant_check_->isChecked());
 
     message_label_->setText(tr("正在连接 PDK 服务端验证与激活..."));
     message_label_->setStyleSheet("color: #1890ff;");

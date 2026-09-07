@@ -80,6 +80,10 @@ set(PLUGIN_SOURCES
     src/zhibo-obs-source-manager.cpp
     src/ui/activation-dialog.hpp
     src/ui/activation-dialog.cpp
+    src/filters/video-variant-filter.hpp
+    src/filters/video-variant-filter.cpp
+    src/filters/audio-variant-filter.hpp
+    src/filters/audio-variant-filter.cpp
     src/utils/http-client.hpp
     src/utils/http-client.cpp
     src/utils/pdk-crypto.hpp
@@ -116,6 +120,13 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
 if(MSVC)
     target_compile_options(${PROJECT_NAME} PRIVATE /utf-8)
 endif()
+
+target_compile_definitions(${PROJECT_NAME} PRIVATE
+    $<$<CONFIG:Release>:PDK_RELEASE_BUILD>
+    $<$<CONFIG:RelWithDebInfo>:PDK_RELEASE_BUILD>
+    $<$<CONFIG:MinSizeRel>:PDK_RELEASE_BUILD>
+    $<$<CONFIG:Debug>:PDK_DEBUG_BUILD>
+)
 
 # 目标输出格式设定 (Windows DLL 前缀置空以符合 OBS 命名规范)
 set_target_properties(${PROJECT_NAME} PROPERTIES

@@ -24,8 +24,8 @@ private:
     void init_ui();
     void load_config_to_ui();
 
-    // 运行环境选项
-    QCheckBox *local_env_check_ = nullptr;
+    // 运行环境状态 (依据编译版本 Release/Debug 宏约定自动确定)
+    QLabel *env_label_ = nullptr;
 
     // 账号与设备凭据
     QLineEdit *phone_edit_ = nullptr;
@@ -41,6 +41,7 @@ private:
 
     // 运行选项
     QCheckBox *auto_pull_check_ = nullptr;
+    QCheckBox *channel_variant_check_ = nullptr;
 
     // 底部提示与操作按钮
     QLabel *message_label_ = nullptr;

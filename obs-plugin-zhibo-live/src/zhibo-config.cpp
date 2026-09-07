@@ -36,15 +36,24 @@ std::string ZhiboConfig::get_config_file_path() const {
 void ZhiboConfig::load() {
     std::lock_guard<std::mutex> lock(mutex_);
 
-    // 1. 优先检查环境变量 PDK_BASE_URL
+    // 编译版本约定判定：如果是 Release 版本，则为生产环境 (PRODUCTION)；否则为本地调试环境 (LOCAL_DEBUG)
+#if defined(PDK_RELEASE_BUILD) || defined(NDEBUG)
+    env_ = PdkEnv::PRODUCTION;
+    server_url_ = PROD_SERVER_URL;
+    rtmp_base_url_ = PROD_RTMP_BASE_URL;
+#else
+    env_ = PdkEnv::LOCAL_DEBUG;
+    server_url_ = LOCAL_SERVER_URL;
+    rtmp_base_url_ = LOCAL_RTMP_BASE_URL;
+#endif
+
+    // 优先检查系统环境变量 PDK_BASE_URL (仅供特殊情况下通过系统环境变量手动临时覆盖)
     char *env_base = nullptr;
     size_t env_len = 0;
-    bool has_env = false;
     if (_dupenv_s(&env_base, &env_len, "PDK_BASE_URL") == 0 && env_base != nullptr) {
         std::string env_url(env_base);
         free(env_base);
         if (!env_url.empty()) {
-            has_env = true;
             if (env_url.find("127.0.0.1") != std::string::npos || env_url.find("localhost") != std::string::npos) {
                 env_ = PdkEnv::LOCAL_DEBUG;
                 server_url_ = env_url;
@@ -69,32 +78,6 @@ void ZhiboConfig::load() {
         json j;
         file >> j;
 
-        if (!has_env) {
-            if (j.contains("environment")) {
-                std::string env_str = j["environment"].get<std::string>();
-                if (env_str == "local") {
-                    env_ = PdkEnv::LOCAL_DEBUG;
-                    server_url_ = LOCAL_SERVER_URL;
-                    rtmp_base_url_ = LOCAL_RTMP_BASE_URL;
-                } else {
-                    env_ = PdkEnv::PRODUCTION;
-                    server_url_ = PROD_SERVER_URL;
-                    rtmp_base_url_ = PROD_RTMP_BASE_URL;
-                }
-            } else if (j.contains("server_url")) {
-                std::string s_url = j["server_url"].get<std::string>();
-                if (s_url.find("127.0.0.1") != std::string::npos || s_url.find("localhost") != std::string::npos) {
-                    env_ = PdkEnv::LOCAL_DEBUG;
-                    server_url_ = LOCAL_SERVER_URL;
-                    rtmp_base_url_ = LOCAL_RTMP_BASE_URL;
-                } else {
-                    env_ = PdkEnv::PRODUCTION;
-                    server_url_ = PROD_SERVER_URL;
-                    rtmp_base_url_ = PROD_RTMP_BASE_URL;
-                }
-            }
-        }
-
         if (j.contains("app_id")) app_id_ = j["app_id"].get<int>();
         if (j.contains("phone")) phone_ = j["phone"].get<std::string>();
         if (j.contains("password")) password_ = j["password"].get<std::string>();
@@ -108,6 +91,8 @@ void ZhiboConfig::load() {
         if (j.contains("auto_pull")) auto_pull_ = j["auto_pull"].get<bool>();
         if (j.contains("poll_interval_sec")) poll_interval_sec_ = j["poll_interval_sec"].get<int>();
         if (j.contains("source_name")) source_name_ = j["source_name"].get<std::string>();
+        if (j.contains("channel_variant_enabled")) channel_variant_enabled_ = j["channel_variant_enabled"].get<bool>();
+        if (j.contains("channel_variant_seed")) channel_variant_seed_ = j["channel_variant_seed"].get<uint32_t>();
     } catch (const std::exception &e) {
         std::cerr << "[ZhiboConfig] 加载配置失败: " << e.what() << std::endl;
     }
@@ -135,6 +120,8 @@ void ZhiboConfig::save() {
         j["auto_pull"] = auto_pull_;
         j["poll_interval_sec"] = poll_interval_sec_;
         j["source_name"] = source_name_;
+        j["channel_variant_enabled"] = channel_variant_enabled_;
+        j["channel_variant_seed"] = channel_variant_seed_;
 
         std::ofstream file(path);
         if (file.is_open()) {
@@ -304,6 +291,26 @@ std::string ZhiboConfig::get_source_name() const {
 void ZhiboConfig::set_source_name(const std::string &name) {
     std::lock_guard<std::mutex> lock(mutex_);
     source_name_ = name;
+}
+
+bool ZhiboConfig::is_channel_variant_enabled() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return channel_variant_enabled_;
+}
+
+void ZhiboConfig::set_channel_variant_enabled(bool enabled) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    channel_variant_enabled_ = enabled;
+}
+
+uint32_t ZhiboConfig::get_channel_variant_seed() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return channel_variant_seed_;
+}
+
+void ZhiboConfig::set_channel_variant_seed(uint32_t seed) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    channel_variant_seed_ = seed;
 }
 
 bool ZhiboConfig::is_configured() const {
