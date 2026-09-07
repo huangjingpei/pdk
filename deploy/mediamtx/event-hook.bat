@@ -45,7 +45,9 @@ if "%TOKEN%"=="" (
 if "%PDK_MEDIAMTX_NODE_CODE%"=="" (set "NODE=mediamtx-local") else (set "NODE=%PDK_MEDIAMTX_NODE_CODE%")
 if "%PDK_MEDIAMTX_BACKEND_BASE_URL%"=="" (set "BASE_URL=http://127.0.0.1:8080") else (set "BASE_URL=%PDK_MEDIAMTX_BACKEND_BASE_URL%")
 
-set "URL=%BASE_URL%/api/v1/internal/mediamtx/events/%EVENT%?serviceToken=%TOKEN%&nodeCode=%NODE%"
+rem path is REQUIRED by the backend for all four events; missing it triggers
+rem MissingServletRequestParameterException (HTTP 500, code 50000).
+set "URL=%BASE_URL%/api/v1/internal/mediamtx/events/%EVENT%?serviceToken=%TOKEN%&nodeCode=%NODE%&path=%MTX_PATH%"
 
 rem available / unavailable carry sourceId; read carries readerId+readerType; unread carries readerId
 set "EXTRA="

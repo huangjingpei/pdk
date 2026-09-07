@@ -8,6 +8,7 @@ import org.springframework.validation.BindException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
@@ -49,6 +50,15 @@ public class GlobalExceptionHandler {
     public CommonResult<Void> handleNoResource(NoResourceFoundException e, HttpServletRequest request) {
         log.warn("资源不存在 [{}]", request.getRequestURI());
         return CommonResult.failed(40400, "请求的资源不存在");
+    }
+
+    @ExceptionHandler(MissingServletRequestParameterException.class)
+    public CommonResult<Void> handleMissingParam(MissingServletRequestParameterException e, HttpServletRequest request) {
+        String qs = request.getQueryString();
+        String masked = qs == null || qs.isEmpty() ? "(no query string)" : qs.replaceAll("serviceToken=[^&]*", "serviceToken=***");
+        log.warn("缺少必需参数 [{}] [{} {}] 实际收到 query=[{}] —— 常见原因：MediaMTX 钩子未展开环境变量或 URL 被截断",
+                e.getParameterName(), request.getMethod(), request.getRequestURI(), masked);
+        return CommonResult.failed(40002, "缺少必需参数: " + e.getParameterName());
     }
 
     @ExceptionHandler(Exception.class)

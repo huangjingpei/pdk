@@ -2,10 +2,12 @@ package com.pdk.business.zhibo.live.controller;
 
 import com.pdk.business.zhibo.live.service.MediaMtxEventService;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+@Slf4j
 @RestController
 @RequestMapping("/api/v1/internal/mediamtx/events")
 @RequiredArgsConstructor
@@ -48,9 +50,15 @@ public class MediaMtxEventController {
 
     private ResponseEntity<Void> event(String type, String serviceToken, String nodeCode, String path,
                                        String sourceId, String readerId, String readerType, String clientIp) {
+        log.info("[mtx-event] type={} nodeCode={} path={} sourceId={} readerId={} readerType={} clientIp={} tokenPresent={}",
+                type, nodeCode, path, sourceId, readerId, readerType, clientIp,
+                serviceToken != null && !serviceToken.isBlank());
         boolean trusted = nodeCode == null || nodeCode.isBlank()
                 ? eventService.trusted(serviceToken) : eventService.trusted(serviceToken, nodeCode);
-        if (!trusted) return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+        if (!trusted) {
+            log.warn("[mtx-event] type={} 鉴权失败（serviceToken 或 nodeCode 无效）", type);
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+        }
         try {
             boolean accepted = switch (type) {
                 case "available" -> nodeCode == null || nodeCode.isBlank()
@@ -61,8 +69,11 @@ public class MediaMtxEventController {
                 case "unread" -> eventService.unread(nodeCode, path, readerId);
                 default -> false;
             };
+            log.info("[mtx-event] type={} path={} result={} ({})", type, path, accepted ? "ACCEPTED" : "REJECTED",
+                    accepted ? "会话状态已更新" : "业务冲突（会话/路径不存在或状态不允许）");
             return ResponseEntity.status(accepted ? HttpStatus.NO_CONTENT : HttpStatus.CONFLICT).build();
-        } catch (RuntimeException ignored) {
+        } catch (RuntimeException e) {
+            log.warn("[mtx-event] type={} path={} 业务异常: {}", type, path, e.getMessage());
             // MediaMTX hook 只依赖 HTTP 状态；内部接口不得被全局 CommonResult 包装成 HTTP 200。
             return ResponseEntity.status(HttpStatus.CONFLICT).build();
         }

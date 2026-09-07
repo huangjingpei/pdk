@@ -40,6 +40,10 @@ if (-not $token) {
 # 当前进程也设置一份，保证后端/校验脚本同会话可见
 $env:PDK_MEDIAMTX_INTERNAL_SERVICE_TOKEN = $token
 
+# 开启钩子调试日志（event-hook.bat 每次触发会记录事件与参数，不含 token；与后端 [mtx-trace] 日志对照用）
+$env:PDK_MEDIAMTX_HOOK_DEBUG = '1'
+$env:PDK_MEDIAMTX_HOOK_LOG = Join-Path $confDir 'hook.log'
+
 # ---------- 2. 渲染配置 ----------
 if (-not (Test-Path $confDir)) { New-Item -ItemType Directory -Path $confDir -Force | Out-Null }
 if (Test-Path $conf) {
@@ -65,5 +69,6 @@ if ($running) {
 
 Write-Host ""
 Write-Host "端口：RTMP 1935 / HLS 8888 / API 9997 / metrics 9998（见 $conf）"
+Write-Host "钩子调试日志：$confDir\hook.log（与后端 [mtx-trace] 日志对照排查推流事件）"
 Write-Host "推流自检：ffmpeg -re -i test.mp4 -c copy -f flv `"rtmp://127.0.0.1:1935/<path>?token=<ticket>`""
 Write-Host "注意：本机未检测到 ffmpeg 时需先安装（winget install Gyan.FFmpeg 或用 OBS 推流）"
