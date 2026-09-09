@@ -1,0 +1,27 @@
+# ============================================================================
+# MediaMTX 独立容器化部署 (适用于 43.248.187.207)
+# ============================================================================
+services:
+  mediamtx:
+    image: bluenviron/mediamtx:1.11.3
+    container_name: zlive-mediamtx
+    restart: unless-stopped
+    environment:
+      MTX_AUTHHTTPADDRESS: ${PDK_BACKEND_PUBLIC_BASE_URL:-https://pdk.graddu.com}/api/v1/internal/mediamtx/auth?serviceToken=${PDK_MEDIAMTX_INTERNAL_SERVICE_TOKEN:?set_token}&nodeCode=${PDK_MEDIAMTX_NODE_CODE:-mediamtx-remote-1}
+      PDK_MEDIAMTX_EVENT_BASE_URL: ${PDK_BACKEND_PUBLIC_BASE_URL:-https://pdk.graddu.com}/api/v1/internal/mediamtx/events
+      PDK_MEDIAMTX_INTERNAL_SERVICE_TOKEN: ${PDK_MEDIAMTX_INTERNAL_SERVICE_TOKEN:?set_token}
+      PDK_MEDIAMTX_NODE_CODE: ${PDK_MEDIAMTX_NODE_CODE:-mediamtx-remote-1}
+      TZ: Asia/Shanghai
+    ports:
+      - "1935:1935"   # RTMP 推流与拉流 (公网)
+      - "8888:8888"   # HLS 流媒体播放 (公网)
+      - "9997:9997"   # Control API (供 121.43.150.109 采集与管理)
+      - "9998:9998"   # Metrics 指标
+    volumes:
+      - ./mediamtx.yml:/mediamtx.yml:ro
+      - ./event-hook.sh:/usr/local/bin/pdk-mediamtx-event:ro
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:9997/v3/config/global/get"]
+      interval: 10s
+      timeout: 5s
+      retries: 5

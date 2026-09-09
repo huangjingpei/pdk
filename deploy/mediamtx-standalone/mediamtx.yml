@@ -1,0 +1,36 @@
+logLevel: info
+logDestinations: [stdout]
+
+authMethod: http
+authHTTPAddress: https://pdk.graddu.com/api/v1/internal/mediamtx/auth?serviceToken=9f1ec0172d87a106fd26e031e6f79c2e5350bc004d5c9dd485bf2857026b4d3d&nodeCode=mediamtx-remote-1
+
+authHTTPExclude:
+  - action: api
+  - action: metrics
+  - action: pprof
+
+api: yes
+apiAddress: :9997
+
+metrics: yes
+metricsAddress: :9998
+
+rtsp: no
+rtmp: yes
+rtmpAddress: :1935
+
+hls: yes
+hlsAddress: :8888
+
+webrtc: no
+srt: no
+
+pathDefaults:
+  overridePublisher: no
+  runOnReady: /bin/sh /usr/local/bin/pdk-mediamtx-event available
+  runOnNotReady: /bin/sh /usr/local/bin/pdk-mediamtx-event unavailable
+  runOnRead: /bin/sh /usr/local/bin/pdk-mediamtx-event read
+  runOnUnread: /bin/sh /usr/local/bin/pdk-mediamtx-event unread
+
+paths:
+  "~^zhibo-live/ls_[A-Za-z0-9]{16,64}$": {}
