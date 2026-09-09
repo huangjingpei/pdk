@@ -90,6 +90,56 @@ if [[ "${DO_MIGRATE}" == "yes" ]]; then
   fi
 fi
 
+# ---------------------------------------------------------------- 流媒体节点同步 (MediaMTX 物理分离)
+if [[ -n "${PDK_MEDIAMTX_HOST:-}" ]]; then
+  log "同步独立流媒体节点配置 (Host: ${PDK_MEDIAMTX_HOST}) ..."
+  NODE_CODE="${PDK_MEDIAMTX_NODE_CODE:-mediamtx-remote-1}"
+  NODE_NAME="${PDK_MEDIAMTX_NODE_NAME:-专网流媒体节点 (${PDK_MEDIAMTX_HOST})}"
+  PUB_RTMP="${PDK_MEDIAMTX_PUBLIC_RTMP:-rtmp://${PDK_MEDIAMTX_HOST}:1935}"
+  PUB_HLS="${PDK_MEDIAMTX_PUBLIC_HLS:-http://${PDK_MEDIAMTX_HOST}:8888}"
+  INT_API="${PDK_MEDIAMTX_INTERNAL_API:-http://${PDK_MEDIAMTX_HOST}:9997}"
+  INT_METRICS="${PDK_MEDIAMTX_INTERNAL_METRICS:-}"
+
+  # 更新 /opt/pdk/.env 中的环境变量，保证应用运行时与节点配置一致
+  if [[ -f "${PDK_ROOT}/.env" ]]; then
+    for item in "PDK_MEDIAMTX_PUBLIC_RTMP_BASE_URL=${PUB_RTMP}" \
+                "PDK_MEDIAMTX_CONTROL_BASE_URL=${INT_API}" \
+                "PDK_MEDIAMTX_NODE_CODE=${NODE_CODE}"; do
+      k="${item%%=*}"; v="${item#*=}"
+      if grep -q "^${k}=" "${PDK_ROOT}/.env"; then
+        sed -i "s|^${k}=.*|${k}=${v}|" "${PDK_ROOT}/.env"
+      else
+        echo "${k}=${v}" >> "${PDK_ROOT}/.env"
+      fi
+    done
+  fi
+
+  # 同步到数据库 pdk_media_server_node
+  DB_NAME="${PDK_DB_NAME:-pdk_biz_db}"
+  if [[ -n "${DB_PASS:-}" ]]; then
+    mysql -u"${DB_USER:-pdk}" -p"${DB_PASS}" "${DB_NAME}" 2>/dev/null <<SQL || warn "流媒体节点同步到数据库失败"
+      UPDATE pdk_media_server_node SET status = 'DISABLED' WHERE node_code = 'mediamtx-local';
+      INSERT INTO pdk_media_server_node
+        (biz_id, node_code, node_name, provider_type, region_code,
+         public_publish_base_url, public_hls_base_url, internal_api_base_url, internal_metrics_url,
+         secret_ref, supported_publish_protocols, supported_play_protocols, weight,
+         max_publishers, max_readers, status, health_status)
+      VALUES
+        (3, '${NODE_CODE}', '${NODE_NAME}', 'MEDIAMTX', 'CN_EAST',
+         '${PUB_RTMP}', '${PUB_HLS}', '${INT_API}', NULLIF('${INT_METRICS}', ''),
+         'application', 'RTMP', 'RTMP,HLS', 100, 100, 1000, 'ACTIVE', 'UNKNOWN')
+      ON DUPLICATE KEY UPDATE
+        node_name = VALUES(node_name),
+        public_publish_base_url = VALUES(public_publish_base_url),
+        public_hls_base_url = VALUES(public_hls_base_url),
+        internal_api_base_url = VALUES(internal_api_base_url),
+        internal_metrics_url = VALUES(internal_metrics_url),
+        status = 'ACTIVE';
+SQL
+    log "独立流媒体节点配置已生效并写入数据库: ${NODE_CODE}"
+  fi
+fi
+
 # ---------------------------------------------------------------- systemd
 # 注意：systemd 里 \$VAR（不带花括号）才会按空格分词；\${VAR} 是单个参数，
 # 会把整串 JVM 选项当作一个参数传给 java，报 Invalid initial heap size

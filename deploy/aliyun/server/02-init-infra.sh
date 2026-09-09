@@ -121,8 +121,8 @@ if ! grep -q '^SERVER_ADDRESS=' "${ENV_FILE}"; then
 fi
 
 # ---- 幂等补齐：历史 .env 没有 MediaMTX 令牌时自动生成追加（已存在则不动）----
-if [[ -z "${PDK_MEDIAMTX_INTERNAL_SERVICE_TOKEN:-}" ]]; then
-  PDK_MEDIAMTX_INTERNAL_SERVICE_TOKEN=$(rand_hex)
+if ! grep -q '^PDK_MEDIAMTX_INTERNAL_SERVICE_TOKEN=' "${ENV_FILE}"; then
+  PDK_MEDIAMTX_INTERNAL_SERVICE_TOKEN=${PDK_MEDIAMTX_INTERNAL_SERVICE_TOKEN:-$(rand_hex)}
   {
     echo ""
     echo "# ---- 直播 MediaMTX 共享令牌（缺失时由脚本自动生成）----"

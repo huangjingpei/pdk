@@ -34,10 +34,15 @@ JAVA_XMX="768m"
 # 服务器环境已装好时设为 yes，可省去重复的 apt 安装（快很多）
 SKIP_PREPARE="no"
 
-# ---------------- 直播 MediaMTX ----------------
-# 业务后端与 MediaMTX 共用的内部令牌（至少 32 字节随机值），两边必须一致：
-#   - 后端经 systemd EnvironmentFile(/opt/pdk/.env) 读取
-#   - MediaMTX 容器经 docker-compose / event-hook.sh 读取
-# 本地开发用 Windows 用户环境变量同名配置（setx），不要写进 application.yml 默认值
-# 服务器部署无需手动填写：02-init-infra.sh 检测到 .env 缺失时会自动 openssl rand -hex 32 生成
+# ---------------- 直播 MediaMTX 物理分离配置 ----------------
+# 当 MediaMTX 部署在独立服务器时填写；若留空则跳过远程节点自动注入：
+PDK_MEDIAMTX_HOST="43.248.187.207"
+PDK_MEDIAMTX_NODE_CODE="mediamtx-remote-1"
+PDK_MEDIAMTX_NODE_NAME="专网流媒体节点 (43.248.187.207)"
+PDK_MEDIAMTX_PUBLIC_RTMP="rtmp://43.248.187.207:1935"
+PDK_MEDIAMTX_PUBLIC_HLS="http://43.248.187.207:8888"
+PDK_MEDIAMTX_INTERNAL_API="http://43.248.187.207:9997"
+PDK_MEDIAMTX_INTERNAL_METRICS=""
+# 业务后端与 MediaMTX 共用的内部安全令牌（至少 32 字节随机值），两边必须完全一致。
+# 留空时 02-init-infra.sh 将自动随机生成并存入 /opt/pdk/.env
 PDK_MEDIAMTX_INTERNAL_SERVICE_TOKEN=""
