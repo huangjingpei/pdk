@@ -27,9 +27,12 @@ public class BusinessHealthIndicator implements HealthIndicator {
                 state.put("effective", item.getEffectiveStatus());
                 state.put("handler", item.getHandlerHealth());
                 details.put(item.getBizCode(), state);
+                // 只有当业务处理器自身未就绪（HANDLER_UNHEALTHY 或 HANDLER_MISSING）时才认为系统核心 DOWN。
+                // 外部媒体基础设施（如远端流媒体节点临时离线 MEDIA_NODE_MISSING）记录在业务指标中，不中断服务主进程健康检查与自动化部署。
                 if ("ACTIVE".equals(item.getConfiguredStatus())
                         && Boolean.TRUE.equals(item.getDeploymentEnabled())
-                        && !"AVAILABLE".equals(item.getEffectiveStatus())) {
+                        && ("HANDLER_UNHEALTHY".equals(item.getEffectiveStatus())
+                            || "HANDLER_MISSING".equals(item.getEffectiveStatus()))) {
                     activeUnavailable = true;
                 }
             }

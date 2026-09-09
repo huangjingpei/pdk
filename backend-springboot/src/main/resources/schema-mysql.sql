@@ -523,9 +523,9 @@ INSERT INTO `pdk_media_server_node`
  `secret_ref`, `supported_publish_protocols`, `supported_play_protocols`, `weight`,
  `max_publishers`, `max_readers`, `status`)
 VALUES
-(1, 3, 'mediamtx-local', '本机 MediaMTX', 'MEDIAMTX', 'LOCAL',
+(1, 3, 'mediamtx-local', '本机 MediaMTX (开发备用)', 'MEDIAMTX', 'LOCAL',
  'rtmp://127.0.0.1:1935', 'http://127.0.0.1:8888', 'http://127.0.0.1:9997',
- 'http://127.0.0.1:9998/metrics', 'application', 'RTMP', 'RTMP,HLS', 100, 100, 1000, 'ACTIVE')
+ 'http://127.0.0.1:9998/metrics', 'application', 'RTMP', 'RTMP,HLS', 100, 100, 1000, 'DISABLED')
 ON DUPLICATE KEY UPDATE `node_name` = VALUES(`node_name`);
 
 -- 18. ZHIBO_LIVE 推流会话。一场推流只创建一行；后续 auth/hook/客户端停止只更新状态。

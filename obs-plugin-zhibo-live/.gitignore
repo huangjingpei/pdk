@@ -11,3 +11,6 @@ bin/
 
 # 链接生成的导出文件（中间产物），构建需要的是 .lib + .def
 *.exp
+
+# Inno Setup 打包输出（installer.iss 编译产物）
+Output/
