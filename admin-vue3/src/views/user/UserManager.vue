@@ -17,10 +17,18 @@
           @keyup.enter="onSearch" @clear="onSearch">
           <template #prefix><el-icon><Search /></el-icon></template>
         </el-input>
-        <el-select v-model="statusFilter" placeholder="账号状态" clearable style="width: 150px" @change="onSearch">
+        <el-select v-model="statusFilter" placeholder="账号状态" clearable style="width: 140px" @change="onSearch">
           <el-option label="正常 (ACTIVE)" value="ACTIVE" />
           <el-option label="试用 (TRIAL)" value="TRIAL" />
           <el-option label="冻结 (FROZEN)" value="FROZEN" />
+        </el-select>
+        <el-select v-model="activityFilter" placeholder="活跃度筛选" clearable style="width: 150px" @change="onSearch">
+          <el-option label="全部活跃度" value="" />
+          <el-option label="近10天活跃" value="10d" />
+          <el-option label="近30天活跃" value="30d" />
+          <el-option label="近90天活跃" value="90d" />
+          <el-option label="从未登录" value="never" />
+          <el-option label="沉睡用户 (>90天)" value="dormant" />
         </el-select>
         <el-select v-model="businessFilter" placeholder="全部业务" clearable style="width: 180px" @change="onSearch">
           <el-option v-for="b in businesses" :key="b.bizId" :label="`${b.businessName} (${b.appId})`" :value="b.bizId" />
@@ -33,47 +41,67 @@
 
     <el-card shadow="never" class="border-slate-200">
       <el-table v-loading="loading" :data="rows" border stripe style="width: 100%">
-        <el-table-column label="业务" width="180">
+        <el-table-column label="业务" width="170">
           <template #default="scope"><div>{{ scope.row.businessName }} <el-tag size="small">appId={{ scope.row.appId }}</el-tag></div><div class="biz-desc">{{ scope.row.businessDescription || '-' }}</div></template>
         </el-table-column>
         <el-table-column prop="phone" label="手机号" width="130" />
-        <el-table-column prop="status" label="状态" width="100">
+        <el-table-column prop="status" label="状态" width="90">
           <template #default="scope">
             <el-tag v-if="scope.row.status === 'ACTIVE'" type="success">正常</el-tag>
             <el-tag v-else-if="scope.row.status === 'TRIAL'" type="warning">试用</el-tag>
             <el-tag v-else type="danger">冻结</el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="roleCode" label="身份" width="100" />
-        <el-table-column label="账号来源" width="105"><template #default="s">{{ s.row.accountSource === 'ADMIN_CREATED' ? '管理员创建' : '自助注册' }}</template></el-table-column>
-        <el-table-column label="首次改密" width="90"><template #default="s"><el-tag :type="s.row.mustChangePassword ? 'warning' : 'success'" size="small">{{ s.row.mustChangePassword ? '待修改' : '已完成' }}</el-tag></template></el-table-column>
-        <el-table-column prop="invitationCode" label="代理邀请码" width="130" />
-        <el-table-column prop="invitedByPhone" label="邀请代理" width="130" />
-        <el-table-column prop="currentPackageName" label="套餐" min-width="170" />
-        <el-table-column prop="remainingCalls" label="剩余次数" width="100" />
-        <el-table-column prop="maxAccounts" label="并发账号" width="90" />
-        <el-table-column prop="deviceId" label="绑定电脑" min-width="200">
+        <el-table-column label="最后登录" width="220">
+          <template #default="s">
+            <div :class="canViewLog ? 'login-cell' : ''" @click="canViewLog && openLoginLog(s.row)">
+              <template v-if="s.row.lastLoginAt">
+                <div class="flex items-center gap-1.5 leading-tight">
+                  <span class="text-sm text-slate-800 font-mono">{{ formatDateTime(s.row.lastLoginAt) }}</span>
+                </div>
+                <div class="flex items-center gap-1.5 mt-1">
+                  <el-tag
+                    v-if="getLoginRelativeText(s.row.lastLoginAt)"
+                    :type="getLoginTagType(s.row.lastLoginAt)"
+                    size="small"
+                    effect="light"
+                  >
+                    {{ getLoginRelativeText(s.row.lastLoginAt) }}
+                  </el-tag>
+                  <span class="text-xs text-slate-500 font-mono">{{ s.row.lastLoginIp || 'IP 未知' }}</span>
+                  <span v-if="canViewLog" class="text-xs text-blue-500 hover:underline ml-auto">日志</span>
+                </div>
+              </template>
+              <div v-else class="text-xs text-slate-400">
+                <el-tag size="small" type="info" effect="plain">从未登录</el-tag>
+                <span v-if="canViewLog" class="ml-1 text-slate-400 hover:text-blue-500">· 查看记录</span>
+              </div>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column prop="deviceId" label="绑定电脑" min-width="180">
           <template #default="scope">
             <span class="font-mono text-xs text-slate-600 break-all">{{ scope.row.deviceId || '未绑定' }}</span>
           </template>
         </el-table-column>
-        <el-table-column prop="expireTime" label="到期时间" width="180" />
-        <el-table-column label="最近登录" width="200">
-          <template #default="s">
-            <div :class="canViewLog ? 'login-cell' : ''" @click="canViewLog && openLoginLog(s.row)">
-              <template v-if="s.row.lastLoginAt">
-                <div>{{ s.row.lastLoginAt }}</div>
-                <div class="text-xs text-slate-400">
-                  {{ s.row.lastLoginIp || 'IP 未知' }}<span v-if="canViewLog"> · 查看记录</span>
-                </div>
-              </template>
-              <span v-else class="text-xs text-slate-400">
-                暂无成功登录<span v-if="canViewLog"> · 查看记录</span>
-              </span>
-            </div>
+        <el-table-column prop="currentPackageName" label="套餐" min-width="170" />
+        <el-table-column prop="remainingCalls" label="剩余次数" width="95" />
+        <el-table-column prop="expireTime" label="到期时间" width="170">
+          <template #default="scope">
+            <span>{{ formatDateTime(scope.row.expireTime) }}</span>
           </template>
         </el-table-column>
-        <el-table-column prop="createdAt" label="注册时间" width="180" />
+        <el-table-column prop="roleCode" label="身份" width="95" />
+        <el-table-column label="账号来源" width="105"><template #default="s">{{ s.row.accountSource === 'ADMIN_CREATED' ? '管理员创建' : '自助注册' }}</template></el-table-column>
+        <el-table-column label="首次改密" width="90"><template #default="s"><el-tag :type="s.row.mustChangePassword ? 'warning' : 'success'" size="small">{{ s.row.mustChangePassword ? '待修改' : '已完成' }}</el-tag></template></el-table-column>
+        <el-table-column prop="invitationCode" label="代理邀请码" width="130" />
+        <el-table-column prop="invitedByPhone" label="邀请代理" width="130" />
+        <el-table-column prop="maxAccounts" label="并发账号" width="90" />
+        <el-table-column prop="createdAt" label="注册时间" width="170">
+          <template #default="scope">
+            <span>{{ formatDateTime(scope.row.createdAt) }}</span>
+          </template>
+        </el-table-column>
         <el-table-column label="操作" width="560" fixed="right">
           <template #default="scope">
             <div class="action-cell">
@@ -162,11 +190,37 @@
     </el-dialog>
 
     <!-- 套餐使用详情抽屉 -->
-    <el-drawer v-model="detailVisible" title="客户当前套餐使用详情" size="640px" direction="rtl">
+    <el-drawer v-model="detailVisible" title="客户账号与套餐详情" size="640px" direction="rtl">
       <div v-loading="detailLoading">
         <template v-if="detail">
           <el-descriptions :column="2" border size="small" class="mb-4">
-            <el-descriptions-item label="手机号">{{ detail.phone || '-' }}</el-descriptions-item>
+            <el-descriptions-item label="手机号">{{ detailTarget?.phone || detail.phone || '-' }}</el-descriptions-item>
+            <el-descriptions-item label="账号状态">
+              <el-tag v-if="detailTarget?.status === 'ACTIVE'" type="success" size="small">正常</el-tag>
+              <el-tag v-else-if="detailTarget?.status === 'TRIAL'" type="warning" size="small">试用</el-tag>
+              <el-tag v-else-if="detailTarget?.status" type="danger" size="small">冻结</el-tag>
+              <span v-else>-</span>
+            </el-descriptions-item>
+            <el-descriptions-item label="最后登录时间">
+              <template v-if="detailTarget?.lastLoginAt">
+                <span class="font-medium text-slate-800 font-mono">{{ formatDateTime(detailTarget.lastLoginAt) }}</span>
+                <el-tag
+                  v-if="getLoginRelativeText(detailTarget.lastLoginAt)"
+                  :type="getLoginTagType(detailTarget.lastLoginAt)"
+                  size="small"
+                  class="ml-1"
+                >
+                  {{ getLoginRelativeText(detailTarget.lastLoginAt) }}
+                </el-tag>
+              </template>
+              <span v-else class="text-slate-400">暂无登录记录</span>
+            </el-descriptions-item>
+            <el-descriptions-item label="最后登录 IP">
+              <span class="font-mono text-xs text-slate-700">{{ detailTarget?.lastLoginIp || '-' }}</span>
+            </el-descriptions-item>
+            <el-descriptions-item label="绑定电脑" :span="2">
+              <span class="font-mono text-xs text-slate-600 break-all">{{ detailTarget?.deviceId || '未绑定' }}</span>
+            </el-descriptions-item>
             <el-descriptions-item label="套餐">{{ detail.currentPackageName || '未开通' }}</el-descriptions-item>
             <el-descriptions-item label="剩余总次数">
               <span class="font-semibold text-emerald-600">{{ detail.remainingCalls }}</span>
@@ -174,7 +228,7 @@
             <el-descriptions-item label="已用 / 总分配">
               {{ detail.totalUsed }} / {{ detail.totalAllocated }}
             </el-descriptions-item>
-            <el-descriptions-item label="到期时间" :span="2">{{ detail.expireTime || '-' }}</el-descriptions-item>
+            <el-descriptions-item label="到期时间">{{ formatDateTime(detail.expireTime) || '-' }}</el-descriptions-item>
           </el-descriptions>
 
           <div class="flex items-center justify-between mb-2">
@@ -269,6 +323,7 @@ const page = ref(1);
 const pageSize = ref(20);
 const keyword = ref('');
 const statusFilter = ref('');
+const activityFilter = ref('');
 const businessFilter = ref<number | ''>('');
 const businesses = ref<BusinessRuntime[]>([]);
 const availableBusinesses = computed(() => businesses.value.filter(b => b.effectiveStatus === 'AVAILABLE'));
@@ -281,6 +336,60 @@ const canViewLog = computed(() => hasPermission('log:view'));
 // 仅超级管理员可执行「新增用户」与「删除（冻结/解冻）」——按角色严格控制，不依赖权限位分配
 const isSuperAdmin = computed(() => authState.session?.role === 'SUPER_ADMIN');
 
+function formatDateTime(val?: string | null): string {
+  if (!val) return '-';
+  return val.replace('T', ' ').slice(0, 19);
+}
+
+function getLoginRelativeInfo(val?: string | null): { text: string; tagType: '' | 'success' | 'warning' | 'info' | 'danger'; label: string } | null {
+  if (!val) return null;
+  const raw = val.includes(' ') ? val.replace(' ', 'T') : val;
+  const t = new Date(raw).getTime();
+  if (isNaN(t)) return null;
+  const now = Date.now();
+  const diffMs = now - t;
+  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+  const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+  const diffMins = Math.floor(diffMs / (1000 * 60));
+
+  let text = '';
+  if (diffMins < 1) text = '刚刚';
+  else if (diffMins < 60) text = `${diffMins}分钟前`;
+  else if (diffHours < 24) text = `${diffHours}小时前`;
+  else if (diffDays === 1) text = '昨天';
+  else if (diffDays < 30) text = `${diffDays}天前`;
+  else if (diffDays < 90) text = `${Math.floor(diffDays / 30)}个月前`;
+  else text = '>90天';
+
+  let tagType: '' | 'success' | 'warning' | 'info' | 'danger' = 'info';
+  let label = '沉睡';
+  if (diffDays <= 10) {
+    tagType = 'success';
+    label = '近10天';
+  } else if (diffDays <= 30) {
+    tagType = '';
+    label = '近30天';
+  } else if (diffDays <= 90) {
+    tagType = 'warning';
+    label = '近90天';
+  } else {
+    tagType = 'info';
+    label = '>90天未登';
+  }
+
+  return { text, tagType, label };
+}
+
+function getLoginTagType(val?: string | null): '' | 'success' | 'warning' | 'info' | 'danger' {
+  const info = getLoginRelativeInfo(val);
+  return info ? info.tagType : 'info';
+}
+
+function getLoginRelativeText(val?: string | null): string {
+  const info = getLoginRelativeInfo(val);
+  return info ? info.text : '';
+}
+
 // 防御：模板里若误写 @click="load"（不带括号），原生 PointerEvent 会被当成页码传进来，
 // 导致 page=[object PointerEvent] 触发后端 MethodArgumentTypeMismatchException。
 async function load(p: unknown = 1): Promise<void> {
@@ -291,6 +400,7 @@ async function load(p: unknown = 1): Promise<void> {
     const params: Record<string, unknown> = { page: target, size: pageSize.value };
     if (keyword.value.trim()) params.keyword = keyword.value.trim();
     if (statusFilter.value) params.status = statusFilter.value;
+    if (activityFilter.value) params.activity = activityFilter.value;
     if (businessFilter.value) params.bizId = businessFilter.value;
     const response = await api.get<ApiResult<PageResult<ClientUser>>>('/api/v1/admin/user/list', { params });
     rows.value = response.data.data.records;
@@ -303,7 +413,7 @@ async function load(p: unknown = 1): Promise<void> {
 }
 
 function onSearch(): void { load(1); }
-function resetFilter(): void { keyword.value = ''; statusFilter.value = ''; businessFilter.value = ''; load(1); }
+function resetFilter(): void { keyword.value = ''; statusFilter.value = ''; activityFilter.value = ''; businessFilter.value = ''; load(1); }
 // ---- 登录记录抽屉 ----
 const logVisible = ref(false);
 const logLoading = ref(false);
@@ -370,8 +480,10 @@ async function submitCreate(): Promise<void> {
 const detailVisible = ref(false);
 const detailLoading = ref(false);
 const detail = ref<UserAssignmentDetail | null>(null);
+const detailTarget = ref<ClientUser | null>(null);
 
 async function openDetail(row: ClientUser): Promise<void> {
+  detailTarget.value = row;
   detailVisible.value = true;
   detailLoading.value = true;
   detail.value = null;

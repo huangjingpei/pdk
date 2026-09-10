@@ -106,7 +106,7 @@ public class LoginLogService {
         return trimmed.length() <= max ? trimmed : trimmed.substring(0, max);
     }
 
-    private String clientIp(HttpServletRequest request) {
+    public static String clientIp(HttpServletRequest request) {
         if (request == null) return null;
         String forwarded = request.getHeader("X-Forwarded-For");
         if (forwarded != null && !forwarded.isBlank()) {

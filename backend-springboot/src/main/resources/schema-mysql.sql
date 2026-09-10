@@ -47,10 +47,13 @@ CREATE TABLE IF NOT EXISTS `pdk_user` (
     `daily_calls_limit` INT NOT NULL DEFAULT 0 COMMENT '每日调用上限限制',
     `max_accounts` INT NOT NULL DEFAULT 1 COMMENT '允许并发挂载的买家/店铺账号上限',
     `is_trial_claimed` TINYINT NOT NULL DEFAULT 0 COMMENT '是否已领取过1天20次新人试用(0:否, 1:是)',
+    `last_login_at` DATETIME DEFAULT NULL COMMENT '最近一次客户端成功登录时间',
+    `last_login_ip` VARCHAR(64) DEFAULT NULL COMMENT '最近一次客户端登录IP',
     `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
     UNIQUE KEY `uk_user_biz_phone` (`biz_id`, `phone`),
-    INDEX `idx_user_biz_status` (`biz_id`, `status`)
+    INDEX `idx_user_biz_status` (`biz_id`, `status`),
+    INDEX `idx_user_biz_last_login` (`biz_id`, `last_login_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户主表';
 
 CREATE TABLE IF NOT EXISTS `pdk_login_log` (
@@ -246,6 +249,45 @@ SET @pdk_patch_sql = IF(@pdk_col_exists = 0,
 PREPARE pdk_patch_stmt FROM @pdk_patch_sql;
 EXECUTE pdk_patch_stmt;
 DEALLOCATE PREPARE pdk_patch_stmt;
+
+-- 在线补丁：给 pdk_user 增加 last_login_at 与 last_login_ip 列并加索引，支持活跃度快速聚合
+SET @pdk_user_login_col_exists = (
+    SELECT COUNT(*) FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'pdk_user'
+      AND COLUMN_NAME = 'last_login_at'
+);
+SET @pdk_user_login_patch_sql = IF(@pdk_user_login_col_exists = 0,
+    'ALTER TABLE `pdk_user` ADD COLUMN `last_login_at` DATETIME DEFAULT NULL COMMENT ''最近一次登录成功时间'', ADD COLUMN `last_login_ip` VARCHAR(64) DEFAULT NULL COMMENT ''最近一次登录成功IP'', ADD INDEX `idx_user_biz_last_login` (`biz_id`, `last_login_at`)',
+    'SELECT ''pdk_user.last_login_at 已存在，跳过补丁'' AS patch');
+PREPARE pdk_user_login_patch_stmt FROM @pdk_user_login_patch_sql;
+EXECUTE pdk_user_login_patch_stmt;
+DEALLOCATE PREPARE pdk_user_login_patch_stmt;
+
+-- 历史登录日志数据回填：从 pdk_login_log 回填每位用户的最新成功登录时间与 IP
+UPDATE `pdk_user` u
+JOIN (
+    SELECT actor_id, MAX(created_at) AS max_at
+    FROM pdk_login_log
+    WHERE actor_type = 'CLIENT' AND result = 'SUCCESS' AND actor_id IS NOT NULL
+    GROUP BY actor_id
+) l ON u.id = l.actor_id
+SET u.last_login_at = l.max_at
+WHERE u.last_login_at IS NULL;
+
+-- 在线补丁：为 pdk_user_device 增加 last_login_at 索引以加速设备活跃度聚合
+SET @pdk_device_idx_exists = (
+    SELECT COUNT(*) FROM information_schema.STATISTICS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'pdk_user_device'
+      AND INDEX_NAME = 'idx_device_biz_last_login'
+);
+SET @pdk_device_idx_sql = IF(@pdk_device_idx_exists = 0,
+    'ALTER TABLE `pdk_user_device` ADD INDEX `idx_device_biz_last_login` (`biz_id`, `last_login_at`)',
+    'SELECT ''pdk_user_device.idx_device_biz_last_login 已存在，跳过补丁'' AS patch');
+PREPARE pdk_device_idx_stmt FROM @pdk_device_idx_sql;
+EXECUTE pdk_device_idx_stmt;
+DEALLOCATE PREPARE pdk_device_idx_stmt;
 
 -- 初始化套餐数据
 -- INSERT INTO `pdk_package_template` (`id`, `name`, `price`, `duration_days`, `account_count_x`, `calls_per_account_y`, `description`) VALUES

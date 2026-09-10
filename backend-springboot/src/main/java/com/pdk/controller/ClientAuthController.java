@@ -125,6 +125,9 @@ public class ClientAuthController {
         } else {
             clientStpLogic.login(user.getId());
             deviceBindingService.bind(user.getBizId(), user.getId(), user.getDeviceId());
+            user.setLastLoginAt(java.time.LocalDateTime.now());
+            user.setLastLoginIp(LoginLogService.clientIp(request));
+            userMapper.updateById(user);
             result = payload(user, credential, business, null);
         }
         result.put("resourceAllocated", resourceAllocated);
@@ -187,8 +190,10 @@ public class ClientAuthController {
         }
         if (!business.usesDeviceLicense() && user.getDeviceId() == null) {
             user.setDeviceId(dto.getDeviceId());
-            userMapper.updateById(user);
         }
+        user.setLastLoginAt(java.time.LocalDateTime.now());
+        user.setLastLoginIp(LoginLogService.clientIp(request));
+        userMapper.updateById(user);
 
         clientStpLogic.login(licenseContext == null ? user.getId() : licenseContext.loginId());
         if (!business.usesDeviceLicense()) deviceBindingService.bind(user.getBizId(), user.getId(), dto.getDeviceId());

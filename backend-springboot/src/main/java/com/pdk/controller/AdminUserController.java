@@ -76,6 +76,8 @@ public class AdminUserController {
                                          @RequestParam(defaultValue = "20") int size,
                                          @RequestParam(required = false) String keyword,
                                          @RequestParam(required = false) String status,
+                                         @RequestParam(required = false) String activity,
+                                         @RequestParam(required = false) String orderBy,
                                          @RequestParam(required = false) Long bizId,
                                          @RequestParam(required = false) Long appId,
                                          HttpServletRequest request) {
@@ -92,7 +94,22 @@ public class AdminUserController {
         if (status != null && !status.isBlank()) {
             query.eq(User::getStatus, status);
         }
-        query.orderByDesc(User::getCreatedAt);
+        if (activity != null && !activity.isBlank()) {
+            LocalDateTime now = LocalDateTime.now();
+            switch (activity.trim().toLowerCase()) {
+                case "10d" -> query.ge(User::getLastLoginAt, now.minusDays(10));
+                case "30d" -> query.ge(User::getLastLoginAt, now.minusDays(30));
+                case "90d" -> query.ge(User::getLastLoginAt, now.minusDays(90));
+                case "never" -> query.isNull(User::getLastLoginAt);
+                case "dormant" -> query.and(w -> w.lt(User::getLastLoginAt, now.minusDays(90)).or().isNull(User::getLastLoginAt));
+                default -> {}
+            }
+        }
+        if ("lastLoginAt".equalsIgnoreCase(orderBy)) {
+            query.orderByDesc(User::getLastLoginAt);
+        } else {
+            query.orderByDesc(User::getCreatedAt);
+        }
         Page<User> result = userMapper.selectPage(new Page<>(page, Math.min(size, 100)), query);
         result.getRecords().forEach(user -> {
             var business = businessService.requireById(user.getBizId());
@@ -125,11 +142,13 @@ public class AdminUserController {
      */
     private void fillLastLogin(List<User> users) {
         if (users.isEmpty()) return;
+        List<User> missing = users.stream().filter(u -> u.getLastLoginAt() == null).toList();
+        if (missing.isEmpty()) return;
         try {
-            List<Long> ids = users.stream().map(User::getId).toList();
+            List<Long> ids = missing.stream().map(User::getId).toList();
             Map<Long, LastLoginView> latest = loginLogMapper.lastLoginBatch(ids).stream()
                     .collect(Collectors.toMap(LastLoginView::getActorId, v -> v, (a, b) -> a));
-            users.forEach(user -> {
+            missing.forEach(user -> {
                 LastLoginView view = latest.get(user.getId());
                 if (view != null) {
                     user.setLastLoginAt(view.getLastLoginAt());
