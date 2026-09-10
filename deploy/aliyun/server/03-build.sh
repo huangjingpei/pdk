@@ -131,7 +131,13 @@ fi
 # ================================================================ 3. 版本标记
 ln -sfn "${RELEASE_DIR}" "${PDK_ROOT}/releases/latest"
 echo "${TS}" > "${RELEASE_DIR}/BUILD_ID"
-git -C "${PDK_ROOT}/src" rev-parse HEAD > "${RELEASE_DIR}/GIT_COMMIT" 2>/dev/null || echo "unknown" > "${RELEASE_DIR}/GIT_COMMIT"
+if [[ -n "${BUILD_GIT_COMMIT:-}" && "${BUILD_GIT_COMMIT}" != "unknown" ]]; then
+  echo "${BUILD_GIT_COMMIT}" > "${RELEASE_DIR}/GIT_COMMIT"
+elif git -C "${PDK_ROOT}/src" rev-parse HEAD > "${RELEASE_DIR}/GIT_COMMIT" 2>/dev/null; then
+  :
+else
+  echo "unknown" > "${RELEASE_DIR}/GIT_COMMIT"
+fi
 
 # 只保留最近 5 个版本，避免磁盘被吃光
 log "清理历史版本（保留最近 5 个）..."

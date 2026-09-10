@@ -14,13 +14,15 @@
 # 用法：
 #   cp env.example.sh env.sh && vi env.sh        # 首次：填 IP 与 SSH 信息
 #   bash deploy.sh --precheck                    # 先体检服务器（推荐首次执行）
-#   bash deploy.sh                               # 完整部署
+#   bash deploy.sh                               # 完整部署（构建+上线+自动彻底清理服务器源码）
 #   bash deploy.sh --prepare                     # 只做服务器环境初始化
-#   bash deploy.sh --deploy-only                 # 不重新编译，直接切换已构建版本
+#   bash deploy.sh --deploy-only                 # 不重新编译，直接切换已构建版本上线并清理源码
 #   bash deploy.sh --build                       # 只重新编译
-#   bash deploy.sh --status                      # 查看线上状态
+#   bash deploy.sh --clean-source                # 彻底清除阿里云主机上的源码目录与临时包（防源码扩散）
+#   bash deploy.sh --status                      # 查看线上状态（含源码防扩散安全状态）
 #   bash deploy.sh --rollback 20260904-140000    # 回滚
 #   bash deploy.sh --skip-typecheck              # 前端跳过类型检查
+#   bash deploy.sh --keep-source                 # 部署成功后保留源码目录（用于在服务器排查问题）
 # ============================================================================
 set -euo pipefail
 
@@ -66,18 +68,25 @@ case "${1:-}" in
   --deploy-only)  MODE="deploy" ;;
   --precheck)     MODE="precheck" ;;
   --status)       MODE="status" ;;
+  --clean-source) MODE="clean-source" ;;
   --rollback)     MODE="rollback"; ARG_VALUE="${2:-}" ;;
   --full)         MODE="full" ;;
   "")             MODE="full" ;;
-  *) echo "未知参数: $1（支持 --precheck --prepare --infra --build --deploy-only --status --rollback <版本>）" >&2; exit 1 ;;
+  *) echo "未知参数: $1（支持 --precheck --prepare --infra --build --deploy-only --clean-source --status --rollback <版本>）" >&2; exit 1 ;;
 esac
 SKIP_TYPECHECK="no"
 MIGRATE_FLAG=""
+KEEP_SOURCE="no"
 # 注意：必须用 if 而非 [[ ]] && —— set -e 下条件为假会让脚本静默退出
 for a in "$@"; do
   if [[ "$a" == "--skip-typecheck" ]]; then SKIP_TYPECHECK="yes"; fi
   if [[ "$a" == "--migrate" ]]; then MIGRATE_FLAG="--migrate"; fi
+  if [[ "$a" == "--keep-source" ]]; then KEEP_SOURCE="yes"; fi
 done
+DEPLOY_FLAGS="${MIGRATE_FLAG}"
+if [[ "${KEEP_SOURCE}" == "yes" ]]; then
+  DEPLOY_FLAGS="${DEPLOY_FLAGS:+${DEPLOY_FLAGS} }--keep-source"
+fi
 if [[ "${SKIP_PREPARE:-no}" == "yes" ]]; then MODE="${MODE/full/infra-build-deploy}"; fi
 
 log()  { printf '\033[0;32m[deploy]\033[0m %s\n' "$*"; }
@@ -238,15 +247,20 @@ case "${MODE}" in
     ;;
   build)
     upload_source
-    run_remote 03-build.sh
+    run_remote 03-build.sh "BUILD_GIT_COMMIT=$(git -C "${LOCAL_ROOT}" rev-parse HEAD 2>/dev/null || echo unknown)"
     ;;
   deploy)
-    run_remote "04-deploy.sh ${MIGRATE_FLAG}" \
+    run_remote "04-deploy.sh ${DEPLOY_FLAGS}" \
       "PDK_SERVER_NAME=${PDK_SERVER_NAME}" "PDK_PUBLIC_BASE_URL=${PDK_PUBLIC_BASE_URL}" "CERTBOT_EMAIL=${CERTBOT_EMAIL}" \
       "PDK_MEDIAMTX_HOST=${PDK_MEDIAMTX_HOST}" "PDK_MEDIAMTX_NODE_CODE=${PDK_MEDIAMTX_NODE_CODE}" \
       "PDK_MEDIAMTX_NODE_NAME=${PDK_MEDIAMTX_NODE_NAME}" "PDK_MEDIAMTX_PUBLIC_RTMP=${PDK_MEDIAMTX_PUBLIC_RTMP}" \
       "PDK_MEDIAMTX_PUBLIC_HLS=${PDK_MEDIAMTX_PUBLIC_HLS}" "PDK_MEDIAMTX_INTERNAL_API=${PDK_MEDIAMTX_INTERNAL_API}" \
       "PDK_MEDIAMTX_INTERNAL_METRICS=${PDK_MEDIAMTX_INTERNAL_METRICS}" "PDK_MEDIAMTX_INTERNAL_SERVICE_TOKEN=${PDK_MEDIAMTX_INTERNAL_SERVICE_TOKEN}"
+    ;;
+  clean-source)
+    log "正在清除阿里云主机上的源码目录及临时包以防代码扩散..."
+    ssh "${SSH_OPTS[@]}" "${REMOTE_HOST}" \
+      "rm -rf ${REMOTE_ROOT}/src /tmp/pdk-src*.tar.gz /tmp/pdk-*.tar.gz 2>/dev/null && echo '✅ 阿里云服务器源码目录及临时压缩包已彻底清除，源码防扩散安全策略已生效'"
     ;;
   status)
     run_remote 06-status.sh
@@ -261,12 +275,13 @@ case "${MODE}" in
     upload_source
     upload_keys
     run_remote 02-init-infra.sh "PDK_PUBLIC_BASE_URL=${PDK_PUBLIC_BASE_URL}" "ADMIN_INIT_PASSWORD=${ADMIN_INIT_PASSWORD:-}" "JAVA_XMX=${JAVA_XMX}" "PDK_MYSQL_ROOT_PASSWORD=${PDK_MYSQL_ROOT_PASSWORD}"
+    BUILD_GIT_COMMIT="$(git -C "${LOCAL_ROOT}" rev-parse HEAD 2>/dev/null || echo unknown)"
     if [[ "${SKIP_TYPECHECK}" == "yes" ]]; then
-      ssh "${SSH_OPTS[@]}" "${REMOTE_HOST}" "PDK_ROOT=${REMOTE_ROOT} bash ${REMOTE_ROOT}/scripts/03-build.sh --skip-typecheck"
+      ssh "${SSH_OPTS[@]}" "${REMOTE_HOST}" "BUILD_GIT_COMMIT='${BUILD_GIT_COMMIT}' PDK_ROOT=${REMOTE_ROOT} bash ${REMOTE_ROOT}/scripts/03-build.sh --skip-typecheck"
     else
-      run_remote 03-build.sh
+      run_remote 03-build.sh "BUILD_GIT_COMMIT=${BUILD_GIT_COMMIT}"
     fi
-    run_remote "04-deploy.sh ${MIGRATE_FLAG}" \
+    run_remote "04-deploy.sh ${DEPLOY_FLAGS}" \
       "PDK_SERVER_NAME=${PDK_SERVER_NAME}" "PDK_PUBLIC_BASE_URL=${PDK_PUBLIC_BASE_URL}" "CERTBOT_EMAIL=${CERTBOT_EMAIL}" \
       "PDK_MEDIAMTX_HOST=${PDK_MEDIAMTX_HOST}" "PDK_MEDIAMTX_NODE_CODE=${PDK_MEDIAMTX_NODE_CODE}" \
       "PDK_MEDIAMTX_NODE_NAME=${PDK_MEDIAMTX_NODE_NAME}" "PDK_MEDIAMTX_PUBLIC_RTMP=${PDK_MEDIAMTX_PUBLIC_RTMP}" \
@@ -276,14 +291,25 @@ case "${MODE}" in
 esac
 
 if [[ "${MODE}" == "full" || "${MODE}" == "infra-build-deploy" || "${MODE}" == "deploy" ]]; then
+  if [[ "${KEEP_SOURCE}" != "yes" ]]; then
+    # 二次保险清理：确保远程主机上的源码及临时压缩包已被彻底清除
+    ssh "${SSH_OPTS[@]}" "${REMOTE_HOST}" \
+      "rm -rf ${REMOTE_ROOT}/src /tmp/pdk-src*.tar.gz /tmp/pdk-*.tar.gz 2>/dev/null || true"
+  fi
+  SOURCE_SEC_MSG="已从阿里云主机彻底清除 (保障源码安全防扩散)"
+  if [[ "${KEEP_SOURCE}" == "yes" ]]; then
+    SOURCE_SEC_MSG="已保留在服务器 (--keep-source)"
+  fi
   cat <<EOF
 
 $(printf '\033[0;32m[deploy]\033[0m') 部署流程结束
   管理后台 : ${PDK_PUBLIC_BASE_URL}/
   超级管理员: 13454118762
   初始密码  : ${ADMIN_INIT_PASSWORD:+已在服务器输出}${ADMIN_INIT_PASSWORD:-随机生成，见服务器 ${REMOTE_ROOT}/.admin-init-password}
+  源码防扩散: ${SOURCE_SEC_MSG}
 
   查看状态  bash deploy.sh --status
+  手动清理  bash deploy.sh --clean-source
   回滚版本  bash deploy.sh --rollback <版本>
 EOF
 fi

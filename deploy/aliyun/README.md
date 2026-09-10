@@ -133,14 +133,16 @@ bash deploy.sh
 ## 日常运维
 
 ```bash
-bash deploy.sh --status                  # 查看运行状态、健康、资源、日志
+bash deploy.sh --status                  # 查看运行状态、健康、资源、源码防扩散安全状态
 bash deploy.sh --build                   # 只重新编译（不部署）
-bash deploy.sh --deploy-only             # 只切换已构建的版本上线
+bash deploy.sh --deploy-only             # 只切换已构建的版本上线（并自动清理源码）
+bash deploy.sh --clean-source            # 手动彻底清除阿里云主机上的源码与临时压缩包
 bash deploy.sh --rollback 20260904-140000 # 回滚到指定版本
 bash deploy.sh --rollback                # 回滚到上一个版本
 bash deploy.sh --rollback --list         # 列出可回滚版本
 bash deploy.sh --migrate                 # 部署时同步表结构（新版本带了新表时用）
 bash deploy.sh --skip-typecheck          # 前端跳过 vue-tsc（小内存机器救急）
+bash deploy.sh --keep-source             # 部署后保留源码（仅调试时使用）
 ```
 
 也可以直接登录服务器操作：
@@ -266,13 +268,16 @@ tar 打包 backend-springboot /
                             ├─ 新 jar → /opt/pdk/app/app.jar
                             ├─ 新 dist → /opt/pdk/www/admin
                             ├─ systemctl restart pdk-backend
-                            └─ 健康检查 /actuator/health 最多 120s
-                               └─ 失败 → 自动回滚旧版本
+                            ├─ 健康检查 /actuator/health 最多 120s
+                            │    └─ 失败 → 自动回滚旧版本
+                            └─ 成功 → 彻底删除 /opt/pdk/src 及临时安装包（源码防扩散）
 ```
 
 关键点：
 
+- **源码防扩散与资产安全**：部署成功且健康检查通过后，服务器会自动彻底清空 `/opt/pdk/src` 与 `/tmp/pdk-src*.tar.gz`。线上运行时仅保留编译后的 `app.jar` 与前端静态文件 `dist`，云主机上绝不留存 Java/Vue 原始业务代码。
 - **版本目录 + 健康检查**是安全网：任何一次上线失败都会自动退回旧版本；手动回退用 `--rollback`
+- **回滚与运行零依赖源码**：服务运行及回滚直接依托 `/opt/pdk/releases/` 目录中的归档产物，清除源码目录不会对线上服务与回滚产生任何负面影响
 - 数据库、Redis、Nginx 证书、systemd 配置都是首次部署一次性建好的，增量更新完全不碰
 - 编译产物在服务器上生成，本机环境（Windows）无需 JDK/Maven
 

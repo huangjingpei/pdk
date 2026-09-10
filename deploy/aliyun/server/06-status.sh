@@ -65,6 +65,13 @@ else
   bad "缺少 ${KEYS}"
 fi
 
+sec "代码安全与资产防扩散"
+if [[ -d "${PDK_ROOT}/src" ]]; then
+  warn_ "服务器存在源码目录: ${PDK_ROOT}/src（如非调试中，建议清理以防源码扩散: bash deploy.sh --clean-source）"
+else
+  ok "服务器无遗留源码目录（源码防扩散安全策略生效中，仅运行已编译产物）"
+fi
+
 sec "资源占用"
 echo "  内存: $(free -h | awk '/^Mem:/ {print $3"/"$2}')  负载: $(cat /proc/loadavg | cut -d' ' -f1-3)"
 df -h "${PDK_ROOT}" | tail -1 | sed 's/^/  磁盘 /opt: /'

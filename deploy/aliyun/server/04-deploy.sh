@@ -7,9 +7,11 @@
 #   - 启动后做健康检查（/actuator/health），失败自动回滚并退出非 0
 #   - 幂等：重复执行不会报错，只是重新切换一次
 #
-# 用法：sudo bash /opt/pdk/scripts/04-deploy.sh [--no-healthcheck] [--migrate]
+# 用法：sudo bash /opt/pdk/scripts/04-deploy.sh [--no-healthcheck] [--migrate] [--keep-source] [--clean-source]
 #   --no-healthcheck  跳过健康检查（后端启动很慢时的临时通道）
 #   --migrate         部署新版本前先同步表结构（新版本带了新表时用；schema 幂等可重复执行）
+#   --keep-source     部署成功后保留源码目录 /opt/pdk/src（默认会自动彻底清除以防代码泄露）
+#   --clean-source    仅执行源码与临时包清理并退出
 # ============================================================================
 set -euo pipefail
 
@@ -22,16 +24,26 @@ SERVICE_NAME="pdk-backend"
 HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-120}"
 DO_HEALTHCHECK="yes"
 DO_MIGRATE="no"
-for arg in "$@"; do
-  case "${arg}" in
-    --no-healthcheck) DO_HEALTHCHECK="no" ;;
-    --migrate)        DO_MIGRATE="yes" ;;
-  esac
-done
+KEEP_SOURCE="no"
 
 log()  { printf '\033[0;32m[deploy]\033[0m %s\n' "$*"; }
 warn() { printf '\033[0;33m[deploy]\033[0m %s\n' "$*"; }
 die()  { printf '\033[0;31m[deploy][ERROR]\033[0m %s\n' "$*" >&2; exit 1; }
+
+for arg in "$@"; do
+  case "${arg}" in
+    --clean-source)
+      log "手动执行安全清理：彻底清除服务器源码目录 (${PDK_ROOT}/src)..."
+      rm -rf "${PDK_ROOT}/src"
+      rm -f /tmp/pdk-src*.tar.gz /tmp/pdk-*.tar.gz
+      log "✅ 服务器源码及临时安装包已彻底清除"
+      exit 0
+      ;;
+    --no-healthcheck) DO_HEALTHCHECK="no" ;;
+    --migrate)        DO_MIGRATE="yes" ;;
+    --keep-source)    KEEP_SOURCE="yes" ;;
+  esac
+done
 
 [[ $EUID -eq 0 ]] || die "请用 root 执行（sudo bash $0）"
 [[ -d "${RELEASE_DIR}" ]] || die "没有可部署的版本: ${RELEASE_DIR}（先执行 03-build.sh）"
@@ -328,10 +340,27 @@ if [[ "${DO_HEALTHCHECK}" == "yes" ]]; then
   log "反代连通性 /api/v1/admin/auth/me -> HTTP ${API_CODE}（401 表示链路正常）"
 fi
 
+# ---------------------------------------------------------------- 清理源码（防源码扩散安全加固）
+if [[ "${KEEP_SOURCE}" == "yes" ]]; then
+  warn "已跳过源码清理（--keep-source 已指定），源码保留在 ${PDK_ROOT}/src"
+else
+  if [[ -d "${PDK_ROOT}/src" ]]; then
+    log "部署验证通过，执行安全清理：彻底清除服务器源码目录 (${PDK_ROOT}/src)..."
+    rm -rf "${PDK_ROOT}/src"
+    rm -f /tmp/pdk-src*.tar.gz /tmp/pdk-*.tar.gz
+    log "✅ 服务器源码及临时包已彻底清除，生产环境仅保留已编译运行产物（app.jar / dist）"
+  fi
+fi
+
 PROTO="http"
 # 必须写成 if：[[ ]] && 在条件为假时返回 1，配合 set -e 会让脚本在
 # 打印部署总结之前就静默退出（HTTP 模式下必然触发）
 if [[ "${HAVE_CERT}" == "yes" ]]; then PROTO="https"; fi
+
+SOURCE_STATUS="已彻底清除 (防扩散保护)"
+if [[ -d "${PDK_ROOT}/src" ]]; then
+  SOURCE_STATUS="保留在服务器 (--keep-source)"
+fi
 
 cat <<EOF
 
@@ -341,10 +370,12 @@ $(printf '\033[0;32m[deploy]\033[0m') 部署完成
   管理后台 : ${PROTO}://${SERVER_NAME}/
   接口健康 : http://127.0.0.1:${SERVER_PORT:-8080}/actuator/health
   站点配置 : ${NGINX_AVAIL}（既有站点 default 未改动）
+  源码安全 : ${SOURCE_STATUS}
 
 常用命令：
   查看日志  sudo journalctl -u ${SERVICE_NAME} -f
   查看状态  bash ${PDK_ROOT}/scripts/06-status.sh
+  手动清理  bash ${PDK_ROOT}/scripts/04-deploy.sh --clean-source
   回滚版本  bash ${PDK_ROOT}/scripts/05-rollback.sh
   证书续期  certbot renew（HTTP-01 路径已在 Nginx 中放行，可自动续期）
 EOF

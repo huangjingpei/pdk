@@ -257,8 +257,12 @@ if [[ -f "${SCHEMA_SQL}" ]]; then
   log "导入表结构 schema-mysql.sql（幂等，可重复执行）..."
   db_exec < "${SCHEMA_SQL}" 2>&1 | grep -v "Using a password" || true
   log "表结构导入完成"
+elif [[ -f "${PDK_ROOT}/releases/latest/schema-mysql.sql" ]]; then
+  log "从最新发布版本导入表结构 (${PDK_ROOT}/releases/latest/schema-mysql.sql)..."
+  db_exec < "${PDK_ROOT}/releases/latest/schema-mysql.sql" 2>&1 | grep -v "Using a password" || true
+  log "表结构导入完成"
 else
-  warn "未找到 ${SCHEMA_SQL}，跳过建表（后端启动时 spring.sql.init 会自动执行）"
+  warn "未找到 schema-mysql.sql，跳过建表（后端启动时 spring.sql.init 会自动执行）"
 fi
 
 # ================================================================ 5. 管理员初始密码
